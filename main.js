@@ -16,11 +16,11 @@ module.exports.loop = function () {
         if(creep.memory.role == 'harvester') {
             Memory.harvesters.push(creep);
         }
-        if(creep.memory.role == 'upgrader') {
-            Memory.builders.push(creep);
-        }
-        if(creep.memory.role == 'builder') {
+        else if(creep.memory.role == 'upgrader') {
             Memory.upgraders.push(creep);
+        }
+        else if(creep.memory.role == 'builder') {
+            Memory.builders.push(creep);
         }
     }
 
