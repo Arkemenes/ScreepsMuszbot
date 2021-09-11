@@ -18,7 +18,6 @@ var roleHarvester = {
             }
         }
         else {
-
             // Get a structure to store the energy
             var targets = creep.room.find(FIND_STRUCTURES, {
                 filter: (structure) => {
