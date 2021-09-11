@@ -1,4 +1,4 @@
-var roleHarvester = require('role.harvester');
+var roleUpgrader = require('role.upgrader');
 
 var roleBuilder = {
 
@@ -22,7 +22,7 @@ var roleBuilder = {
             }
         }
         else {
-            roleHarvester.run(creep);
+            roleUpgrader.run(creep);
         }
     }
 };
