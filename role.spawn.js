@@ -8,14 +8,18 @@ var roleSpawn = {
 
     /** @param {StructureSpawn} spawn **/
     run: function(spawn) {
-        if (!Memory.harvesters || Memory.harvesters.length <= config["harvester_number"]){
+        var numberOfHarvesters = _.sum(Game.creeps, (c) => c.memory.role == 'harvester');
+        var numberOfUpgraders = _.sum(Game.creeps, (c) => c.memory.role == 'upgrader');
+        var numberOfBuilders = _.sum(Game.creeps, (c) => c.memory.role == 'builder');
+
+        if (numberOfHarvesters <= config["harvester_number"]){
             spawn.spawnCreep([WORK, CARRY, CARRY, MOVE, MOVE], Game.time, {memory: {working: false, role: 'harvester'}});
 
         }
-        else if (!Memory.builders || Memory.builders.length <= config["builder_number"]){
+        else if (numberOfUpgraders <= config["builder_number"]){
             spawn.spawnCreep([WORK, CARRY, CARRY, MOVE, MOVE], Game.time, {memory: {working: false, role: 'builder'}});
         }
-        else if (!Memory.upgraders || Memory.upgraders.length <= config["upgrader_number"]){
+        else if (numberOfBuilders <= config["upgrader_number"]){
             spawn.spawnCreep([WORK, CARRY, CARRY, MOVE, MOVE], Game.time, {memory: {working: false, role: 'upgrader'}});
         }
     }

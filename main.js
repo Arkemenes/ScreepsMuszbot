@@ -5,25 +5,6 @@ var roleSpawn = require('role.spawn');
 
 module.exports.loop = function () {
 
-
-	Memory.harvesters = [];
-	Memory.builders = [];
-	Memory.upgraders = [];
-
-	for(var name in Game.creeps) {
-        var creep = Game.creeps[name];
-
-        if(creep.memory.role == 'harvester') {
-            Memory.harvesters.push(creep);
-        }
-        else if(creep.memory.role == 'upgrader') {
-            Memory.upgraders.push(creep);
-        }
-        else if(creep.memory.role == 'builder') {
-            Memory.builders.push(creep);
-        }
-    }
-
     var tower = Game.getObjectById('TOWER_ID');
     if(tower) {
         var closestDamagedStructure = tower.pos.findClosestByRange(FIND_STRUCTURES, {
