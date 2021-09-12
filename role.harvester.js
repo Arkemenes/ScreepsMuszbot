@@ -28,6 +28,8 @@ var roleHarvester = {
                 }
             });
 
+            targets = _.sortBy(targets, s => creep.pos.getRangeTo(s));
+
             if (targets.length > 0 && !creep.memory.harvesting ) {
                 creep.memory.harvesting = true;
                 creep.say('🔄 harvest');
