@@ -3,6 +3,7 @@ var roleUpgrader = require('role.upgrader');
 var roleBuilder = require('role.builder');
 var roleRepairer = require('role.repairer');
 var roleWallRepairer = require('role.wallRepairer');
+var roleMiner = require('role.miner');
 var roleSpawn = require('role.spawn');
 var roleTower = require('role.tower');
 
@@ -34,6 +35,9 @@ module.exports.loop = function () {
             case 'wallRepairer':
                 roleWallRepairer.run(creep);
                 break;
+            case 'miner':
+                    roleMiner.run(creep);
+                    break;
             default:
               console.log(creep.name + ' has no valid role defined :' + creep.memory.role);
           }

@@ -1,8 +1,9 @@
 var config = {
     "harvester_number":2,
-    "builder_number":4,
+    "builder_number":2,
     "upgrader_number":2,
-    "repairer_number":2
+    "repairer_number":2,
+    "wall_repairer_number":1
 };
 
 var roleSpawn = {
@@ -23,22 +24,11 @@ var roleSpawn = {
 
             var body = [];
             var cumulativeCost = 0;  
-
-            var minCost = 600;
-
-            for (let i = 0; i < priorities.length; i++){
-                minCost = Math.min(minCost, BODYPART_COST[priorities[i]]);
-            }
             
-            while ((energy - cumulativeCost) > minCost ){
-                for (let i = 0; i < priorities.length; i++){
-                    if (cumulativeCost + BODYPART_COST[priorities[i]] <= energy) {
-                        body.push(priorities[i]);
-                        cumulativeCost += BODYPART_COST[priorities[i]];
-                    }
-                    if (cumulativeCost + minCost > energy) {
-                        break;
-                    }
+            for (let i = 0; i < priorities.length; i++){
+                if (cumulativeCost + BODYPART_COST[priorities[i]] <= energy) {
+                    body.push(priorities[i]);
+                    cumulativeCost += BODYPART_COST[priorities[i]];
                 }
             }
             return body;
@@ -49,6 +39,14 @@ var roleSpawn = {
         var numberOfUpgraders = _.sum(Game.creeps, (c) => c.memory.role == 'upgrader');
         var numberOfBuilders = _.sum(Game.creeps, (c) => c.memory.role == 'builder');
         var numberOfRepairers = _.sum(Game.creeps, (c) => c.memory.role == 'repairer');
+        var numberOfWallRepairers = _.sum(Game.creeps, (c) => c.memory.role == 'wallRepairer');
+        var numberofMiners = _.sum(Game.creeps, (c) => c.memory.role == 'miner');
+        
+        
+        config['miner_number'] = spawn.room.find(FIND_STRUCTURES,{
+            filter: s => s.structureType == STRUCTURE_CONTAINER
+        }).length;
+
 
         if (numberOfHarvesters > 0) {
             var energy = spawn.room.energyCapacityAvailable;
@@ -60,7 +58,7 @@ var roleSpawn = {
 
         if (numberOfHarvesters <= config["harvester_number"]){
 
-            var body = createBody([CARRY, MOVE, WORK, CARRY, MOVE, WORK], energy);
+            var body = createBody([CARRY, MOVE, WORK, CARRY, MOVE], energy);
 
             spawn.spawnCreep(body, Game.time, {memory: {working: false, role: 'harvester'}});
 
@@ -73,15 +71,27 @@ var roleSpawn = {
         }
         else if (numberOfUpgraders <= config["upgrader_number"]){
 
-            var body = createBody([CARRY, MOVE, WORK, CARRY, MOVE, WORK], energy);
+            var body = createBody([CARRY, MOVE, WORK, MOVE, WORK], energy);
 
             spawn.spawnCreep(body, Game.time, {memory: {working: false, role: 'upgrader'}});
         }
+        else if (numberofMiners <= config["miner"]){
+
+            var body = createBody([MOVE, WORK, WORK, WORK, WORK], energy);
+            
+            spawn.spawnCreep(body, Game.time, {memory: {working: false, role: 'miner'}});
+        }
         else if (numberOfRepairers <= config["repairer_number"]){
 
-            var body = createBody([CARRY, MOVE, WORK, CARRY, MOVE, WORK], energy);
+            var body = createBody([CARRY, MOVE, WORK, CARRY, MOVE], energy);
             
             spawn.spawnCreep(body, Game.time, {memory: {working: false, role: 'repairer'}});
+        }
+        else if (numberOfWallRepairers <= config["wall_repairer_number"]){
+
+            var body = createBody([CARRY, MOVE, WORK, CARRY, MOVE], energy);
+            
+            spawn.spawnCreep(body, Game.time, {memory: {working: false, role: 'wallRepairer'}});
         }
     }
 };
