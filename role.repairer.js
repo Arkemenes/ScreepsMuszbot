@@ -1,11 +1,11 @@
-var roleRepairer = require('role.repairer');
+var roleUpgrader = require('role.upgrader');
 
 var roleBuilder = {
 
     /** @param {Creep} creep **/
     run: function(creep) {
 
-        var targets = creep.room.find(FIND_CONSTRUCTION_SITES);
+        var targets = creep.room.find(FIND_MY_STRUCTURES, { filter: (s) => s.hits < s.hitsMax && s.structureType != STRUCTURE_WALL});
         targets = _.sortBy(targets, s => creep.pos.getRangeTo(s));
 
         if(creep.memory.building && (creep.store[RESOURCE_ENERGY] == 0 || !targets.length)) {
@@ -18,12 +18,12 @@ var roleBuilder = {
         }
 
         if(creep.memory.building) {
-            if(creep.build(targets[0]) == ERR_NOT_IN_RANGE) {
+            if(creep.repair(targets[0]) == ERR_NOT_IN_RANGE) {
                 creep.moveTo(targets[0], {visualizePathStyle: {stroke: '#ffffff'}});
             }
         }
         else {
-            roleRepairer.run(creep);
+            roleUpgrader.run(creep);
         }
     }
 };
