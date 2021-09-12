@@ -1,8 +1,8 @@
 var config = {
     "harvester_number":2,
-    "builder_number":2,
+    "builder_number":4,
     "upgrader_number":2,
-    "repairer_number":2,
+    "repairer_number":1,
     "wall_repairer_number":1
 };
 
@@ -41,6 +41,8 @@ var roleSpawn = {
         var numberOfRepairers = _.sum(Game.creeps, (c) => c.memory.role == 'repairer');
         var numberOfWallRepairers = _.sum(Game.creeps, (c) => c.memory.role == 'wallRepairer');
         var numberofMiners = _.sum(Game.creeps, (c) => c.memory.role == 'miner');
+
+        
         
         
         config['miner_number'] = spawn.room.find(FIND_STRUCTURES,{
@@ -56,38 +58,38 @@ var roleSpawn = {
         }
             
 
-        if (numberOfHarvesters <= config["harvester_number"]){
+        if (numberOfHarvesters < config["harvester_number"]){
 
             var body = createBody([CARRY, MOVE, WORK, CARRY, MOVE], energy);
 
             spawn.spawnCreep(body, Game.time, {memory: {working: false, role: 'harvester'}});
 
         }
-        else if (numberOfBuilders <= config["builder_number"]){
+        else if (numberOfBuilders < config["builder_number"]){
 
             var body = createBody([CARRY, MOVE, WORK, CARRY, MOVE, WORK], energy);
 
             spawn.spawnCreep(body, Game.time, {memory: {working: false, role: 'builder'}});
         }
-        else if (numberOfUpgraders <= config["upgrader_number"]){
+        else if (numberOfUpgraders < config["upgrader_number"]){
 
             var body = createBody([CARRY, MOVE, WORK, MOVE, WORK], energy);
 
             spawn.spawnCreep(body, Game.time, {memory: {working: false, role: 'upgrader'}});
         }
-        else if (numberofMiners <= config["miner"]){
+        else if (numberofMiners < config["miner_number"]){
 
-            var body = createBody([MOVE, WORK, WORK, WORK, WORK], energy);
+            var body = createBody([MOVE, WORK, WORK, WORK, WORK, WORK, WORK], energy);
             
             spawn.spawnCreep(body, Game.time, {memory: {working: false, role: 'miner'}});
         }
-        else if (numberOfRepairers <= config["repairer_number"]){
+        else if (numberOfRepairers < config["repairer_number"]){
 
             var body = createBody([CARRY, MOVE, WORK, CARRY, MOVE], energy);
             
             spawn.spawnCreep(body, Game.time, {memory: {working: false, role: 'repairer'}});
         }
-        else if (numberOfWallRepairers <= config["wall_repairer_number"]){
+        else if (numberOfWallRepairers < config["wall_repairer_number"]){
 
             var body = createBody([CARRY, MOVE, WORK, CARRY, MOVE], energy);
             

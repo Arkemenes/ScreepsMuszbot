@@ -13,21 +13,22 @@ var roleMiner = {
 
         let targets = []
 
-        for (var container in containers){
+        for (let container in allContainers){
             let available = true;
-            for (var miner in otherMiners){
-                if (miner.pos == container.pos) {
+            for (let miner in otherMiners){
+                
+                if (otherMiners[miner].pos.isEqualTo(allContainers[container].pos)) {
                     available = false;
                     break;
                 }
             }
-            
             if (available) {
-                targets.push(container);
+                targets.push(allContainers[container]);
             }
         }
 
         if (targets) {
+
             target = _.sortBy(targets, s => creep.pos.getRangeTo(s))[0];
 
             // if creep is on top of the container

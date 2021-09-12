@@ -49,11 +49,15 @@ var roleHarvester = {
                     });
                 }
             }
-
             
 
             // If there is a valid energy source, move to and harvest it
             if(creep.harvest(target) == ERR_NOT_IN_RANGE) {
+                creep.memory.target = target;
+                creep.moveTo(target, {visualizePathStyle: {stroke: '#ffaa00'}});
+            }
+            
+            if(creep.withdraw(target, RESOURCE_ENERGY) == ERR_NOT_IN_RANGE) {
                 creep.memory.target = target;
                 creep.moveTo(target, {visualizePathStyle: {stroke: '#ffaa00'}});
             }
