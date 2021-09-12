@@ -1,6 +1,6 @@
 var config = {
-    "harvester_number":4,
-    "builder_number":6,
+    "harvester_number":6,
+    "builder_number":4,
     "upgrader_number":2,
     "repairer_number":2
 };
@@ -32,7 +32,6 @@ var roleSpawn = {
             
             while ((energy - cumulativeCost) > minCost ){
                 for (let i = 0; i < priorities.length; i++){
-                    console.log(i);
                     if (cumulativeCost + BODYPART_COST[priorities[i]] <= energy) {
                         body.push(priorities[i]);
                         cumulativeCost += BODYPART_COST[priorities[i]];
@@ -42,8 +41,6 @@ var roleSpawn = {
                     }
                 }
             }
-
-            console.log(body);
             return body;
             
         }
