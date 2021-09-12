@@ -1,6 +1,6 @@
 var config = {
     "harvester_number":4,
-    "builder_number":4,
+    "builder_number":2,
     "upgrader_number":2,
     "repairer_number":2
 };
@@ -81,7 +81,7 @@ var roleSpawn = {
 
             var body = createBody([CARRY, MOVE, WORK, CARRY, MOVE, WORK], energy);
             
-            spawn.spawnCreep(body, Game.time, {memory: {working: false, role: 'upgrader'}});
+            spawn.spawnCreep(body, Game.time, {memory: {working: false, role: 'repairer'}});
         }
     }
 };

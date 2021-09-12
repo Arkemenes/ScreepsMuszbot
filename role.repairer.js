@@ -1,6 +1,6 @@
 var roleUpgrader = require('role.upgrader');
 
-var roleBuilder = {
+var roleRepairer = {
 
     /** @param {Creep} creep **/
     run: function(creep) {
@@ -29,4 +29,4 @@ var roleBuilder = {
     }
 };
 
-module.exports = roleBuilder;
+module.exports = roleRepairer;
