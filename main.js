@@ -1,6 +1,7 @@
 var roleHarvester = require('role.harvester');
 var roleUpgrader = require('role.upgrader');
 var roleBuilder = require('role.builder');
+var roleBuilder = require('role.repairer');
 var roleSpawn = require('role.spawn');
 var roleTower = require('role.tower');
 
@@ -23,6 +24,9 @@ module.exports.loop = function () {
             roleUpgrader.run(creep);
         }
         if(creep.memory.role == 'builder') {
+            roleBuilder.run(creep);
+        }
+        if(creep.memory.role == 'repairer') {
             roleBuilder.run(creep);
         }
     }
