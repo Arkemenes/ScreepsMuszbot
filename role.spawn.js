@@ -1,6 +1,6 @@
 var config = {
-    "harvester_number":5,
-    "builder_number":6,
+    "harvester_number":4,
+    "builder_number":2,
     "upgrader_number":2,
     "repairer_number":2
 };
@@ -13,6 +13,26 @@ var roleSpawn = {
         var numberOfUpgraders = _.sum(Game.creeps, (c) => c.memory.role == 'upgrader');
         var numberOfBuilders = _.sum(Game.creeps, (c) => c.memory.role == 'builder');
         var numberOfRepairers = _.sum(Game.creeps, (c) => c.memory.role == 'repairer');
+
+        var energy = spawn.room.energyCapacityAvailable;
+
+        if (numberOfHarvesters > 0) {
+            var energy = spawn.room.energyCapacityAvailable;
+        }
+        else {
+            var energy = spawn.room.energyAvailable;
+        }
+
+        var numberOfParts = Math.floor(energy/200);
+        
+
+        var body = [];
+
+        for (let i = 0; i < numberOfParts; i++) {
+            body.push(WORK);
+            body.push(CARRY);
+            body.push(MOVE);
+        }
 
         if (numberOfHarvesters <= config["harvester_number"]){
             spawn.spawnCreep([WORK, CARRY, CARRY, MOVE, MOVE], Game.time, {memory: {working: false, role: 'harvester'}});
