@@ -1,6 +1,6 @@
 var config = {
     "harvester_number":2,
-    "builder_number":2,
+    "builder_number":10,
     "upgrader_number":2
 };
 
@@ -13,14 +13,14 @@ var roleSpawn = {
         var numberOfBuilders = _.sum(Game.creeps, (c) => c.memory.role == 'builder');
 
         if (numberOfHarvesters <= config["harvester_number"]){
-            spawn.spawnCreep([WORK, CARRY, CARRY, MOVE, MOVE], Game.time, {memory: {working: false, role: 'harvester'}});
+            spawn.spawnCreep([WORK, WORK, CARRY, MOVE], Game.time, {memory: {working: false, role: 'harvester'}});
 
         }
-        else if (numberOfUpgraders <= config["builder_number"]){
+        else if (numberOfBuilders <= config["builder_number"]){
             spawn.spawnCreep([WORK, CARRY, CARRY, MOVE, MOVE], Game.time, {memory: {working: false, role: 'builder'}});
         }
-        else if (numberOfBuilders <= config["upgrader_number"]){
-            spawn.spawnCreep([WORK, CARRY, CARRY, MOVE, MOVE], Game.time, {memory: {working: false, role: 'upgrader'}});
+        else if (numberOfUpgraders <= config["upgrader_number"]){
+            spawn.spawnCreep([WORK, WORK, CARRY, MOVE], Game.time, {memory: {working: false, role: 'upgrader'}});
         }
     }
 };
