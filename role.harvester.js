@@ -15,12 +15,16 @@ var roleHarvester = {
 
         if(!creep.memory.working) {
 
-            var source = creep.pos.findClosestByPath(FIND_SOURCES);
+            var target = creep.pos.findClosestByPath(FIND_SOURCES, {
+                filter: (source) => {
+                    return (source.energy > 0);
+                }
+            });
 
             // If there is a valid energy source, move to and harvest it
-            if(creep.harvest(source) == ERR_NOT_IN_RANGE) {
-                creep.memory.target = source;
-                creep.moveTo(source, {visualizePathStyle: {stroke: '#ffaa00'}});
+            if(creep.harvest(target) == ERR_NOT_IN_RANGE) {
+                creep.memory.target = target;
+                creep.moveTo(target, {visualizePathStyle: {stroke: '#ffaa00'}});
             }
         }
         else {
@@ -34,17 +38,8 @@ var roleHarvester = {
                 }
             });
 
-            if (target && !creep.memory.harvesting ) {
-                creep.memory.harvesting = true;
-                creep.say('🔄 harvest');
-            }
-            else if (!target && creep.memory.harvesting ){
-                creep.memory.harvesting = false;
-                creep.say('⚡ upgrade');
-            }
 
-
-            if(creep.memory.harvesting) {
+            if(target) {
                 // If there is a valid target, move to and upgrade it
                 if(creep.transfer(target, RESOURCE_ENERGY) == ERR_NOT_IN_RANGE) {
                     creep.memory.target = target;

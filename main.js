@@ -1,7 +1,8 @@
 var roleHarvester = require('role.harvester');
 var roleUpgrader = require('role.upgrader');
 var roleBuilder = require('role.builder');
-var roleBuilder = require('role.repairer');
+var roleRepairer = require('role.repairer');
+var roleWallRepairer = require('role.wallRepairer');
 var roleSpawn = require('role.spawn');
 var roleTower = require('role.tower');
 
@@ -17,18 +18,25 @@ module.exports.loop = function () {
 
     for(var name in Game.creeps) {
         var creep = Game.creeps[name];
-        if(creep.memory.role == 'harvester') {
-            roleHarvester.run(creep);
-        }
-        if(creep.memory.role == 'upgrader') {
-            roleUpgrader.run(creep);
-        }
-        if(creep.memory.role == 'builder') {
-            roleBuilder.run(creep);
-        }
-        if(creep.memory.role == 'repairer') {
-            roleBuilder.run(creep);
-        }
+        switch(creep.memory.role) {
+            case 'harvester':
+                roleHarvester.run(creep);
+              break;
+            case 'upgrader':
+                roleUpgrader.run(creep);
+                break;
+            case 'builder':
+                roleBuilder.run(creep);
+                break;
+            case 'repairer':
+                roleRepairer.run(creep);
+                break;
+            case 'wallRepairer':
+                roleWallRepairer.run(creep);
+                break;
+            default:
+              console.log(creep.name + ' has no valid role defined :' + creep.memory.role);
+          }
     }
 
 	for(var name in Game.spawns) {
