@@ -35,17 +35,17 @@ var roleSpawn = {
         }
 
         if (numberOfHarvesters <= config["harvester_number"]){
-            spawn.spawnCreep([WORK, CARRY, CARRY, MOVE, MOVE], Game.time, {memory: {working: false, role: 'harvester'}});
+            spawn.spawnCreep(body, Game.time, {memory: {working: false, role: 'harvester'}});
 
         }
         else if (numberOfBuilders <= config["builder_number"]){
-            spawn.spawnCreep([WORK, CARRY, CARRY, MOVE, MOVE], Game.time, {memory: {working: false, role: 'builder'}});
+            spawn.spawnCreep(body, Game.time, {memory: {working: false, role: 'builder'}});
         }
         else if (numberOfUpgraders <= config["upgrader_number"]){
-            spawn.spawnCreep([WORK, CARRY, CARRY, MOVE, MOVE], Game.time, {memory: {working: false, role: 'upgrader'}});
+            spawn.spawnCreep(body, Game.time, {memory: {working: false, role: 'upgrader'}});
         }
         else if (numberOfRepairers <= config["repairer_number"]){
-            spawn.spawnCreep([WORK, CARRY, CARRY, MOVE, MOVE], Game.time, {memory: {working: false, role: 'upgrader'}});
+            spawn.spawnCreep(body, Game.time, {memory: {working: false, role: 'upgrader'}});
         }
     }
 };

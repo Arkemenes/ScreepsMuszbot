@@ -48,6 +48,7 @@ var roleHarvester = {
             else {
                 // Try to upgrade controller if there is no valid target in the room
                 if(creep.upgradeController(creep.room.controller) == ERR_NOT_IN_RANGE) {
+                    creep.memory.target = creep.room.controller;
                     creep.moveTo(creep.room.controller, {visualizePathStyle: {stroke: '#ffffff'}});
                 }
             }
