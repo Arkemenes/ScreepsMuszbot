@@ -37,7 +37,7 @@ var roleHarvester = {
                 // If creep is not a harvester, try to get energy from a container or storage
                 var target = creep.pos.findClosestByPath(FIND_STRUCTURES, {
                     filter: s => (s.structureType == STRUCTURE_CONTAINER || s.structureType == STRUCTURE_STORAGE) &&
-                                 s.store[RESOURCE_ENERGY] > 0
+                                 s.store[RESOURCE_ENERGY] > 100
                 });
 
                 // If there is no available container, get energy from source
@@ -80,6 +80,9 @@ var roleHarvester = {
                     creep.memory.target = target;
                     creep.moveTo(target, {visualizePathStyle: {stroke: '#ffffff'}});
                 }
+            }
+            else if (creep.store.valueOf() > 0) {
+                creep.memory.working = true;
             }
             else {
                 // Try to upgrade controller if there is no valid target in the room

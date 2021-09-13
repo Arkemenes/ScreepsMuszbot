@@ -6,8 +6,20 @@ var roleWallRepairer = require('role.wallRepairer');
 var roleMiner = require('role.miner');
 var roleSpawn = require('role.spawn');
 var roleTower = require('role.tower');
+var architect = require('architect'); 
 
 module.exports.loop = function () {
+
+    // check for memory entries of died creeps by iterating over Memory.creeps
+    for (let name in Memory.creeps) {
+        // and checking if the creep is still alive
+        if (Game.creeps[name] == undefined) {
+            // if not, delete the memory entry
+            delete Memory.creeps[name];
+        }
+    }
+
+    architect.run();
 
     for(var name in Game.structures) {
 		var structure = Game.structures[name];
