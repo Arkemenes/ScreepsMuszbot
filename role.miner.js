@@ -4,9 +4,8 @@ module.exports = {
     run: function(creep) {
         
         if (creep.memory.action && creep.memory.target) {
-            creep.memory.action(target);
+            creep.execAction(creep.memory.action, creep.memory.target.id);
         }
-
         let isAboveContainer = creep.room.find(FIND_STRUCTURES,{
             filter: s => s.structureType == STRUCTURE_CONTAINER &&
                          s.pos.isEqualTo(creep.pos)
@@ -49,7 +48,7 @@ module.exports = {
         }
         // if creep is supposed to harvest energy from source
         else {
-            creep.memory.action = creep.harvest;
+            creep.memory.action = 'harvest';
             creep.memory.target = creep.pos.findClosestByPath(FIND_SOURCES);
 
             creep.harvest(creep.memory.target);

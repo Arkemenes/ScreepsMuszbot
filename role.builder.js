@@ -2,12 +2,11 @@ module.exports = {
     // a function to run the logic for this role
     /** @param {Creep} creep */
     run: function(creep) {
-        
+
         if (creep.memory.action && creep.memory.target) {
-            creep.memory.action(target);
+            creep.execAction(creep.memory.action, creep.memory.target.id);
         }
-        // if creep is supposed to transfer energy to a structure
-        else if (creep.store.energy.valueOf() > 0) {
+        else if (creep.store.getFreeCapacity() < 0.9 * creep.store.getCapacity()) {
             if (!creep.buildConstruction()) {
                 creep.upgrade();
             }

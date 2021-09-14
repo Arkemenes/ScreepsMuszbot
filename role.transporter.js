@@ -4,9 +4,8 @@ module.exports = {
     run: function(creep) {
         
         if (creep.memory.action && creep.memory.target) {
-            creep.memory.action(target);
+            creep.execAction(creep.memory.action, creep.memory.target.id);
         }
-        // if creep is supposed to transfer energy to a structure
         else if (creep.store.energy.valueOf() > 0) {
             creep.depositEnergy();
         }

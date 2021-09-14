@@ -1,9 +1,10 @@
 var config = {
-    "harvester_number":4,
-    "builder_number":1,
-    "upgrader_number":3,
+    "harvester_number":1,
+    "builder_number":2,
+    "upgrader_number":1,
     "repairer_number":0,
-    "wall_repairer_number":1
+    "wall_repairer_number":2,
+    "transporter_number":2
 };
 
 StructureSpawn.prototype.spawnCreepsIfNecessary = 
@@ -38,6 +39,7 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
         var numberOfRepairers = _.sum(Game.creeps, (c) => c.memory.role == 'repairer');
         var numberOfWallRepairers = _.sum(Game.creeps, (c) => c.memory.role == 'wallRepairer');
         var numberofMiners = _.sum(Game.creeps, (c) => c.memory.role == 'miner');
+        var numberOfTransporters = _.sum(Game.creeps, (c) => c.memory.role == 'transporter');
 
         
         
@@ -51,7 +53,7 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
             var energy = this.room.energyCapacityAvailable;
         }
         else {
-            var energy = this.room.energyAvailable;
+            var energy = Math.max(this.room.energyAvailable,300);
         }
             
 
@@ -88,9 +90,15 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
         }
         else if (numberOfWallRepairers < config["wall_repairer_number"]){
 
-            var body = createBody([CARRY, MOVE, WORK, CARRY, MOVE, CARRY, WORK, CARRY, CARRY, WORK, CARRY], energy);
+            var body = createBody([CARRY, MOVE, WORK, CARRY, MOVE, CARRY, WORK, CARRY, CARRY, WORK, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY], energy);
             
             this.spawnCreep(body, Game.time, {memory: {working: false, role: 'wallRepairer'}});
+        }
+        else if (numberOfTransporters < config["transporter_number"]){
+
+            var body = createBody([MOVE, CARRY, CARRY, CARRY, CARRY, MOVE, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY], energy);
+            
+            this.spawnCreep(body, Game.time, {memory: {working: false, role: 'transporter'}});
         }
 
     

@@ -14,12 +14,48 @@ Creep.prototype.runRole =
     function () {
         roles[this.memory.role].run(this);
     };
+/** @function 
+    @param {string} action
+    @param {string} targetID */
+Creep.prototype.execAction = 
+    function (action, targetID) {
+
+        target = Game.getObjectById(targetID);
+
+        switch(action) {
+            case 'getEnergy':
+                this.getEnergy(target);
+                break;
+            case 'depositEnergy':
+                this.depositEnergy(target);
+                break;
+            case 'upgrade':
+                this.upgrade(target);
+                break;
+            case 'buildConstruction':
+                this.buildConstruction(target);
+                break;
+            case 'repairStructure':
+                this.repairStructure(target);
+                    break;
+            case 'repairWall':
+                this.repairWall(target);
+                    break;
+            case 'harvest':
+                this.harvest(target);
+                    break;
+            default:
+                this.memory.action = undefined;
+                this.memory.target = undefined;
+          }
+    }
 
 /** @function 
     @param {Structure} target */
 Creep.prototype.getEnergy =
     function (target) {
 
+        Game.getObjectById()
         if (!target) {
 
             if (this.memory.role != 'harvester' && 
@@ -46,22 +82,22 @@ Creep.prototype.getEnergy =
 
         if (target) {
             if (this.harvest(target) == ERR_NOT_IN_RANGE || this.withdraw(target, RESOURCE_ENERGY) == ERR_NOT_IN_RANGE) {
-                this.memory.action = this.getEnergy;
+                this.memory.action = 'getEnergy';
                 this.memory.target = target;
                 this.moveTo(target);
                 return true;
             }
             else {
-                this.action = undefined;
-                this.target = undefined;
+                this.memory.action = undefined;
+                this.memory.target = undefined;
                 return true;
             }
 
             
         }
         else {
-            this.action = undefined;
-            this.target = undefined;
+            this.memory.action = undefined;
+            this.memory.target = undefined;
             return false;
         }
 
@@ -94,22 +130,22 @@ Creep.prototype.getEnergy =
         if (target) {
             
             if (this.transfer(target, RESOURCE_ENERGY) == ERR_NOT_IN_RANGE) {
-                this.memory.action = this.depositEnergy;
+                this.memory.action = 'depositEnergy';
                 this.memory.target = target;
                 this.moveTo(target);
                 return true;
             }
             else {
-                this.memory.action = this.depositEnergy;
-                this.memory.target = target;
+                this.memory.action = undefined;
+                this.memory.target = undefined;
                 return true;
             }
 
 
         }
         else {
-            this.action = undefined;
-            this.target = undefined;
+            this.memory.action = undefined;
+            this.memory.target = undefined;
             return false;
         }
     };
@@ -127,22 +163,22 @@ Creep.prototype.getEnergy =
 
         if (target) {
             if (this.upgradeController(this.room.controller) == ERR_NOT_IN_RANGE) {
-                this.memory.action = this.upgrade;
+                this.memory.action = 'upgrade';
                 this.memory.target = target;
                 this.moveTo(target);
                 return true;
             }
             else {
-                this.action = undefined;
-                this.target = undefined;
+                this.memory.action = undefined;
+                this.memory.target = undefined;
                 return true;
             }
 
 
         }
         else {
-            this.action = undefined;
-            this.target = undefined;
+            this.memory.action = undefined;
+            this.memory.target = undefined;
             return false;
         }
     };
@@ -160,22 +196,22 @@ Creep.prototype.getEnergy =
 
         if (target) {
             if (this.build(target) == ERR_NOT_IN_RANGE) {
-                this.memory.action = this.buildConstruction;
+                this.memory.action = 'buildConstruction';
                 this.memory.target = target;
                 this.moveTo(target);
                 return true;
             }
             else {
-                this.action = undefined;
-                this.target = undefined;
+                this.memory.action = undefined;
+                this.memory.target = undefined;
                 return true;
             }
 
 
         }
         else {
-            this.action = undefined;
-            this.target = undefined;
+            this.memory.action = undefined;
+            this.memory.target = undefined;
             return false;
         }
     };
@@ -195,25 +231,24 @@ Creep.prototype.getEnergy =
             target = _.sortBy(targets, s => s.hits)[0];
         }
 
-
         if (target) {
             if (this.repair(target) == ERR_NOT_IN_RANGE) {
-                this.memory.action = this.repairStructure;
+                this.memory.action = 'repairStructure';
                 this.memory.target = target;
                 this.moveTo(target);
                 return true;
             }
             else {
-                this.action = undefined;
-                this.target = undefined;
+                this.memory.action = undefined;
+                this.memory.target = undefined;
                 return true;
             }
 
 
         }
         else {
-            this.action = undefined;
-            this.target = undefined;
+            this.memory.action = undefined;
+            this.memory.target = undefined;
             return false;
         }
     };
@@ -235,22 +270,27 @@ Creep.prototype.getEnergy =
 
         if (target) {
             if (this.repair(target) == ERR_NOT_IN_RANGE) {
-                this.memory.action = this.repairWall;
+                this.memory.action = 'repairWall';
                 this.memory.target = target;
                 this.moveTo(target);
                 return true;
             }
+            else if (target.hits != target.hitsMax) {
+                this.memory.action = 'repairWall';
+                this.memory.target = target;
+                return true;
+            }
             else {
-                this.action = undefined;
-                this.target = undefined;
+                this.memory.action = undefined;
+                this.memory.target = undefined;
                 return true;
             }
 
 
         }
         else {
-            this.action = undefined;
-            this.target = undefined;
+            this.memory.action = undefined;
+            this.memory.target = undefined;
             return false;
         }
     };
