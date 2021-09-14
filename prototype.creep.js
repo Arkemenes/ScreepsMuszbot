@@ -74,9 +74,12 @@ Creep.prototype.getEnergy =
                 });
             }
 
-
-            if (!target && this.memory.role != 'transporter') {
-                target = this.pos.findClosestByPath(FIND_SOURCES_ACTIVE);
+            
+            if (!target) {
+                let numberofMiners = _.sum(Game.creeps, (c) => c.memory.role == 'miner');
+                if (this.memory.role == 'miner' || !numberofMiners) {
+                    target = this.pos.findClosestByPath(FIND_SOURCES_ACTIVE);
+                }
             }
         }
 
@@ -238,6 +241,11 @@ Creep.prototype.getEnergy =
                 this.moveTo(target);
                 return true;
             }
+            else if (target.hits != target.hitsMax && this.store.getUsedCapacity() > 0) {
+                this.memory.action = 'repairWall';
+                this.memory.target = target;
+                return true;
+            }
             else {
                 this.memory.action = undefined;
                 this.memory.target = undefined;
@@ -275,7 +283,7 @@ Creep.prototype.getEnergy =
                 this.moveTo(target);
                 return true;
             }
-            else if (target.hits != target.hitsMax) {
+            else if (target.hits != target.hitsMax && this.store.getUsedCapacity() > 0) {
                 this.memory.action = 'repairWall';
                 this.memory.target = target;
                 return true;
