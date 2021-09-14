@@ -127,7 +127,7 @@ Creep.prototype.smartMove =
 
         let near = this.pos.findInRange(FIND_TOMBSTONES, 5, {
             filter: s => (s.structureType == STRUCTURE_CONTAINER)
-                && s.store[RESOURCE_ENERGY] >= 0
+                && s.store.energy.valueOf() >= 0
         })[0];
         
         if (!near) {
@@ -140,7 +140,7 @@ Creep.prototype.smartMove =
 
         if (this.store.getFreeCapacity() > 0 && near) {
             let prev = this.store.energy.valueOf();
-            if (this.harvest(target) == ERR_NOT_IN_RANGE || this.withdraw(target, RESOURCE_ENERGY) == ERR_NOT_IN_RANGE) {
+            if (this.harvest(near) == ERR_NOT_IN_RANGE || this.withdraw(near, RESOURCE_ENERGY) == ERR_NOT_IN_RANGE) {
                 this.moveTo(near);
             }
             if (this.memory.action == 'harvest') {
