@@ -12,17 +12,18 @@ var roles = {
 
 Creep.prototype.runRole =
     function () {
+
         roles[this.memory.role].run(this);
     };
 /** @function 
     @param {string} action
     @param {string} targetID */
-Creep.prototype.execAction = 
+Creep.prototype.execAction =
     function (action, targetID) {
 
         target = Game.getObjectById(targetID);
 
-        switch(action) {
+        switch (action) {
             case 'getEnergy':
                 this.getEnergy(target);
                 break;
@@ -37,17 +38,17 @@ Creep.prototype.execAction =
                 break;
             case 'repairStructure':
                 this.repairStructure(target);
-                    break;
+                break;
             case 'repairWall':
                 this.repairWall(target);
-                    break;
+                break;
             case 'harvest':
                 this.harvest(target);
-                    break;
+                break;
             default:
                 this.memory.action = undefined;
                 this.memory.target = undefined;
-          }
+        }
     }
 
 /** @function 
@@ -58,23 +59,30 @@ Creep.prototype.getEnergy =
         Game.getObjectById()
         if (!target) {
 
-            if (this.memory.role != 'harvester' && 
-                this.memory.role != 'longDistanceHarvester' && 
-                this.memory.role != 'transporter' &&
-                this.memory.role != 'miner') {
-                target = this.pos.findClosestByPath(FIND_STRUCTURES, {
-                    filter: s => (s.structureType == STRUCTURE_CONTAINER || s.structureType == STRUCTURE_STORAGE) &&
-                                 s.store[RESOURCE_ENERGY] > 100
-                });
-            }
-            else if (this.memory.role != 'miner') {
-                target = this.pos.findClosestByPath(FIND_STRUCTURES, {
-                    filter: s => (s.structureType == STRUCTURE_CONTAINER) &&
-                                 s.store[RESOURCE_ENERGY] > 50
-                });
+            target = this.pos.findClosestByPath(FIND_TOMBSTONES, {
+                filter: s => s.store[RESOURCE_ENERGY] >= 0
+            });
+
+            if (!target) {
+                if (this.memory.role != 'harvester' &&
+                    this.memory.role != 'longDistanceHarvester' &&
+                    this.memory.role != 'transporter' &&
+                    this.memory.role != 'miner') {
+                    target = this.pos.findClosestByPath(FIND_STRUCTURES, {
+                        filter: s => (s.structureType == STRUCTURE_CONTAINER || s.structureType == STRUCTURE_STORAGE) &&
+                            s.store[RESOURCE_ENERGY] >= 100
+                    });
+                }
+                else if (this.memory.role != 'miner') {
+                    target = this.pos.findClosestByPath(FIND_STRUCTURES, {
+                        filter: s => (s.structureType == STRUCTURE_CONTAINER) &&
+                            s.store[RESOURCE_ENERGY] >= 50
+                    });
+                }
             }
 
-            
+
+
             if (!target) {
                 let numberofMiners = _.sum(Game.creeps, (c) => c.memory.role == 'miner');
                 if (this.memory.role == 'miner' || !numberofMiners) {
@@ -90,13 +98,18 @@ Creep.prototype.getEnergy =
                 this.smartMove(target);
                 return true;
             }
+            else if (this.store.getFreeCapacity()) {
+                this.memory.action = 'getEnergy';
+                this.memory.target = target;
+                return true;
+            }
             else {
                 this.memory.action = undefined;
                 this.memory.target = undefined;
                 return true;
             }
 
-            
+
         }
         else {
             this.memory.action = undefined;
@@ -109,18 +122,26 @@ Creep.prototype.getEnergy =
 
 /** @function 
     @param {Structure} target */
-    Creep.prototype.smartMove =
+Creep.prototype.smartMove =
     function (target) {
 
-        let near = this.pos.findInRange(FIND_STRUCTURES, 1, {
+        let near = this.pos.findInRange(FIND_TOMBSTONES, 5, {
             filter: s => (s.structureType == STRUCTURE_CONTAINER)
-                         && s.store.energy.valueOf() >= 50})[0];
-
+                && s.store[RESOURCE_ENERGY] >= 0
+        })[0];
         
+        if (!near) {
+            near = this.pos.findInRange(FIND_STRUCTURES, 1, {
+                filter: s => (s.structureType == STRUCTURE_CONTAINER)
+                    && s.store.energy.valueOf() >= 50
+            })[0];
+        }
+        
+
         if (this.store.getFreeCapacity() > 0 && near) {
             let prev = this.store.energy.valueOf();
-            if (this.withdraw(near, RESOURCE_ENERGY) != 0) {
-                this.harvest(near);
+            if (this.harvest(target) == ERR_NOT_IN_RANGE || this.withdraw(target, RESOURCE_ENERGY) == ERR_NOT_IN_RANGE) {
+                this.moveTo(near);
             }
             if (this.memory.action == 'harvest') {
                 this.memory.action = undefined;
@@ -136,18 +157,18 @@ Creep.prototype.getEnergy =
 
 /** @function 
     @param {Structure} target */
-    Creep.prototype.depositEnergy =
+Creep.prototype.depositEnergy =
     function (target) {
 
         if (!target) {
             // If there is no target, try to get the closest spawn, extension or tower
             target = this.pos.findClosestByPath(FIND_MY_STRUCTURES, {
                 filter: (s) => ((s.structureType == STRUCTURE_SPAWN
-                             || s.structureType == STRUCTURE_EXTENSION
-                             || s.structureType == STRUCTURE_TOWER)
-                             && s.energy < s.energyCapacity * 0.9)
+                    || s.structureType == STRUCTURE_EXTENSION
+                    || s.structureType == STRUCTURE_TOWER)
+                    && s.energy < s.energyCapacity * 0.9)
             });
-            
+
 
 
             // // If still there is still no target, try to use a storage
@@ -158,7 +179,7 @@ Creep.prototype.getEnergy =
 
 
         if (target) {
-            
+
             if (this.transfer(target, RESOURCE_ENERGY) == ERR_NOT_IN_RANGE) {
                 this.memory.action = 'depositEnergy';
                 this.memory.target = target;
@@ -183,7 +204,7 @@ Creep.prototype.getEnergy =
 
 /** @function 
     @param {Structure} target */
-    Creep.prototype.upgrade =
+Creep.prototype.upgrade =
     function (target) {
 
         if (!target) {
@@ -216,7 +237,7 @@ Creep.prototype.getEnergy =
 
 /** @function 
     @param {ConstructionSite} target */
-    Creep.prototype.buildConstruction =
+Creep.prototype.buildConstruction =
     function (target) {
 
         if (!target) {
@@ -250,11 +271,11 @@ Creep.prototype.getEnergy =
 
 /** @function 
     @param {Structure} target */
-    Creep.prototype.repairStructure =
+Creep.prototype.repairStructure =
     function (target) {
 
         if (!target) {
-            let targets = this.room.find(FIND_STRUCTURES,{ 
+            let targets = this.room.find(FIND_STRUCTURES, {
                 filter: (s) => s.hits < s.hitsMax && s.structureType != STRUCTURE_WALL
             });
 
@@ -291,11 +312,11 @@ Creep.prototype.getEnergy =
 
 /** @function 
     @param {StructureWall} target */
-    Creep.prototype.repairWall =
+Creep.prototype.repairWall =
     function (target) {
 
         if (!target) {
-            let targets = this.room.find(FIND_STRUCTURES,{ 
+            let targets = this.room.find(FIND_STRUCTURES, {
                 filter: (s) => s.hits < s.hitsMax && s.structureType == STRUCTURE_WALL
             });
 

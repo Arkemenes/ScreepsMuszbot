@@ -6,7 +6,7 @@ module.exports = {
         if (creep.memory.action && creep.memory.target) {
             creep.execAction(creep.memory.action, creep.memory.target.id);
         }
-        else if (creep.store.energy.valueOf() > 0) {
+        else if (creep.store.energy.valueOf() >= 50) {
 
             
             if (!creep.depositEnergy()) {

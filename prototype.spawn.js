@@ -4,7 +4,7 @@ var config = {
     "upgrader_number":3,
     "repairer_number":0,
     "wall_repairer_number":2,
-    "transporter_number":2
+    "transporter_number":3
 };
 
 StructureSpawn.prototype.spawnCreepsIfNecessary = 
