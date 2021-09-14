@@ -1,35 +1,22 @@
-var roleUpgrader = require('role.upgrader');
-
-var roleWallRepairer = {
-
-    /** @param {Creep} creep **/
+module.exports = {
+    // a function to run the logic for this role
+    /** @param {Creep} creep */
     run: function(creep) {
-
-
-        var targets = creep.room.find(FIND_STRUCTURES,{ 
-            filter: (s) => s.hits < s.hitsMax && s.structureType == STRUCTURE_WALL
-        });
         
-        target = _.sortBy(targets, s => s.hits)[0];
-
-        if(creep.store.getFreeCapacity() == 0 && !creep.memory.working){
-            creep.memory.working = true;
+        if (creep.memory.action && creep.memory.target) {
+            creep.memory.action(target);
         }
-
-        if(creep.store.energy.valueOf() == 0 && creep.memory.working){
-            creep.memory.working = false;
-        }
-
-        if(target && creep.memory.working) {
-            creep.memory.target = target;
-            if(creep.repair(target) == ERR_NOT_IN_RANGE) {
-                creep.moveTo(target, {visualizePathStyle: {stroke: '#ffffff'}});
+        // if creep is supposed to transfer energy to a structure
+        else if (creep.store.energy.valueOf() > 0) {
+            if (!creep.repairWall()) {
+                if (!creep.repairStructure()) {
+                    creep.upgrade();
+                }
             }
         }
+        // if creep is supposed to harvest energy from source
         else {
-            roleUpgrader.run(creep);
+            creep.getEnergy();
         }
     }
 };
-
-module.exports = roleWallRepairer;

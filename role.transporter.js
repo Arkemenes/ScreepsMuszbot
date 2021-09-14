@@ -8,7 +8,7 @@ module.exports = {
         }
         // if creep is supposed to transfer energy to a structure
         else if (creep.store.energy.valueOf() > 0) {
-            creep.upgrade();
+            creep.depositEnergy();
         }
         // if creep is supposed to harvest energy from source
         else {

@@ -1,30 +1,20 @@
-var roleUpgrader = require('role.upgrader');
-
-var roleBuilder = {
-
-    /** @param {Creep} creep **/
+module.exports = {
+    // a function to run the logic for this role
+    /** @param {Creep} creep */
     run: function(creep) {
-
-        var target = creep.pos.findClosestByPath(FIND_CONSTRUCTION_SITES);
-
-        if(creep.store.getFreeCapacity() == 0 && !creep.memory.working){
-            creep.memory.working = true;
+        
+        if (creep.memory.action && creep.memory.target) {
+            creep.memory.action(target);
         }
-
-        if(creep.store.energy.valueOf() == 0 && creep.memory.working){
-            creep.memory.working = false;
-        }
-
-        if(target && creep.memory.working) {
-            creep.memory.target = target;
-            if(creep.build(target) == ERR_NOT_IN_RANGE) {
-                creep.moveTo(target, {visualizePathStyle: {stroke: '#ffffff'}});
+        // if creep is supposed to transfer energy to a structure
+        else if (creep.store.energy.valueOf() > 0) {
+            if (!creep.buildConstruction()) {
+                creep.upgrade();
             }
         }
+        // if creep is supposed to harvest energy from source
         else {
-            roleUpgrader.run(creep);
+            creep.getEnergy();
         }
     }
 };
-
-module.exports = roleBuilder;
