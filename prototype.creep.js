@@ -87,7 +87,7 @@ Creep.prototype.getEnergy =
             if (this.harvest(target) == ERR_NOT_IN_RANGE || this.withdraw(target, RESOURCE_ENERGY) == ERR_NOT_IN_RANGE) {
                 this.memory.action = 'getEnergy';
                 this.memory.target = target;
-                this.moveTo(target);
+                this.smartMove(target);
                 return true;
             }
             else {
@@ -102,6 +102,33 @@ Creep.prototype.getEnergy =
             this.memory.action = undefined;
             this.memory.target = undefined;
             return false;
+        }
+
+    };
+
+
+/** @function 
+    @param {Structure} target */
+    Creep.prototype.smartMove =
+    function (target) {
+
+        let near = this.pos.findInRange(FIND_STRUCTURES, 1, {
+            filter: s => (s.structureType == STRUCTURE_CONTAINER)
+                         && s.store.energy.valueOf() >= 50})[0];
+
+        
+        if (this.store.getFreeCapacity() > 0 && near) {
+            let prev = this.store.energy.valueOf();
+            if (this.withdraw(near, RESOURCE_ENERGY) != 0) {
+                this.harvest(near);
+            }
+            if (this.memory.action == 'harvest') {
+                this.memory.action = undefined;
+                this.memory.target = undefined;
+            }
+        }
+        else {
+            this.moveTo(target);
         }
 
     };
@@ -135,7 +162,7 @@ Creep.prototype.getEnergy =
             if (this.transfer(target, RESOURCE_ENERGY) == ERR_NOT_IN_RANGE) {
                 this.memory.action = 'depositEnergy';
                 this.memory.target = target;
-                this.moveTo(target);
+                this.smartMove(target);
                 return true;
             }
             else {
@@ -168,7 +195,7 @@ Creep.prototype.getEnergy =
             if (this.upgradeController(this.room.controller) == ERR_NOT_IN_RANGE) {
                 this.memory.action = 'upgrade';
                 this.memory.target = target;
-                this.moveTo(target);
+                this.smartMove(target);
                 return true;
             }
             else {
@@ -201,7 +228,7 @@ Creep.prototype.getEnergy =
             if (this.build(target) == ERR_NOT_IN_RANGE) {
                 this.memory.action = 'buildConstruction';
                 this.memory.target = target;
-                this.moveTo(target);
+                this.smartMove(target);
                 return true;
             }
             else {
@@ -238,7 +265,7 @@ Creep.prototype.getEnergy =
             if (this.repair(target) == ERR_NOT_IN_RANGE) {
                 this.memory.action = 'repairStructure';
                 this.memory.target = target;
-                this.moveTo(target);
+                this.smartMove(target);
                 return true;
             }
             else if (target.hits != target.hitsMax && this.store.getUsedCapacity() > 0) {
@@ -280,7 +307,7 @@ Creep.prototype.getEnergy =
             if (this.repair(target) == ERR_NOT_IN_RANGE) {
                 this.memory.action = 'repairWall';
                 this.memory.target = target;
-                this.moveTo(target);
+                this.smartMove(target);
                 return true;
             }
             else if (target.hits != target.hitsMax && this.store.getUsedCapacity() > 0) {
