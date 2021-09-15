@@ -2,8 +2,9 @@
 require('prototype.creep');
 require('prototype.tower');
 require('prototype.spawn');
+require('prototype.link');
 
-module.exports.loop = function() {
+module.exports.loop = function () {
     // check for memory entries of died creeps by iterating over Memory.creeps
     for (let name in Memory.creeps) {
         // and checking if the creep is still alive
@@ -11,6 +12,13 @@ module.exports.loop = function() {
             // if not, delete the memory entry
             delete Memory.creeps[name];
         }
+    }
+    // find all towers
+    var links = _.filter(Game.structures, s => s.structureType == STRUCTURE_LINK);
+    // for each tower
+    for (let link of links) {
+        // run tower logic
+        link.runRole();
     }
 
     // for each creeps

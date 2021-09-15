@@ -60,22 +60,24 @@ Creep.prototype.getEnergy =
         if (!target) {
 
             target = this.pos.findClosestByPath(FIND_TOMBSTONES, {
-                filter: s => s.store[RESOURCE_ENERGY] >= 0
+                filter: s => s.store[RESOURCE_ENERGY] > 0
             });
 
             if (!target) {
                 if (this.memory.role != 'harvester' &&
                     this.memory.role != 'longDistanceHarvester' &&
-                    this.memory.role != 'transporter' &&
-                    this.memory.role != 'miner') {
+                    this.memory.role != 'transporter') {
                     target = this.pos.findClosestByPath(FIND_STRUCTURES, {
-                        filter: s => (s.structureType == STRUCTURE_CONTAINER || s.structureType == STRUCTURE_STORAGE) &&
+                        filter: s => (s.structureType == STRUCTURE_CONTAINER 
+                                   || s.structureType == STRUCTURE_STORAGE
+                                   || (s.structureType == STRUCTURE_LINK && !s.isCollector())) &&
                             s.store[RESOURCE_ENERGY] >= 100
                     });
                 }
-                else if (this.memory.role != 'miner') {
+                else {
                     target = this.pos.findClosestByPath(FIND_STRUCTURES, {
-                        filter: s => (s.structureType == STRUCTURE_CONTAINER) &&
+                        filter: s => (s.structureType == STRUCTURE_CONTAINER
+                                  || (s.structureType == STRUCTURE_LINK && !s.isCollector())) &&
                             s.store[RESOURCE_ENERGY] >= 50
                     });
                 }
@@ -98,7 +100,10 @@ Creep.prototype.getEnergy =
                 this.smartMove(target);
                 return true;
             }
-            else if (this.store.getFreeCapacity()) {
+            else if (this.store.getFreeCapacity() 
+                    && (   target.structureType == STRUCTURE_CONTAINER 
+                        || target.structureType == STRUCTURE_STORAGE
+                        || (target.structureType == STRUCTURE_LINK && !target.isCollector()))) {
                 this.memory.action = 'getEnergy';
                 this.memory.target = target;
                 return true;
@@ -127,7 +132,7 @@ Creep.prototype.smartMove =
 
         let near = this.pos.findInRange(FIND_TOMBSTONES, 5, {
             filter: s => (s.structureType == STRUCTURE_CONTAINER)
-                && s.store.energy.valueOf() >= 0
+                && s.store.energy.valueOf() > 0
         })[0];
         
         if (!near) {
@@ -165,8 +170,9 @@ Creep.prototype.depositEnergy =
             target = this.pos.findClosestByPath(FIND_MY_STRUCTURES, {
                 filter: (s) => ((s.structureType == STRUCTURE_SPAWN
                     || s.structureType == STRUCTURE_EXTENSION
-                    || s.structureType == STRUCTURE_TOWER)
-                    && s.energy < s.energyCapacity * 0.9)
+                    || s.structureType == STRUCTURE_TOWER
+                    || (s.structureType == STRUCTURE_LINK && s.isCollector()))
+                    && s.energy < s.energyCapacity * 0.95)
             });
 
 
@@ -276,7 +282,7 @@ Creep.prototype.repairStructure =
 
         if (!target) {
             let targets = this.room.find(FIND_STRUCTURES, {
-                filter: (s) => s.hits < s.hitsMax && s.structureType != STRUCTURE_WALL
+                filter: (s) => s.hits < s.hitsMax && s.structureType != STRUCTURE_WALL && s.structureType != STRUCTURE_RAMPART
             });
 
             target = _.sortBy(targets, s => s.hits)[0];
@@ -317,7 +323,7 @@ Creep.prototype.repairWall =
 
         if (!target) {
             let targets = this.room.find(FIND_STRUCTURES, {
-                filter: (s) => s.hits < s.hitsMax && s.structureType == STRUCTURE_WALL
+                filter: (s) => s.hits < s.hitsMax && (s.structureType == STRUCTURE_WALL || s.structureType != STRUCTURE_RAMPART)
             });
 
             target = _.sortBy(targets, s => s.hits)[0];

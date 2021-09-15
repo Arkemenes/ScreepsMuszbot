@@ -1,10 +1,10 @@
 var config = {
-    "harvester_number":1,
-    "builder_number":2,
-    "upgrader_number":3,
+    "harvester_number":2,
+    "builder_number":1,
+    "upgrader_number":5,
     "repairer_number":0,
-    "wall_repairer_number":2,
-    "transporter_number":3
+    "wall_repairer_number":0,
+    "transporter_number":4
 };
 
 StructureSpawn.prototype.spawnCreepsIfNecessary = 
