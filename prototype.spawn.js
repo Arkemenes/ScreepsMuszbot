@@ -1,10 +1,10 @@
 var config = {
     "harvester_number":2,
     "builder_number":1,
-    "upgrader_number":5,
+    "upgrader_number":4,
     "repairer_number":0,
     "wall_repairer_number":0,
-    "transporter_number":4
+    "transporter_number":2
 };
 
 StructureSpawn.prototype.spawnCreepsIfNecessary = 
@@ -94,7 +94,7 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
             
             this.spawnCreep(body, Game.time, {memory: {working: false, role: 'wallRepairer'}});
         }
-        else if (numberOfTransporters < config["transporter_number"]){
+        else if (numberOfTransporters < config["transporter_number"] && this.room.find(FIND_STRUCTURES, {filter: (s) => (s.structureType == STRUCTURE_CONTAINER)})){
 
             var body = createBody([MOVE, CARRY, CARRY, CARRY, CARRY, MOVE, CARRY, CARRY, CARRY, CARRY, CARRY], energy);
             

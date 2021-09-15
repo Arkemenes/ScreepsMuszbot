@@ -11,7 +11,7 @@ StructureLink.prototype.isCollector =
 
 StructureLink.prototype.runRole =
     function () {
-        if (this.isCollector() && this.store['energy'] >= 750 && this.isActive()){
+        if (this.isCollector() && this.store['energy'] >= 50 && this.isActive()){
 
 
             let nonCollectorLinks = this.room.find(FIND_STRUCTURES, {

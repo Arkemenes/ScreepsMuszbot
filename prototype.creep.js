@@ -72,14 +72,27 @@ Creep.prototype.getEnergy =
                 if (this.memory.role != 'harvester' &&
                     this.memory.role != 'longDistanceHarvester' &&
                     this.memory.role != 'transporter') {
-                    target = this.pos.findClosestByPath(FIND_STRUCTURES, {
-                        filter: s => (s.structureType == STRUCTURE_CONTAINER 
-                                   || s.structureType == STRUCTURE_STORAGE
-                                   || (s.structureType == STRUCTURE_LINK && !s.isCollector())) &&
-                            s.store[RESOURCE_ENERGY] >= 100
-                    });
+
+                        if (this.room.find(FIND_STRUCTURES, {filter: s => s.structureType == STRUCTURE_STORAGE || s.structureType == STRUCTURE_LINK})) {
+                            target = this.pos.findClosestByPath(FIND_STRUCTURES, {
+                                filter: s => (s.structureType == STRUCTURE_STORAGE
+                                           || (s.structureType == STRUCTURE_LINK && !s.isCollector())) &&
+                                    s.store[RESOURCE_ENERGY] >= 100
+                            });
+                        }
+                        else {target = this.pos.findClosestByPath(FIND_STRUCTURES, {
+                            filter: s => (s.structureType == STRUCTURE_CONTAINER) &&
+                                s.store[RESOURCE_ENERGY] >= 100
+                        });}
+                    
                 }
-                else {
+                else if (this.memory.role == 'harvester' || this.memory.role == 'longDistanceHarvester') {
+                target = this.pos.findClosestByPath(FIND_STRUCTURES, {
+                    filter: s => (s.structureType == STRUCTURE_CONTAINER) &&
+                        s.store[RESOURCE_ENERGY] >= 100
+                });
+            }
+                else if (this.memory.role == 'transporter'){
                     target = this.pos.findClosestByPath(FIND_STRUCTURES, {
                         filter: s => (s.structureType == STRUCTURE_CONTAINER
                                   || (s.structureType == STRUCTURE_LINK && !s.isCollector())) &&
@@ -105,11 +118,9 @@ Creep.prototype.getEnergy =
                 this.smartMove(target);
                 return true;
             }
-            else if (this.store.getFreeCapacity() 
-                    && target.store.getUsedCapacity()
+            else if (this.store.getFreeCapacity()
                     && (   target.structureType == STRUCTURE_CONTAINER 
-                        || target.structureType == STRUCTURE_STORAGE
-                        || (target.structureType == STRUCTURE_LINK && !target.isCollector()))) {
+                        || target.structureType == STRUCTURE_STORAGE)) {
                 this.memory.action = 'getEnergy';
                 this.memory.target = target;
                 return true;
@@ -143,7 +154,7 @@ Creep.prototype.smartMove =
         if (!near) {
             near = this.pos.findInRange(FIND_STRUCTURES, 1, {
                 filter: s => (s.structureType == STRUCTURE_CONTAINER)
-                    && s.store.energy.valueOf() >= 50
+                    && s.store.energy.valueOf() > 0
             })[0];
         }
         
@@ -170,14 +181,36 @@ Creep.prototype.depositEnergy =
     function (target) {
 
         if (!target) {
+
+            if (this.memory.role == 'harvester') {
+                target = this.pos.findClosestByPath(FIND_MY_STRUCTURES, {
+                    filter: (s) => ((s.structureType == STRUCTURE_SPAWN
+                        || s.structureType == STRUCTURE_EXTENSION
+                        || s.structureType == STRUCTURE_TOWER
+                        || (s.structureType == STRUCTURE_LINK && s.isCollector()))
+                        && s.energy < s.energyCapacity * 0.95)
+                });
+            }
             // If there is no target, try to get the closest spawn, extension or tower
-            target = this.pos.findClosestByPath(FIND_MY_STRUCTURES, {
-                filter: (s) => ((s.structureType == STRUCTURE_SPAWN
-                    || s.structureType == STRUCTURE_EXTENSION
-                    || s.structureType == STRUCTURE_TOWER
-                    || (s.structureType == STRUCTURE_LINK && s.isCollector()))
-                    && s.energy < s.energyCapacity * 0.95)
-            });
+            else if (this.memory.role == 'transporter') {
+                target = this.pos.findClosestByPath(FIND_MY_STRUCTURES, {
+                    filter: (s) => ((s.structureType == STRUCTURE_SPAWN
+                        || s.structureType == STRUCTURE_EXTENSION
+                        || s.structureType == STRUCTURE_TOWER
+                        || s.structureType == STRUCTURE_STORAGE)
+                        && s.energy < s.energyCapacity * 0.95)
+                });
+            }
+            else {
+                target = this.pos.findClosestByPath(FIND_MY_STRUCTURES, {
+                    filter: (s) => ((s.structureType == STRUCTURE_SPAWN
+                        || s.structureType == STRUCTURE_EXTENSION
+                        || s.structureType == STRUCTURE_TOWER
+                        || s.structureType == STRUCTURE_STORAGE
+                        || (s.structureType == STRUCTURE_LINK && s.isCollector()))
+                        && s.energy < s.energyCapacity * 0.95)
+                });
+            }
 
 
 
@@ -194,6 +227,17 @@ Creep.prototype.depositEnergy =
                 this.memory.action = 'depositEnergy';
                 this.memory.target = target;
                 this.smartMove(target);
+                return true;
+            }
+            else if (target.structureType == STRUCTURE_LINK && (target.store['energy'] <= 750 || target.isActive())) {
+                if (this.store['energy']) {
+                    this.memory.action = 'depositEnergy';
+                    this.memory.target = target;
+                }
+                else {
+                    this.memory.action = 'harvest';
+                    this.memory.target = undefined;
+                }
                 return true;
             }
             else {
