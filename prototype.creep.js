@@ -13,7 +13,14 @@ var roles = {
 Creep.prototype.runRole =
     function () {
 
-        roles[this.memory.role].run(this);
+        if (this.ticksToLive > 1) {
+            roles[this.memory.role].run(this);
+        }
+        else {
+            this.say("I'm dying!")
+            this.drop(RESOURCE_ENERGY);
+        }
+        
     };
 /** @function 
     @param {string} action
@@ -59,9 +66,7 @@ Creep.prototype.getEnergy =
         Game.getObjectById()
         if (!target) {
 
-            target = this.pos.findClosestByPath(FIND_TOMBSTONES, {
-                filter: s => s.store[RESOURCE_ENERGY] > 0
-            });
+            // target = this.pos.findClosestByPath(FIND_DROPPED_RESOURCES);
 
             if (!target) {
                 if (this.memory.role != 'harvester' &&
@@ -101,6 +106,7 @@ Creep.prototype.getEnergy =
                 return true;
             }
             else if (this.store.getFreeCapacity() 
+                    && target.store.getUsedCapacity()
                     && (   target.structureType == STRUCTURE_CONTAINER 
                         || target.structureType == STRUCTURE_STORAGE
                         || (target.structureType == STRUCTURE_LINK && !target.isCollector()))) {
@@ -130,9 +136,8 @@ Creep.prototype.getEnergy =
 Creep.prototype.smartMove =
     function (target) {
 
-        let near = this.pos.findInRange(FIND_TOMBSTONES, 5, {
-            filter: s => (s.structureType == STRUCTURE_CONTAINER)
-                && s.store.energy.valueOf() > 0
+        let near = this.pos.findInRange(FIND_DROPPED_RESOURCES, 5, {
+            filter: s => s.amount > 0
         })[0];
         
         if (!near) {
@@ -144,8 +149,7 @@ Creep.prototype.smartMove =
         
 
         if (this.store.getFreeCapacity() > 0 && near) {
-            let prev = this.store.energy.valueOf();
-            if (this.harvest(near) == ERR_NOT_IN_RANGE || this.withdraw(near, RESOURCE_ENERGY) == ERR_NOT_IN_RANGE) {
+            if (this.harvest(near) == ERR_NOT_IN_RANGE || this.withdraw(near, RESOURCE_ENERGY) == ERR_NOT_IN_RANGE || this.pickup(near) == ERR_NOT_IN_RANGE) {
                 this.moveTo(near);
             }
             if (this.memory.action == 'harvest') {
@@ -282,7 +286,7 @@ Creep.prototype.repairStructure =
 
         if (!target) {
             let targets = this.room.find(FIND_STRUCTURES, {
-                filter: (s) => s.hits < s.hitsMax && s.structureType != STRUCTURE_WALL && s.structureType != STRUCTURE_RAMPART
+                filter: (s) => s.hits < s.hitsMax && s.structureType != STRUCTURE_WALL
             });
 
             target = _.sortBy(targets, s => s.hits)[0];
@@ -323,7 +327,7 @@ Creep.prototype.repairWall =
 
         if (!target) {
             let targets = this.room.find(FIND_STRUCTURES, {
-                filter: (s) => s.hits < s.hitsMax && (s.structureType == STRUCTURE_WALL || s.structureType != STRUCTURE_RAMPART)
+                filter: (s) => s.hits < s.hitsMax && s.structureType == STRUCTURE_WALL
             });
 
             target = _.sortBy(targets, s => s.hits)[0];

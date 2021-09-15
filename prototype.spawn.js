@@ -33,13 +33,13 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
             
         }
 
-        var numberOfHarvesters = _.sum(Game.creeps, (c) => c.memory.role == 'harvester');
-        var numberOfUpgraders = _.sum(Game.creeps, (c) => c.memory.role == 'upgrader');
-        var numberOfBuilders = _.sum(Game.creeps, (c) => c.memory.role == 'builder');
-        var numberOfRepairers = _.sum(Game.creeps, (c) => c.memory.role == 'repairer');
-        var numberOfWallRepairers = _.sum(Game.creeps, (c) => c.memory.role == 'wallRepairer');
-        var numberofMiners = _.sum(Game.creeps, (c) => c.memory.role == 'miner');
-        var numberOfTransporters = _.sum(Game.creeps, (c) => c.memory.role == 'transporter');
+        var numberOfHarvesters = _.sum(Game.creeps, (c) => c.memory.role == 'harvester' && c.ticksToLive > 10);
+        var numberOfUpgraders = _.sum(Game.creeps, (c) => c.memory.role == 'upgrader' && c.ticksToLive > 10);
+        var numberOfBuilders = _.sum(Game.creeps, (c) => c.memory.role == 'builder' && c.ticksToLive > 10);
+        var numberOfRepairers = _.sum(Game.creeps, (c) => c.memory.role == 'repairer' && c.ticksToLive > 10);
+        var numberOfWallRepairers = _.sum(Game.creeps, (c) => c.memory.role == 'wallRepairer' && c.ticksToLive > 10);
+        var numberofMiners = _.sum(Game.creeps, (c) => c.memory.role == 'miner' && c.ticksToLive > 10);
+        var numberOfTransporters = _.sum(Game.creeps, (c) => c.memory.role == 'transporter' && c.ticksToLive > 10);
 
         
         
