@@ -66,21 +66,24 @@ Creep.prototype.getEnergy =
         Game.getObjectById()
         if (!target) {
 
-            // target = this.pos.findClosestByPath(FIND_DROPPED_RESOURCES);
+            target = this.pos.findClosestByPath(FIND_DROPPED_RESOURCES);
 
             if (!target) {
+                
                 if (this.memory.role != 'harvester' &&
                     this.memory.role != 'longDistanceHarvester' &&
                     this.memory.role != 'transporter') {
 
-                        if (this.room.find(FIND_STRUCTURES, {filter: s => s.structureType == STRUCTURE_STORAGE || s.structureType == STRUCTURE_LINK})) {
+                        if (this.room.find(FIND_STRUCTURES, {filter: s => s.structureType == STRUCTURE_STORAGE || s.structureType == STRUCTURE_LINK})[0]) {
                             target = this.pos.findClosestByPath(FIND_STRUCTURES, {
                                 filter: s => (s.structureType == STRUCTURE_STORAGE
                                            || (s.structureType == STRUCTURE_LINK && !s.isCollector())) &&
                                     s.store[RESOURCE_ENERGY] >= 100
                             });
                         }
-                        else {target = this.pos.findClosestByPath(FIND_STRUCTURES, {
+                        else {
+                            
+                            target = this.pos.findClosestByPath(FIND_STRUCTURES, {
                             filter: s => (s.structureType == STRUCTURE_CONTAINER) &&
                                 s.store[RESOURCE_ENERGY] >= 100
                         });}
@@ -92,7 +95,7 @@ Creep.prototype.getEnergy =
                         s.store[RESOURCE_ENERGY] >= 100
                 });
             }
-                else if (this.memory.role == 'transporter'){
+                else {
                     target = this.pos.findClosestByPath(FIND_STRUCTURES, {
                         filter: s => (s.structureType == STRUCTURE_CONTAINER
                                   || (s.structureType == STRUCTURE_LINK && !s.isCollector())) &&
@@ -112,7 +115,7 @@ Creep.prototype.getEnergy =
         }
 
         if (target) {
-            if (this.harvest(target) == ERR_NOT_IN_RANGE || this.withdraw(target, RESOURCE_ENERGY) == ERR_NOT_IN_RANGE) {
+            if (this.harvest(target) == ERR_NOT_IN_RANGE || this.withdraw(target, RESOURCE_ENERGY) == ERR_NOT_IN_RANGE || this.pickup(target) == ERR_NOT_IN_RANGE) {
                 this.memory.action = 'getEnergy';
                 this.memory.target = target;
                 this.smartMove(target);
@@ -272,6 +275,10 @@ Creep.prototype.upgrade =
                 this.memory.target = target;
                 this.smartMove(target);
                 return true;
+            }
+            else if (this.store['energy']) {
+                this.memory.action = 'upgrade';
+                this.memory.target = target;
             }
             else {
                 this.memory.action = undefined;
