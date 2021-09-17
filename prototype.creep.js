@@ -17,7 +17,6 @@ Creep.prototype.runRole =
             roles[this.memory.role].run(this);
         }
         else {
-            this.say("I'm dying!")
             this.drop(RESOURCE_ENERGY);
         }
         
@@ -74,7 +73,7 @@ Creep.prototype.getEnergy =
                     this.memory.role != 'longDistanceHarvester' &&
                     this.memory.role != 'transporter') {
 
-                        if (this.room.find(FIND_STRUCTURES, {filter: s => s.structureType == STRUCTURE_STORAGE || s.structureType == STRUCTURE_LINK})[0]) {
+                        if (this.room.find(FIND_STRUCTURES, {filter: s => s.structureType == STRUCTURE_LINK})[0]) {
                             target = this.pos.findClosestByPath(FIND_STRUCTURES, {
                                 filter: s => (s.structureType == STRUCTURE_STORAGE
                                            || (s.structureType == STRUCTURE_LINK && !s.isCollector())) &&
@@ -99,7 +98,7 @@ Creep.prototype.getEnergy =
                     target = this.pos.findClosestByPath(FIND_STRUCTURES, {
                         filter: s => (s.structureType == STRUCTURE_CONTAINER
                                   || (s.structureType == STRUCTURE_LINK && !s.isCollector())) &&
-                            s.store[RESOURCE_ENERGY] >= 50
+                            s.store[RESOURCE_ENERGY] >= 100
                     });
                 }
             }
@@ -114,6 +113,29 @@ Creep.prototype.getEnergy =
             }
         }
 
+        if (!target) {
+            if (this.memory.role != 'harvester' &&
+                this.memory.role != 'longDistanceHarvester' &&
+                this.memory.role != 'transporter') {
+                    target = this.pos.findClosestByPath(FIND_STRUCTURES, {
+                        filter: s => (s.structureType == STRUCTURE_CONTAINER
+                                || (s.structureType == STRUCTURE_LINK && !s.isCollector())
+                                || s.structureType == STRUCTURE_STORAGE) &&
+                            s.store[RESOURCE_ENERGY] > 0
+                });
+            }
+            else {
+                target = this.pos.findClosestByPath(FIND_STRUCTURES, {
+                    filter: s => (s.structureType == STRUCTURE_CONTAINER
+                            || (s.structureType == STRUCTURE_LINK && !s.isCollector())) &&
+                        s.store[RESOURCE_ENERGY] > 0
+                });
+            }
+        }
+        if (!target) {
+            target = this.pos.findClosestByPath(FIND_SOURCES_ACTIVE);
+        }
+
         if (target) {
             if (this.harvest(target) == ERR_NOT_IN_RANGE || this.withdraw(target, RESOURCE_ENERGY) == ERR_NOT_IN_RANGE || this.pickup(target) == ERR_NOT_IN_RANGE) {
                 this.memory.action = 'getEnergy';
@@ -122,8 +144,7 @@ Creep.prototype.getEnergy =
                 return true;
             }
             else if (this.store.getFreeCapacity()
-                    && (   target.structureType == STRUCTURE_CONTAINER 
-                        || target.structureType == STRUCTURE_STORAGE)) {
+                    && (target.structureType == STRUCTURE_CONTAINER)) {
                 this.memory.action = 'getEnergy';
                 this.memory.target = target;
                 return true;
@@ -189,38 +210,46 @@ Creep.prototype.depositEnergy =
                 target = this.pos.findClosestByPath(FIND_MY_STRUCTURES, {
                     filter: (s) => ((s.structureType == STRUCTURE_SPAWN
                         || s.structureType == STRUCTURE_EXTENSION
-                        || s.structureType == STRUCTURE_TOWER
-                        || (s.structureType == STRUCTURE_LINK && s.isCollector()))
+                        || s.structureType == STRUCTURE_TOWER)
                         && s.energy < s.energyCapacity * 0.95)
                 });
             }
-            // If there is no target, try to get the closest spawn, extension or tower
+
             else if (this.memory.role == 'transporter') {
-                target = this.pos.findClosestByPath(FIND_MY_STRUCTURES, {
-                    filter: (s) => ((s.structureType == STRUCTURE_SPAWN
-                        || s.structureType == STRUCTURE_EXTENSION
-                        || s.structureType == STRUCTURE_TOWER
-                        || s.structureType == STRUCTURE_STORAGE)
-                        && s.energy < s.energyCapacity * 0.95)
-                });
+                if (!target) {
+                    target = this.pos.findInRange(FIND_MY_STRUCTURES, 5, {
+                        filter: (s) => ((s.structureType == STRUCTURE_LINK && s.isCollector())
+                            && s.energy < s.energyCapacity * 0.95)
+                    })[0];
+                    
+                }
+                if (!target) {
+                    target = this.pos.findInRange(FIND_STRUCTURES, 5, {
+                        filter: (s) => (s.structureType == STRUCTURE_STORAGE)
+                    })[0];
+                }
+                if (!target) {
+                    target = this.pos.findClosestByPath(FIND_MY_STRUCTURES, {
+                        filter: (s) => ((s.structureType == STRUCTURE_LINK && s.isCollector())
+                            && s.energy < s.energyCapacity * 0.95)
+                    });
+                    
+                }
+                if (!target) {
+                    target = this.room.storage;
+                }
             }
-            else {
-                target = this.pos.findClosestByPath(FIND_MY_STRUCTURES, {
-                    filter: (s) => ((s.structureType == STRUCTURE_SPAWN
-                        || s.structureType == STRUCTURE_EXTENSION
-                        || s.structureType == STRUCTURE_TOWER
-                        || s.structureType == STRUCTURE_STORAGE
-                        || (s.structureType == STRUCTURE_LINK && s.isCollector()))
-                        && s.energy < s.energyCapacity * 0.95)
-                });
-            }
-
-
-
-            // // If still there is still no target, try to use a storage
             if (!target) {
-                target = this.room.storage;
+                target = this.pos.findClosestByPath(FIND_MY_STRUCTURES, {
+                    filter: (s) => ((s.structureType == STRUCTURE_SPAWN
+                        || s.structureType == STRUCTURE_EXTENSION
+                        || s.structureType == STRUCTURE_TOWER
+                        || (s.structureType == STRUCTURE_LINK && s.isCollector()
+                        || s.structureType == STRUCTURE_STORAGE))
+                        && s.energy < s.energyCapacity * 0.95)
+                });
             }
+
         }
 
 
@@ -232,17 +261,17 @@ Creep.prototype.depositEnergy =
                 this.smartMove(target);
                 return true;
             }
-            else if (target.structureType == STRUCTURE_LINK && (target.store['energy'] <= 750 || target.isActive())) {
-                if (this.store['energy']) {
-                    this.memory.action = 'depositEnergy';
-                    this.memory.target = target;
-                }
-                else {
-                    this.memory.action = 'harvest';
-                    this.memory.target = undefined;
-                }
-                return true;
-            }
+            // else if (target.structureType == STRUCTURE_LINK && (target.store['energy'] <= 750 || target.isActive())) {
+            //     if (this.store['energy']) {
+            //         this.memory.action = 'depositEnergy';
+            //         this.memory.target = target;
+            //     }
+            //     else {
+            //         this.memory.action = 'harvest';
+            //         this.memory.target = undefined;
+            //     }
+            //     return true;
+            // }
             else {
                 this.memory.action = undefined;
                 this.memory.target = undefined;

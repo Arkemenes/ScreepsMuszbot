@@ -94,7 +94,7 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
             
             this.spawnCreep(body, Game.time, {memory: {working: false, role: 'wallRepairer'}});
         }
-        else if (numberOfTransporters < config["transporter_number"] && this.room.find(FIND_STRUCTURES, {filter: (s) => (s.structureType == STRUCTURE_CONTAINER)})[0]){
+        else if (numberOfTransporters < config["transporter_number"] && this.room.find(FIND_STRUCTURES, {filter: (s) => s.structureType == STRUCTURE_STORAGE && s.isActive()})[0]){
 
             var body = createBody([MOVE, CARRY, CARRY, CARRY, CARRY, MOVE, CARRY, CARRY, CARRY, CARRY, CARRY], energy);
             

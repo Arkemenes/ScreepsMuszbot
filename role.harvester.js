@@ -11,11 +11,10 @@ module.exports = {
                 creep.pos.findInRange(FIND_STRUCTURES, 1, {
                     filter: s => (s.structureType == STRUCTURE_CONTAINER)
                         && s.store.energy.valueOf() > 0
-                })) {
+                })[0]) {
                     creep.getEnergy();
                 }
         else if (creep.store.energy.valueOf()) {
-
             
             if (!creep.depositEnergy()) {
                 creep.upgrade();
