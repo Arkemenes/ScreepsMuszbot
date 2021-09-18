@@ -14,7 +14,7 @@ module.exports = {
                 })[0]) {
                     creep.getEnergy();
                 }
-        else if (creep.store.energy.valueOf()) {
+        else if (!creep.store.getFreeCapacity()) {
             
             if (!creep.depositEnergy()) {
                 creep.upgrade();

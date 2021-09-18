@@ -2,6 +2,10 @@ module.exports = {
     // a function to run the logic for this role
     createBuildingSites: function () {
 
+        if (!Memory.rooms) {
+            Memory.rooms = {};
+        }
+
 
         for (let roomName in Game.rooms) {
             let room = Game.rooms[roomName];
@@ -13,6 +17,14 @@ module.exports = {
                 if (!Memory.rooms[roomName].builds) {
                     planStructures(roomName);
 
+                }
+
+                for (let build of Memory.rooms[roomName].builds) {
+
+                    if (!room.find(FIND_CONSTRUCTION_SITES)[0]) {
+                        room.createConstructionSite(build.x,build.y,build.structureType);
+                        break;
+                    }
                 }
             }
 
