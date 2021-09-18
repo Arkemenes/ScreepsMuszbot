@@ -22,8 +22,9 @@ module.exports = {
                 for (let build of Memory.rooms[roomName].builds) {
 
                     if (!room.find(FIND_CONSTRUCTION_SITES)[0]) {
-                        room.createConstructionSite(build.x,build.y,build.structureType);
-                        break;
+                        if (room.createConstructionSite(build.x,build.y,build.structureType) == 0) {
+                            break;
+                        }
                     }
                 }
             }

@@ -107,7 +107,7 @@ Creep.prototype.getEnergy =
 
             if (!target) {
                 let numberofMiners = _.sum(Game.creeps, (c) => c.memory.role == 'miner');
-                if (this.memory.role == 'miner' || !numberofMiners) {
+                if (this.memory.role == 'miner' || numberofMiners < 2) {
                     target = this.pos.findClosestByPath(FIND_SOURCES_ACTIVE);
                 }
             }
