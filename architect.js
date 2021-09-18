@@ -1089,7 +1089,44 @@ function planStructures(roomName) {
     // TODO: link upgrader
 
     // 1 Extractor
-    // TODO: extrator
+
+    minerals = Game.rooms[roomName].find(FIND_MINERALS);
+
+    for (let mineralName in minerals) {
+
+        Memory.rooms[roomName].builds.push({
+            'x': minerals[mineralName].pos.x,
+            'y': minerals[mineralName].pos.y,
+            'structureType': STRUCTURE_EXTRACTOR
+        });
+
+
+        possiblePositions = [];
+        for (let i = -1; i < 2; i++) {
+            for (let j = -1; j < 2; j++) {
+                if (terrain.get(minerals[mineralName].pos.x + i, minerals[mineralName].pos.y + j) != TERRAIN_MASK_WALL &&
+                    (i != 0 || j != 0)) {
+                    possiblePositions.push([minerals[mineralName].pos.x + i, minerals[mineralName].pos.y + j]);
+                }
+            }
+        }
+
+        distances = [];
+
+        for (let posIndex in possiblePositions) {
+            distances.push(Game.rooms[roomName].getPositionAt(possiblePositions[posIndex][0],
+                possiblePositions[posIndex][1]).getRangeTo(
+                    Game.rooms[roomName].getPositionAt(center[0],
+                        center[1])));
+        }
+        containerPos = possiblePositions[distances.indexOf(Math.min(...distances))];
+        Memory.rooms[roomName].builds.push({
+            'x': containerPos[0],
+            'y': containerPos[1],
+            'structureType': STRUCTURE_CONTAINER
+        });
+
+    }
 
     // 3 Lab
     Memory.rooms[roomName].builds.push({
@@ -1797,4 +1834,5 @@ function planStructures(roomName) {
     });
 
     // 1 nuker
+    // TODO
 }
