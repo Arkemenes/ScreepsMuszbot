@@ -41,15 +41,14 @@ function findBaseCenter(roomName) {
         let distance = 0;
         for (let energyName in energySources) {
             distance += Game.rooms[roomName].getPositionAt(possibleSpawns[spawnIndex][0],
-                possibleSpawns[spawnIndex][1]).getRangeTo(energySources[energyName]);
+                possibleSpawns[spawnIndex][1] +1).getRangeTo(energySources[energyName]);
         }
         distances.push(distance);
     }
+
     target = possibleSpawns[distances.indexOf(Math.min(...distances))];
 
-
-
-    // target[1] = target[1] - 1;
+    target[1] = target[1] + 1;
 
     return target;
 }
@@ -112,30 +111,33 @@ function planStructures(roomName) {
     const terrain = new Room.Terrain(roomName);
     Memory.rooms[roomName].builds = [];
 
-    center = undefined;
+    center = Memory.rooms[roomName].center;
 
-    let mySpawns = Game.rooms[roomName].find(FIND_MY_SPAWNS);
-    if (!mySpawns[0]) {
-        center = findBaseCenter(roomName);
-    }
-    else {
-        let possibleSpawns = getPossibleSpawns(roomName, false);
+    if (!center) {
+        let mySpawns = Game.rooms[roomName].find(FIND_MY_SPAWNS);
+        if (!mySpawns[0]) {
+            center = findBaseCenter(roomName);
+        }
+        else {
+            let possibleSpawns = getPossibleSpawns(roomName, false);
 
-        for (let spawnName in mySpawns) {
-            for (let possibleSpawnName in possibleSpawns) {
-                if (mySpawns[spawnName].pos.x == possibleSpawns[possibleSpawnName][0] &&
-                    mySpawns[spawnName].pos.y == possibleSpawns[possibleSpawnName][1]) {
-                    center = possibleSpawns[possibleSpawnName];
-                    center[1]++;
+            for (let spawnName in mySpawns) {
+                for (let possibleSpawnName in possibleSpawns) {
+                    if (mySpawns[spawnName].pos.x == possibleSpawns[possibleSpawnName][0] &&
+                        mySpawns[spawnName].pos.y == possibleSpawns[possibleSpawnName][1]) {
+                        center = possibleSpawns[possibleSpawnName];
+                        center[1]++;
+                        break;
+                    }
+                }
+                if (center) {
                     break;
                 }
-            }
-            if (center) {
-                break;
-            }
 
+            }
         }
     }
+
 
 
     Memory.rooms[roomName].center = Game.rooms[roomName].getPositionAt(center[0], center[1]);
