@@ -807,10 +807,10 @@ function planStructures(roomName) {
                         Game.rooms[roomName].getPositionAt(center[0],
                             center[1])));
             }
-            containerPos = possiblePositions[distances.indexOf(Math.max(...distances))];
+            linkPos = possiblePositions[distances.indexOf(Math.max(...distances))];
             Memory.rooms[roomName].builds.push({
-                'x': containerPos[0],
-                'y': containerPos[1],
+                'x': linkPos[0],
+                'y': linkPos[1],
                 'structureType': STRUCTURE_LINK
             });
         }
@@ -1124,9 +1124,6 @@ function planStructures(roomName) {
         'structureType': STRUCTURE_EXTENSION
     });
 
-    // 1 Link
-    // TODO: link upgrader
-
     // 1 Extractor
 
     minerals = Game.rooms[roomName].find(FIND_MINERALS);
@@ -1197,6 +1194,36 @@ function planStructures(roomName) {
 
     // RCL 7
 
+    // 1 Link
+    controller = Game.rooms[roomName].controller;
+
+    possiblePositions = [];
+    for (let i = -4; i < 5; i++) {
+        for (let j = -4; j < 5; j++) {
+            if ((i == -4 || i == 4 || j == -4 || j == 4) && terrain.get(controller.pos.x + i, controller.pos.y + j) != TERRAIN_MASK_WALL) {
+                possiblePositions.push([controller.pos.x + i, controller.pos.y + j]);
+            }
+        }
+    }
+    
+
+    distances = [];
+
+    for (let posIndex in possiblePositions) {
+        distances.push(Game.rooms[roomName].getPositionAt(possiblePositions[posIndex][0],
+            possiblePositions[posIndex][1]).getRangeTo(
+                Game.rooms[roomName].getPositionAt(center[0],
+                    center[1])));
+    }
+    linkPos = possiblePositions[distances.indexOf(Math.min(...distances))];
+    Memory.rooms[roomName].builds.push({
+        'x': linkPos[0],
+        'y': linkPos[1],
+        'structureType': STRUCTURE_LINK
+    });
+
+    
+
     // 1 Spawn
 
     Memory.rooms[roomName].builds.push({
@@ -1204,6 +1231,7 @@ function planStructures(roomName) {
         'y': center[1] + 2,
         'structureType': STRUCTURE_SPAWN
     });
+    
 
     // 10 Extensions
 
