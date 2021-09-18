@@ -1,3 +1,5 @@
+let architect = require('architect');
+
 // import modules
 require('prototype.creep');
 require('prototype.tower');
@@ -5,6 +7,17 @@ require('prototype.spawn');
 require('prototype.link');
 
 module.exports.loop = function () {
+
+    
+    architect.createBuildingSites();
+
+    // if there is no available spawn, it's possible to visualize using:
+    // for (let i=0; i<11; i++){
+    //     for (let j=0; j<11; j++) {
+    //         architect.getPossibleSpawns("W" + i + "N" + j);
+    //     }
+    // }
+
     // check for memory entries of died creeps by iterating over Memory.creeps
     for (let name in Memory.creeps) {
         // and checking if the creep is still alive

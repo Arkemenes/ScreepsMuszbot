@@ -89,10 +89,10 @@ Creep.prototype.getEnergy =
                     
                 }
                 else if (this.memory.role == 'harvester' || this.memory.role == 'longDistanceHarvester') {
-                target = this.pos.findClosestByPath(FIND_STRUCTURES, {
-                    filter: s => (s.structureType == STRUCTURE_CONTAINER) &&
-                        s.store[RESOURCE_ENERGY] >= 100
-                });
+                    target = this.pos.findClosestByPath(FIND_STRUCTURES, {
+                        filter: s => (s.structureType == STRUCTURE_CONTAINER) &&
+                            s.store[RESOURCE_ENERGY] >= 100
+                    });
             }
                 else {
                     target = this.pos.findClosestByPath(FIND_STRUCTURES, {
