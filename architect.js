@@ -41,7 +41,7 @@ function findBaseCenter(roomName) {
         let distance = 0;
         for (let energyName in energySources) {
             distance += Game.rooms[roomName].getPositionAt(possibleSpawns[spawnIndex][0],
-                possibleSpawns[spawnIndex][1] +1).getRangeTo(energySources[energyName]);
+                possibleSpawns[spawnIndex][1] + 1).getRangeTo(energySources[energyName]);
         }
         distances.push(distance);
     }
@@ -137,6 +137,8 @@ function planStructures(roomName) {
             }
         }
     }
+
+    Memory.rooms[roomName].center = center;
 
 
 
@@ -772,13 +774,48 @@ function planStructures(roomName) {
 
     // 2 Links
 
-    // TODO: link collector
-
     Memory.rooms[roomName].builds.push({
         'x': center[0] + 1,
         'y': center[1] + 1,
         'structureType': STRUCTURE_LINK
     });
+
+    // Link collector
+    containers = Game.rooms[roomName].find(FIND_STRUCTURES, {
+        filter: s => s.structureType == STRUCTURE_CONTAINER
+    });
+
+    for (let containerName in containers) {
+
+        if (containers[containerName].pos.findInRange(FIND_SOURCES, 1)[0]) {
+            possiblePositions = [];
+            for (let i = -1; i < 2; i++) {
+                for (let j = -1; j < 2; j++) {
+                    if (terrain.get(containers[containerName].pos.x + i, containers[containerName].pos.y + j) != TERRAIN_MASK_WALL &&
+                        (i != 0 || j != 0)) {
+                        possiblePositions.push([containers[containerName].pos.x + i, containers[containerName].pos.y + j]);
+                    }
+                }
+            }
+            
+    
+            distances = [];
+    
+            for (let posIndex in possiblePositions) {
+                distances.push(Game.rooms[roomName].getPositionAt(possiblePositions[posIndex][0],
+                    possiblePositions[posIndex][1]).getRangeTo(
+                        Game.rooms[roomName].getPositionAt(center[0],
+                            center[1])));
+            }
+            containerPos = possiblePositions[distances.indexOf(Math.max(...distances))];
+            Memory.rooms[roomName].builds.push({
+                'x': containerPos[0],
+                'y': containerPos[1],
+                'structureType': STRUCTURE_LINK
+            });
+        }
+
+    }
 
     // 1 Tower
 
