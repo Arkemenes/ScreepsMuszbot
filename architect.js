@@ -192,7 +192,10 @@ function planStructures(roomName) {
         possiblePositions = [];
         for (let i = -1; i < 2; i++) {
             for (let j = -1; j < 2; j++) {
-                if (terrain.get(sources[sourceName].pos.x + i, sources[sourceName].pos.y + j) != TERRAIN_MASK_WALL &&
+                if (terrain.get(sources[sourceName].pos.x + i, sources[sourceName].pos.y + j) != TERRAIN_MASK_WALL && 
+                !Game.rooms[roomName].find(FIND_STRUCTURES,{filter: s => s.pos && s.pos.x == sources[sourceName].pos.x + i &&
+                                                         s.pos.y == sources[sourceName].pos.y + j &&
+                                                         s.structureType != STRUCTURE_CONTAINER})[0] &&
                     (i != 0 || j != 0)) {
                     possiblePositions.push([sources[sourceName].pos.x + i, sources[sourceName].pos.y + j]);
                 }
@@ -1683,7 +1686,10 @@ function planStructures(roomName) {
             possiblePositions = [];
             for (let i = -1; i < 2; i++) {
                 for (let j = -1; j < 2; j++) {
-                    if (terrain.get(containers[containerName].pos.x + i, containers[containerName].pos.y + j) != TERRAIN_MASK_WALL &&
+                    if (terrain.get(containers[containerName].pos.x + i, containers[containerName].pos.y + j) != TERRAIN_MASK_WALL && 
+                    !Game.rooms[roomName].find(FIND_STRUCTURES,{filter: s => s.pos && s.pos.x == containerName[containerName].pos.x + i &&
+                                                             s.pos.y == containerName[containerName].pos.y + j &&
+                                                             s.structureType != STRUCTURE_LINK})[0] &&
                         (i != 0 || j != 0)) {
                         possiblePositions.push([containers[containerName].pos.x + i, containers[containerName].pos.y + j]);
                     }
@@ -1883,7 +1889,10 @@ function planStructures(roomName) {
         possiblePositions = [];
         for (let i = -1; i < 2; i++) {
             for (let j = -1; j < 2; j++) {
-                if (terrain.get(minerals[mineralName].pos.x + i, minerals[mineralName].pos.y + j) != TERRAIN_MASK_WALL &&
+                if (terrain.get(minerals[mineralName].pos.x + i, minerals[mineralName].pos.y + j) != TERRAIN_MASK_WALL && 
+                !Game.rooms[roomName].find(FIND_STRUCTURES,{filter: s => s.pos && s.pos.x == minerals[mineralName].pos.x + i &&
+                                                         s.pos.y == minerals[mineralName].pos.y + j  &&
+                                                         s.structureType != STRUCTURE_CONTAINER})[0] &&
                     (i != 0 || j != 0)) {
                     possiblePositions.push([minerals[mineralName].pos.x + i, minerals[mineralName].pos.y + j]);
                 }
@@ -1948,7 +1957,10 @@ function planStructures(roomName) {
     possiblePositions = [];
     for (let i = -4; i < 5; i++) {
         for (let j = -4; j < 5; j++) {
-            if ((i == -4 || i == 4 || j == -4 || j == 4) && terrain.get(controller.pos.x + i, controller.pos.y + j) != TERRAIN_MASK_WALL) {
+            if ((i == -4 || i == 4 || j == -4 || j == 4) && terrain.get(controller.pos.x + i, controller.pos.y + j) != TERRAIN_MASK_WALL && 
+            !Game.rooms[roomName].find(FIND_STRUCTURES,{filter: s => s.pos && s.pos.x == controller.pos.pos.x + i &&
+                                                     s.pos.y == controller.pos.pos.y + j  &&
+                                                     s.structureType != STRUCTURE_LINK})[0]) {
                 possiblePositions.push([controller.pos.x + i, controller.pos.y + j]);
             }
         }
