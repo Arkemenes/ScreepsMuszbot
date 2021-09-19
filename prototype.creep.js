@@ -77,11 +77,12 @@ Creep.prototype.getEnergy =
                 if (this.memory.role != 'harvester' &&
                     this.memory.role != 'transporter') {
 
-                        if (this.room.find(FIND_STRUCTURES, {filter: s => s.structureType == STRUCTURE_STORAGE})[0]) {
+                        if (this.room.find(FIND_STRUCTURES, {filter: s => s.structureType == STRUCTURE_STORAGE})[0] &&
+                            this.room.find(FIND_STRUCTURES, {filter: s => s.structureType == STRUCTURE_CONTAINER}).length >= 2) {
                             target = this.pos.findClosestByPath(FIND_STRUCTURES, {
                                 filter: s => (s.structureType == STRUCTURE_STORAGE
                                           || (s.structureType == STRUCTURE_LINK && !s.isCollector())) &&
-                                    s.store[RESOURCE_ENERGY] >= 0
+                                    s.store[RESOURCE_ENERGY] > 10
                             });
                         }
                         else {
@@ -92,39 +93,46 @@ Creep.prototype.getEnergy =
                     
                 }
                 else if (this.memory.role == 'harvester') {
-                    target = this.pos.findClosestByPath(FIND_STRUCTURES, {
-                        filter: s => (s.structureType == STRUCTURE_CONTAINER
-                                  || (s.structureType == STRUCTURE_LINK && !s.isCollector())) &&
-                            s.store[RESOURCE_ENERGY] >= 100
-                    });
+
+                    target = this.room.find(FIND_DROPPED_RESOURCES)[0];
+
+                    if (!target) {
+                        target = this.pos.findClosestByPath(FIND_STRUCTURES, {
+                            filter: s => (s.structureType == STRUCTURE_CONTAINER
+                                      || (s.structureType == STRUCTURE_LINK && !s.isCollector())) &&
+                                s.store[RESOURCE_ENERGY] >= 100
+                        });
+                    }
+
+                    
 
 
             }
                 else {                    
-                    target = this.pos.findClosestByPath(FIND_STRUCTURES, {
-                        filter: s => (s.structureType == STRUCTURE_CONTAINER) &&
-                            s.store[RESOURCE_ENERGY] >= 100
-                    });
+                    target = this.room.find(FIND_DROPPED_RESOURCES)[0];
+
+                    if (!target) {
+                        target = this.pos.findClosestByPath(FIND_STRUCTURES, {
+                            filter: s => (s.structureType == STRUCTURE_CONTAINER ||
+                                        (s.structureType == STRUCTURE_LINK && !s.isCollector())) &&
+                                s.store[RESOURCE_ENERGY] >= 50
+                        });
+                    }
+
+                    
                 }
             }
 
 
 
-            if (!target) {
-                let numberofMiners = _.sum(Game.creeps, (c) => c.memory.role == 'miner');
-                if (this.memory.role == 'miner' || numberofMiners < 2) {
-                    target = this.pos.findClosestByPath(FIND_SOURCES_ACTIVE);
-                }
-            }
+            
         }
 
         if (!target) {
             if (this.memory.role != 'harvester' &&
-                this.memory.role != 'longDistanceHarvester' &&
                 this.memory.role != 'transporter') {
                     target = this.pos.findClosestByPath(FIND_STRUCTURES, {
-                        filter: s => (s.structureType == STRUCTURE_CONTAINER
-                                || (s.structureType == STRUCTURE_LINK && !s.isCollector())
+                        filter: s => ((s.structureType == STRUCTURE_LINK && !s.isCollector())
                                 || s.structureType == STRUCTURE_STORAGE) &&
                             s.store[RESOURCE_ENERGY] > 0
                 });
@@ -138,7 +146,10 @@ Creep.prototype.getEnergy =
             }
         }
         if (!target) {
-            target = this.pos.findClosestByPath(FIND_SOURCES_ACTIVE);
+            let numberofMiners = _.sum(Game.creeps, (c) => c.memory.role == 'miner');
+            if (this.memory.role == 'miner' || numberofMiners < 2) {
+                target = this.pos.findClosestByPath(FIND_SOURCES_ACTIVE);
+            }
         }
 
         if (target) {
@@ -148,8 +159,9 @@ Creep.prototype.getEnergy =
                 this.smartMove(target);
                 return true;
             }
-            else if (this.store.getFreeCapacity()
-                    && (target.structureType == STRUCTURE_CONTAINER || _.sum(Game.creeps, (c) => c.memory.role == 'miner') < 2)) {
+            else if (this.store.getFreeCapacity() &&
+                ((target.store && target.store[RESOURCE_ENERGY] > 10) || 
+                 (_.sum(Game.creeps, (c) => c.memory.role == 'miner') < 2 && target.structureType != STRUCTURE_CONTAINER))) {
                 this.memory.action = 'getEnergy';
                 this.memory.target = target;
                 return true;
@@ -342,9 +354,20 @@ Creep.prototype.upgrade =
     @param {ConstructionSite} target */
 Creep.prototype.buildConstruction =
     function (target) {
-
         if (!target) {
-            target = this.pos.findClosestByPath(FIND_CONSTRUCTION_SITES);
+            
+            if (_.sum(Game.creeps, (c) => c.memory.role == 'miner') >= 2) {
+                targets = this.room.find(FIND_STRUCTURES, {
+                    filter: s => s.hits < 1000
+                });
+                target = _.sortBy(targets, s => s.hits)[0];
+                if (target) {
+                    return this.repairStructure(target);
+                }   
+            }
+            if (!target) {
+                target = this.pos.findClosestByPath(FIND_CONSTRUCTION_SITES);
+            }
         }
 
 
