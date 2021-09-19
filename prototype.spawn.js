@@ -1,6 +1,6 @@
 var config = {
     "harvester_number":2,
-    "builder_number":3,
+    "builder_number":2,
     "upgrader_number":2,
     "repairer_number":0,
     "wall_repairer_number":0,

@@ -65,7 +65,8 @@ Creep.prototype.getEnergy =
         Game.getObjectById()
         if (!target) {
 
-            target = this.pos.findClosestByPath(FIND_DROPPED_RESOURCES);
+            targets = this.pos.findInRange(FIND_DROPPED_RESOURCES, 10);
+            target = _.sortBy(targets, s => s.hits)[0];
 
             if (!target) {
                 
@@ -73,23 +74,28 @@ Creep.prototype.getEnergy =
                     this.memory.role != 'longDistanceHarvester' &&
                     this.memory.role != 'transporter') {
 
-                        target = this.pos.findClosestByPath(FIND_STRUCTURES, {
-                            filter: s => (s.structureType == STRUCTURE_STORAGE
-                                       || (s.structureType == STRUCTURE_LINK && !s.isCollector())) &&
+                        if (this.room.find(FIND_STRUCTURES, {filter: s => s.structureType == STRUCTURE_STORAGE})[0]) {
+                            
+                        }
+                        else {
+                            target = this.pos.findClosestByPath(FIND_STRUCTURES, {
+                            filter: s => (s.structureType == STRUCTURE_CONTAINER) &&
                                 s.store[RESOURCE_ENERGY] >= 100
-                        });
+                        });}
                     
                 }
                 else if (this.memory.role == 'harvester' || this.memory.role == 'longDistanceHarvester') {
                     target = this.pos.findClosestByPath(FIND_STRUCTURES, {
-                        filter: s => (s.structureType == STRUCTURE_CONTAINER) &&
-                            s.store[RESOURCE_ENERGY] >= 100
-                    });
-            }
-                else {
-                    target = this.pos.findClosestByPath(FIND_STRUCTURES, {
                         filter: s => (s.structureType == STRUCTURE_CONTAINER
                                   || (s.structureType == STRUCTURE_LINK && !s.isCollector())) &&
+                            s.store[RESOURCE_ENERGY] >= 100
+                    });
+
+
+            }
+                else {                    
+                    target = this.pos.findClosestByPath(FIND_STRUCTURES, {
+                        filter: s => (s.structureType == STRUCTURE_CONTAINER) &&
                             s.store[RESOURCE_ENERGY] >= 100
                     });
                 }
