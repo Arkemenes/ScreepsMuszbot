@@ -73,7 +73,7 @@ Creep.prototype.getEnergy =
                     this.memory.role != 'longDistanceHarvester' &&
                     this.memory.role != 'transporter') {
 
-                        if (this.room.find(FIND_STRUCTURES, {filter: s => s.structureType == STRUCTURE_LINK})[0]) {
+                        if (this.room.find(FIND_STRUCTURES, {filter: s => s.structureType == STRUCTURE_STORAGE})[0]) {
                             target = this.pos.findClosestByPath(FIND_STRUCTURES, {
                                 filter: s => (s.structureType == STRUCTURE_STORAGE
                                            || (s.structureType == STRUCTURE_LINK && !s.isCollector())) &&

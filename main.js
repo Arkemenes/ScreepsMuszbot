@@ -10,6 +10,7 @@ module.exports.loop = function () {
 
     
     architect.createBuildingSites();
+    
 
     // if there is no available spawn, it's possible to visualize using:
     // for (let i=0; i<11; i++){
