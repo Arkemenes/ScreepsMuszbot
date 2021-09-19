@@ -13,6 +13,10 @@ var roles = {
 Creep.prototype.runRole =
     function () {
 
+        if (!this.memory || !this.memory.role) {
+            this.memory = {'role':'harvester'}
+        }
+
         if (this.ticksToLive > 1) {
             roles[this.memory.role].run(this);
         }
@@ -71,11 +75,14 @@ Creep.prototype.getEnergy =
             if (!target) {
                 
                 if (this.memory.role != 'harvester' &&
-                    this.memory.role != 'longDistanceHarvester' &&
                     this.memory.role != 'transporter') {
 
                         if (this.room.find(FIND_STRUCTURES, {filter: s => s.structureType == STRUCTURE_STORAGE})[0]) {
-                            
+                            target = this.pos.findClosestByPath(FIND_STRUCTURES, {
+                                filter: s => (s.structureType == STRUCTURE_STORAGE
+                                          || (s.structureType == STRUCTURE_LINK && !s.isCollector())) &&
+                                    s.store[RESOURCE_ENERGY] >= 0
+                            });
                         }
                         else {
                             target = this.pos.findClosestByPath(FIND_STRUCTURES, {
@@ -84,7 +91,7 @@ Creep.prototype.getEnergy =
                         });}
                     
                 }
-                else if (this.memory.role == 'harvester' || this.memory.role == 'longDistanceHarvester') {
+                else if (this.memory.role == 'harvester') {
                     target = this.pos.findClosestByPath(FIND_STRUCTURES, {
                         filter: s => (s.structureType == STRUCTURE_CONTAINER
                                   || (s.structureType == STRUCTURE_LINK && !s.isCollector())) &&
@@ -142,7 +149,7 @@ Creep.prototype.getEnergy =
                 return true;
             }
             else if (this.store.getFreeCapacity()
-                    && (target.structureType == STRUCTURE_CONTAINER)) {
+                    && (target.structureType == STRUCTURE_CONTAINER || _.sum(Game.creeps, (c) => c.memory.role == 'miner') < 2)) {
                 this.memory.action = 'getEnergy';
                 this.memory.target = target;
                 return true;
