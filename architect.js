@@ -1687,7 +1687,8 @@ function planStructures(roomName) {
             for (let i = -1; i < 2; i++) {
                 for (let j = -1; j < 2; j++) {
                     if (terrain.get(containers[containerName].pos.x + i, containers[containerName].pos.y + j) != TERRAIN_MASK_WALL && 
-                    !Game.rooms[roomName].find(FIND_STRUCTURES,{filter: s => s.pos && s.pos.x == containerName[containerName].pos.x + i &&
+                    !Game.rooms[roomName].find(FIND_STRUCTURES,{filter: s => s.pos &&
+                                                             s.pos.x == containerName[containerName].pos.x + i &&
                                                              s.pos.y == containerName[containerName].pos.y + j &&
                                                              s.structureType != STRUCTURE_LINK})[0] &&
                         (i != 0 || j != 0)) {
