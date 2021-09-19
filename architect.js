@@ -426,6 +426,202 @@ function planStructures(roomName) {
         'minimalRCL': 2
     });
 
+    Memory.rooms[roomName].builds.push({
+        'x': center[0] + 1,
+        'y': center[1] - 6,
+        'structureType': STRUCTURE_ROAD,
+        'minimalRCL': 2
+    });
+
+    Memory.rooms[roomName].builds.push({
+        'x': center[0] + 2,
+        'y': center[1] - 6,
+        'structureType': STRUCTURE_ROAD,
+        'minimalRCL': 2
+    });
+
+    Memory.rooms[roomName].builds.push({
+        'x': center[0] + 3,
+        'y': center[1] - 5,
+        'structureType': STRUCTURE_ROAD,
+        'minimalRCL': 2
+    });
+
+    Memory.rooms[roomName].builds.push({
+        'x': center[0] + 4,
+        'y': center[1] - 4,
+        'structureType': STRUCTURE_ROAD,
+        'minimalRCL': 2
+    });
+
+    Memory.rooms[roomName].builds.push({
+        'x': center[0] + 5,
+        'y': center[1] - 3,
+        'structureType': STRUCTURE_ROAD,
+        'minimalRCL': 2
+    });
+
+    Memory.rooms[roomName].builds.push({
+        'x': center[0] + 6,
+        'y': center[1] - 2,
+        'structureType': STRUCTURE_ROAD,
+        'minimalRCL': 2
+    });
+
+    Memory.rooms[roomName].builds.push({
+        'x': center[0] + 6,
+        'y': center[1] - 1,
+        'structureType': STRUCTURE_ROAD,
+        'minimalRCL': 2
+    });
+
+    Memory.rooms[roomName].builds.push({
+        'x': center[0] + 6,
+        'y': center[1] + 1,
+        'structureType': STRUCTURE_ROAD,
+        'minimalRCL': 2
+    });
+
+    Memory.rooms[roomName].builds.push({
+        'x': center[0] + 6,
+        'y': center[1] + 2,
+        'structureType': STRUCTURE_ROAD,
+        'minimalRCL': 2
+    });
+
+    Memory.rooms[roomName].builds.push({
+        'x': center[0] + 5,
+        'y': center[1] + 3,
+        'structureType': STRUCTURE_ROAD,
+        'minimalRCL': 2
+    });
+
+    Memory.rooms[roomName].builds.push({
+        'x': center[0] + 4,
+        'y': center[1] + 4,
+        'structureType': STRUCTURE_ROAD,
+        'minimalRCL': 2
+    });
+
+    Memory.rooms[roomName].builds.push({
+        'x': center[0] + 3,
+        'y': center[1] + 5,
+        'structureType': STRUCTURE_ROAD,
+        'minimalRCL': 2
+    });
+
+    Memory.rooms[roomName].builds.push({
+        'x': center[0] + 2,
+        'y': center[1] + 6,
+        'structureType': STRUCTURE_ROAD,
+        'minimalRCL': 2
+    });
+
+    Memory.rooms[roomName].builds.push({
+        'x': center[0] + 1,
+        'y': center[1] + 6,
+        'structureType': STRUCTURE_ROAD,
+        'minimalRCL': 2
+    });
+
+    Memory.rooms[roomName].builds.push({
+        'x': center[0] - 1,
+        'y': center[1] + 6,
+        'structureType': STRUCTURE_ROAD,
+        'minimalRCL': 2
+    });
+
+    Memory.rooms[roomName].builds.push({
+        'x': center[0] - 2,
+        'y': center[1] + 6,
+        'structureType': STRUCTURE_ROAD,
+        'minimalRCL': 2
+    });
+
+    Memory.rooms[roomName].builds.push({
+        'x': center[0] - 3,
+        'y': center[1] + 5,
+        'structureType': STRUCTURE_ROAD,
+        'minimalRCL': 2
+    });
+
+    Memory.rooms[roomName].builds.push({
+        'x': center[0] - 4,
+        'y': center[1] + 4,
+        'structureType': STRUCTURE_ROAD,
+        'minimalRCL': 2
+    });
+
+    Memory.rooms[roomName].builds.push({
+        'x': center[0] - 5,
+        'y': center[1] + 3,
+        'structureType': STRUCTURE_ROAD,
+        'minimalRCL': 2
+    });
+
+    Memory.rooms[roomName].builds.push({
+        'x': center[0] - 6,
+        'y': center[1] + 2,
+        'structureType': STRUCTURE_ROAD,
+        'minimalRCL': 2
+    });
+
+    Memory.rooms[roomName].builds.push({
+        'x': center[0] - 6,
+        'y': center[1] + 1,
+        'structureType': STRUCTURE_ROAD,
+        'minimalRCL': 2
+    });
+
+    Memory.rooms[roomName].builds.push({
+        'x': center[0] - 6,
+        'y': center[1] - 1,
+        'structureType': STRUCTURE_ROAD,
+        'minimalRCL': 2
+    });
+
+    Memory.rooms[roomName].builds.push({
+        'x': center[0] - 6,
+        'y': center[1] - 2,
+        'structureType': STRUCTURE_ROAD,
+        'minimalRCL': 2
+    });
+
+    Memory.rooms[roomName].builds.push({
+        'x': center[0] - 5,
+        'y': center[1] - 3,
+        'structureType': STRUCTURE_ROAD,
+        'minimalRCL': 2
+    });
+
+    Memory.rooms[roomName].builds.push({
+        'x': center[0] - 4,
+        'y': center[1] - 4,
+        'structureType': STRUCTURE_ROAD,
+        'minimalRCL': 2
+    });
+
+    Memory.rooms[roomName].builds.push({
+        'x': center[0] - 3,
+        'y': center[1] - 5,
+        'structureType': STRUCTURE_ROAD,
+        'minimalRCL': 2
+    });
+
+    Memory.rooms[roomName].builds.push({
+        'x': center[0] - 2,
+        'y': center[1] - 6,
+        'structureType': STRUCTURE_ROAD,
+        'minimalRCL': 2
+    });
+
+    Memory.rooms[roomName].builds.push({
+        'x': center[0] - 1,
+        'y': center[1] - 6,
+        'structureType': STRUCTURE_ROAD,
+        'minimalRCL': 2
+    });
+
     // RCL 3
 
     // 5 Extensions
@@ -473,204 +669,6 @@ function planStructures(roomName) {
         'structureType': STRUCTURE_TOWER,
         'minimalRCL': 3
     });
-
-        // roads
-
-        Memory.rooms[roomName].builds.push({
-            'x': center[0] + 1,
-            'y': center[1] - 6,
-            'structureType': STRUCTURE_ROAD,
-            'minimalRCL': 3
-        });
-    
-        Memory.rooms[roomName].builds.push({
-            'x': center[0] + 2,
-            'y': center[1] - 6,
-            'structureType': STRUCTURE_ROAD,
-            'minimalRCL': 3
-        });
-    
-        Memory.rooms[roomName].builds.push({
-            'x': center[0] + 3,
-            'y': center[1] - 5,
-            'structureType': STRUCTURE_ROAD,
-            'minimalRCL': 3
-        });
-    
-        Memory.rooms[roomName].builds.push({
-            'x': center[0] + 4,
-            'y': center[1] - 4,
-            'structureType': STRUCTURE_ROAD,
-            'minimalRCL': 3
-        });
-    
-        Memory.rooms[roomName].builds.push({
-            'x': center[0] + 5,
-            'y': center[1] - 3,
-            'structureType': STRUCTURE_ROAD,
-            'minimalRCL': 3
-        });
-    
-        Memory.rooms[roomName].builds.push({
-            'x': center[0] + 6,
-            'y': center[1] - 2,
-            'structureType': STRUCTURE_ROAD,
-            'minimalRCL': 3
-        });
-    
-        Memory.rooms[roomName].builds.push({
-            'x': center[0] + 6,
-            'y': center[1] - 1,
-            'structureType': STRUCTURE_ROAD,
-            'minimalRCL': 3
-        });
-    
-        Memory.rooms[roomName].builds.push({
-            'x': center[0] + 6,
-            'y': center[1] + 1,
-            'structureType': STRUCTURE_ROAD,
-            'minimalRCL': 3
-        });
-    
-        Memory.rooms[roomName].builds.push({
-            'x': center[0] + 6,
-            'y': center[1] + 2,
-            'structureType': STRUCTURE_ROAD,
-            'minimalRCL': 3
-        });
-    
-        Memory.rooms[roomName].builds.push({
-            'x': center[0] + 5,
-            'y': center[1] + 3,
-            'structureType': STRUCTURE_ROAD,
-            'minimalRCL': 3
-        });
-    
-        Memory.rooms[roomName].builds.push({
-            'x': center[0] + 4,
-            'y': center[1] + 4,
-            'structureType': STRUCTURE_ROAD,
-            'minimalRCL': 3
-        });
-    
-        Memory.rooms[roomName].builds.push({
-            'x': center[0] + 3,
-            'y': center[1] + 5,
-            'structureType': STRUCTURE_ROAD,
-            'minimalRCL': 3
-        });
-    
-        Memory.rooms[roomName].builds.push({
-            'x': center[0] + 2,
-            'y': center[1] + 6,
-            'structureType': STRUCTURE_ROAD,
-            'minimalRCL': 3
-        });
-    
-        Memory.rooms[roomName].builds.push({
-            'x': center[0] + 1,
-            'y': center[1] + 6,
-            'structureType': STRUCTURE_ROAD,
-            'minimalRCL': 3
-        });
-    
-        Memory.rooms[roomName].builds.push({
-            'x': center[0] - 1,
-            'y': center[1] + 6,
-            'structureType': STRUCTURE_ROAD,
-            'minimalRCL': 3
-        });
-    
-        Memory.rooms[roomName].builds.push({
-            'x': center[0] - 2,
-            'y': center[1] + 6,
-            'structureType': STRUCTURE_ROAD,
-            'minimalRCL': 3
-        });
-    
-        Memory.rooms[roomName].builds.push({
-            'x': center[0] - 3,
-            'y': center[1] + 5,
-            'structureType': STRUCTURE_ROAD,
-            'minimalRCL': 3
-        });
-    
-        Memory.rooms[roomName].builds.push({
-            'x': center[0] - 4,
-            'y': center[1] + 4,
-            'structureType': STRUCTURE_ROAD,
-            'minimalRCL': 3
-        });
-    
-        Memory.rooms[roomName].builds.push({
-            'x': center[0] - 5,
-            'y': center[1] + 3,
-            'structureType': STRUCTURE_ROAD,
-            'minimalRCL': 3
-        });
-    
-        Memory.rooms[roomName].builds.push({
-            'x': center[0] - 6,
-            'y': center[1] + 2,
-            'structureType': STRUCTURE_ROAD,
-            'minimalRCL': 3
-        });
-    
-        Memory.rooms[roomName].builds.push({
-            'x': center[0] - 6,
-            'y': center[1] + 1,
-            'structureType': STRUCTURE_ROAD,
-            'minimalRCL': 3
-        });
-    
-        Memory.rooms[roomName].builds.push({
-            'x': center[0] - 6,
-            'y': center[1] - 1,
-            'structureType': STRUCTURE_ROAD,
-            'minimalRCL': 3
-        });
-    
-        Memory.rooms[roomName].builds.push({
-            'x': center[0] - 6,
-            'y': center[1] - 2,
-            'structureType': STRUCTURE_ROAD,
-            'minimalRCL': 3
-        });
-    
-        Memory.rooms[roomName].builds.push({
-            'x': center[0] - 5,
-            'y': center[1] - 3,
-            'structureType': STRUCTURE_ROAD,
-            'minimalRCL': 3
-        });
-    
-        Memory.rooms[roomName].builds.push({
-            'x': center[0] - 4,
-            'y': center[1] - 4,
-            'structureType': STRUCTURE_ROAD,
-            'minimalRCL': 3
-        });
-    
-        Memory.rooms[roomName].builds.push({
-            'x': center[0] - 3,
-            'y': center[1] - 5,
-            'structureType': STRUCTURE_ROAD,
-            'minimalRCL': 3
-        });
-    
-        Memory.rooms[roomName].builds.push({
-            'x': center[0] - 2,
-            'y': center[1] - 6,
-            'structureType': STRUCTURE_ROAD,
-            'minimalRCL': 3
-        });
-    
-        Memory.rooms[roomName].builds.push({
-            'x': center[0] - 1,
-            'y': center[1] - 6,
-            'structureType': STRUCTURE_ROAD,
-            'minimalRCL': 3
-        });
     
 
     // Outer ramparts

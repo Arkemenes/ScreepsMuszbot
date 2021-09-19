@@ -8,10 +8,11 @@ module.exports = {
         }
         else if (creep.store.getFreeCapacity() < 0.9 * creep.store.getCapacity()) {
             if (!creep.buildConstruction()) {
-                if (!creep.depositEnergy()) {
-                    creep.upgrade();
+                if (!creep.repairStructure()) {
+                    if (!creep.depositEnergy()) {
+                        creep.upgrade();
+                    }
                 }
-                
             }
         }
         // if creep is supposed to harvest energy from source

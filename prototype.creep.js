@@ -210,14 +210,14 @@ Creep.prototype.depositEnergy =
                 target = this.pos.findClosestByPath(FIND_MY_STRUCTURES, {
                     filter: (s) => ((s.structureType == STRUCTURE_SPAWN
                         || s.structureType == STRUCTURE_EXTENSION)
-                        && s.energy < s.energyCapacity * 0.95)
+                        && s.energy < s.energyCapacity)
                 });
 
                 if (!target) {
                     filter: (s) => ((s.structureType == STRUCTURE_SPAWN
                         || s.structureType == STRUCTURE_EXTENSION
                         || s.structureType == STRUCTURE_TOWER)
-                        && s.energy < s.energyCapacity * 0.95)
+                        && s.energy < s.energyCapacity)
                 }
             }
 
@@ -225,7 +225,7 @@ Creep.prototype.depositEnergy =
                 if (!target) {
                     target = this.pos.findInRange(FIND_MY_STRUCTURES, 5, {
                         filter: (s) => ((s.structureType == STRUCTURE_LINK && s.isCollector())
-                            && s.energy < s.energyCapacity * 0.95)
+                            && s.energy < s.energyCapacity)
                     })[0];
                     
                 }
@@ -237,7 +237,7 @@ Creep.prototype.depositEnergy =
                 if (!target) {
                     target = this.pos.findClosestByPath(FIND_MY_STRUCTURES, {
                         filter: (s) => ((s.structureType == STRUCTURE_LINK && s.isCollector())
-                            && s.energy < s.energyCapacity * 0.95)
+                            && s.energy < s.energyCapacity)
                     });
                     
                 }
@@ -252,7 +252,7 @@ Creep.prototype.depositEnergy =
                         || s.structureType == STRUCTURE_TOWER
                         || (s.structureType == STRUCTURE_LINK && s.isCollector()
                         || s.structureType == STRUCTURE_STORAGE))
-                        && s.energy < s.energyCapacity * 0.95)
+                        && s.energy < s.energyCapacity)
                 });
             }
 
@@ -312,10 +312,12 @@ Creep.prototype.upgrade =
                 return true;
             }
             else if (this.store['energy']) {
+                this.say('*Pew!*');
                 this.memory.action = 'upgrade';
                 this.memory.target = target;
             }
             else {
+                this.say('*Pew!*');
                 this.memory.action = undefined;
                 this.memory.target = undefined;
                 return true;
@@ -369,7 +371,6 @@ Creep.prototype.buildConstruction =
     @param {Structure} target */
 Creep.prototype.repairStructure =
     function (target) {
-
         if (!target) {
             let targets = this.room.find(FIND_STRUCTURES, {
                 filter: (s) => s.hits < s.hitsMax && s.structureType != STRUCTURE_WALL
@@ -386,11 +387,13 @@ Creep.prototype.repairStructure =
                 return true;
             }
             else if (target.hits != target.hitsMax && this.store.getUsedCapacity() > 0) {
-                this.memory.action = 'repairWall';
+                this.say('*Pew!*');
+                this.memory.action = 'repairStructure';
                 this.memory.target = target;
                 return true;
             }
             else {
+                this.say('*Pew!*');
                 this.memory.action = undefined;
                 this.memory.target = undefined;
                 return true;
