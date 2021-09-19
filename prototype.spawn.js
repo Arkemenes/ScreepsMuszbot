@@ -40,6 +40,7 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
         var numberOfWallRepairers = _.sum(Game.creeps, (c) => c.memory.role == 'wallRepairer' && c.ticksToLive > 10);
         var numberofMiners = _.sum(Game.creeps, (c) => c.memory.role == 'miner' && c.ticksToLive > 10);
         var numberOfTransporters = _.sum(Game.creeps, (c) => c.memory.role == 'transporter' && c.ticksToLive > 10);
+        var numberOfDistributors = _.sum(Game.creeps, (c) => c.memory.role == 'distributor' && c.ticksToLive > 10);
 
         
 
@@ -103,6 +104,12 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
             Game.spawns.Spawn1.createCreep(body, undefined, {working: false, role: 'wallRepairer'});
         }
         else if (numberOfTransporters < config["transporter_number"] && this.room.find(FIND_STRUCTURES, {filter: (s) => s.structureType == STRUCTURE_STORAGE && s.isActive()})[0]){
+
+            var body = createBody([MOVE, CARRY, CARRY, CARRY, CARRY, MOVE, CARRY, CARRY, CARRY, CARRY, CARRY], energy);
+            
+            Game.spawns.Spawn1.createCreep(body, undefined, {working: false, role: 'transporter'});
+        } 
+        else if (numberOfTransporters < 1 && this.room.find(FIND_STRUCTURES, {filter: (s) => s.structureType == STRUCTURE_STORAGE})[0]){
 
             var body = createBody([MOVE, CARRY, CARRY, CARRY, CARRY, MOVE, CARRY, CARRY, CARRY, CARRY, CARRY], energy);
             
