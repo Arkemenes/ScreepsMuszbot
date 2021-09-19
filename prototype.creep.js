@@ -376,7 +376,7 @@ Creep.prototype.repairStructure =
                 filter: (s) => s.hits < s.hitsMax && s.structureType != STRUCTURE_WALL
             });
 
-            target = _.sortBy(targets, s => s.hits)[0];
+            target = _.sortBy(targets, s => s.hits/s.hitsMax)[0];
         }
 
         if (target) {
@@ -386,12 +386,12 @@ Creep.prototype.repairStructure =
                 this.smartMove(target);
                 return true;
             }
-            else if (target.hits != target.hitsMax && this.store.getUsedCapacity() > 0) {
-                this.say('*Pew!*');
-                this.memory.action = 'repairStructure';
-                this.memory.target = target;
-                return true;
-            }
+            // else if (target.hits != target.hitsMax && this.store.getUsedCapacity() > 0) {
+            //     this.say('*Pew!*');
+            //     this.memory.action = 'repairStructure';
+            //     this.memory.target = target;
+            //     return true;
+            // }
             else {
                 this.say('*Pew!*');
                 this.memory.action = undefined;
