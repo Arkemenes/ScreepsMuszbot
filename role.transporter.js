@@ -6,7 +6,7 @@ module.exports = {
         if (creep.memory.action && creep.memory.target) {
             creep.execAction(creep.memory.action, creep.memory.target.id);
         }
-        else if (creep.store.getUsedCapacity() >= 50) {
+        else if (creep.store.getUsedCapacity() >= 400) {
             creep.depositEnergy();
         }
         // if creep is supposed to harvest energy from source

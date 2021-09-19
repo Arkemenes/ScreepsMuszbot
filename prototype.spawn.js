@@ -1,10 +1,10 @@
 var config = {
     "harvester_number":2,
-    "builder_number":2,
-    "upgrader_number":2,
+    "builder_number":1,
+    "upgrader_number":1,
     "repairer_number":0,
     "wall_repairer_number":0,
-    "transporter_number":2
+    "transporter_number":1
 };
 
 StructureSpawn.prototype.spawnCreepsIfNecessary = 
@@ -42,6 +42,8 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
         var numberOfTransporters = _.sum(Game.creeps, (c) => c.memory.role == 'transporter' && c.ticksToLive > 10);
 
         
+
+        
         
         
         config['miner_number'] = this.room.find(FIND_STRUCTURES,{
@@ -49,8 +51,12 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
         }).length;
 
 
-        if (numberOfHarvesters > 0) {
+        if (numberOfHarvesters == 0) {
             var energy = Math.max(this.room.energyCapacityAvailable,250);
+            var body = createBody([WORK, CARRY, MOVE,WORK, CARRY, MOVE,WORK, CARRY, MOVE,WORK, CARRY, MOVE,WORK, CARRY, MOVE,WORK, CARRY, MOVE,WORK, CARRY, MOVE,WORK, CARRY, MOVE,WORK, CARRY, MOVE,WORK, CARRY, MOVE,WORK, CARRY, MOVE], energy);
+
+            Game.spawns.Spawn1.createCreep(body, undefined, {working: false, role: 'harvester'});
+            return;
         }
         else {
             var energy = Math.max(this.room.energyAvailable,250);

@@ -16,7 +16,6 @@ Creep.prototype.runRole =
         if (!this.memory || !this.memory.role) {
             this.memory = {'role':'harvester'}
         }
-
         if (this.ticksToLive > 1) {
             roles[this.memory.role].run(this);
         }
@@ -231,9 +230,12 @@ Creep.prototype.depositEnergy =
                 });
 
                 if (!target) {
-                    filter: (s) => ((s.structureType == STRUCTURE_SPAWN
-                        || s.structureType == STRUCTURE_EXTENSION
-                        || s.structureType == STRUCTURE_TOWER)
+                    filter: (s) => ((s.structureType == STRUCTURE_TOWER)
+                        && s.energy < s.energyCapacity)
+                }
+
+                if (!target) {
+                    filter: (s) => ((s.structureType == STRUCTURE_STORAGE)
                         && s.energy < s.energyCapacity)
                 }
             }
@@ -258,23 +260,37 @@ Creep.prototype.depositEnergy =
                     });
                     
                 }
-                if (!target) {
+                if (!target && this.store.energy >= this.store.energyCapacity) {
                     target = this.room.storage;
                 }
             }
-            if (!target) {
-                target = this.pos.findClosestByPath(FIND_MY_STRUCTURES, {
-                    filter: (s) => ((s.structureType == STRUCTURE_SPAWN
-                        || s.structureType == STRUCTURE_EXTENSION
-                        || s.structureType == STRUCTURE_TOWER
-                        || (s.structureType == STRUCTURE_LINK && s.isCollector()
-                        || s.structureType == STRUCTURE_STORAGE))
-                        && s.energy < s.energyCapacity)
-                });
+            else {
+                if (!target) {
+                    target = this.pos.findClosestByPath(FIND_MY_STRUCTURES, {
+                        filter: (s) => (s.structureType == STRUCTURE_TOWER
+                            && s.energy < s.energyCapacity)
+                    });
+                }
+                if (!target) {
+                    target = this.pos.findClosestByPath(FIND_MY_STRUCTURES, {
+                        filter: (s) => ((s.structureType == STRUCTURE_SPAWN
+                            || s.structureType == STRUCTURE_EXTENSION)
+                            && s.energy < s.energyCapacity)
+                    });
+                }
             }
+            // if (!target) {
+            //     target = this.pos.findClosestByPath(FIND_MY_STRUCTURES, {
+            //         filter: (s) => ((s.structureType == STRUCTURE_SPAWN
+            //             || s.structureType == STRUCTURE_EXTENSION
+            //             || s.structureType == STRUCTURE_TOWER
+            //             || (s.structureType == STRUCTURE_LINK && s.isCollector()
+            //             || s.structureType == STRUCTURE_STORAGE))
+            //             && s.energy < s.energyCapacity)
+            //     });
+            // }
 
         }
-
 
         if (target) {
 
