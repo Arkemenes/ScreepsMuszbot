@@ -111,7 +111,7 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
         } 
         else if (numberOfDistributors < 1 && this.room.find(FIND_STRUCTURES, {filter: (s) => s.structureType == STRUCTURE_STORAGE})[0]){
 
-            var body = createBody([CARRY, WORK,CARRY, WORK,CARRY, WORK,CARRY, WORK], energy);
+            var body = createBody([CARRY, WORK,CARRY, WORK,CARRY, CARRY], energy);
 
             Game.spawns.Spawn1.spawnCreep(body, Game.time, {
                 memory: {role: 'distributor'},
