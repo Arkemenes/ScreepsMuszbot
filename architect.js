@@ -16,7 +16,6 @@ module.exports = {
                 }
                 if (Game.time % 10 == 0 && (
                     Memory.rooms[roomName].builds == undefined || !Memory.rooms[roomName].builds.length || !Memory.rooms[roomName].center)) {
-                    console.log('x')
                     planStructures(roomName);
 
                 }
