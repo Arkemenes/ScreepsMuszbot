@@ -178,7 +178,7 @@ Creep.prototype.smartMove =
         if (!near) {
             near = this.pos.findInRange(FIND_STRUCTURES, 1, {
                 filter: s => (s.structureType == STRUCTURE_CONTAINER)
-                    && s.store.energy.valueOf() > 0
+                    && s.store.energy.valueOf() > 20
             })[0];
         }
         
@@ -209,10 +209,16 @@ Creep.prototype.depositEnergy =
             if (this.memory.role == 'harvester') {
                 target = this.pos.findClosestByPath(FIND_MY_STRUCTURES, {
                     filter: (s) => ((s.structureType == STRUCTURE_SPAWN
+                        || s.structureType == STRUCTURE_EXTENSION)
+                        && s.energy < s.energyCapacity * 0.95)
+                });
+
+                if (!target) {
+                    filter: (s) => ((s.structureType == STRUCTURE_SPAWN
                         || s.structureType == STRUCTURE_EXTENSION
                         || s.structureType == STRUCTURE_TOWER)
                         && s.energy < s.energyCapacity * 0.95)
-                });
+                }
             }
 
             else if (this.memory.role == 'transporter') {
