@@ -1,7 +1,7 @@
 var config = {
     "harvester_number":2,
-    "builder_number":1,
-    "upgrader_number":3,
+    "builder_number":3,
+    "upgrader_number":2,
     "repairer_number":0,
     "wall_repairer_number":0,
     "transporter_number":2
@@ -24,7 +24,7 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
             var cumulativeCost = 0;  
             
             for (let i = 0; i < priorities.length; i++){
-                if (cumulativeCost + BODYPART_COST[priorities[i]] < energy) {
+                if (cumulativeCost + BODYPART_COST[priorities[i]] <= energy) {
                     body.push(priorities[i]);
                     cumulativeCost += BODYPART_COST[priorities[i]];
                 }
@@ -50,10 +50,10 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
 
 
         if (numberOfHarvesters > 0) {
-            var energy = Math.max(this.room.energyCapacityAvailable,200);
+            var energy = Math.max(this.room.energyCapacityAvailable,250);
         }
         else {
-            var energy = Math.max(this.room.energyAvailable,200);
+            var energy = Math.max(this.room.energyAvailable,250);
 
             
         }

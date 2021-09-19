@@ -350,6 +350,10 @@ Creep.prototype.buildConstruction =
                 this.smartMove(target);
                 return true;
             }
+            else if (target.structureType == STRUCTURE_RAMPART || target.structureType == STRUCTURE_WALL){
+                this.memory.action = 'repairStructure';
+                this.memory.target = target;
+            }
             else {
                 this.memory.action = undefined;
                 this.memory.target = undefined;
