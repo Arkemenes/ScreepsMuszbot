@@ -1,6 +1,7 @@
 var roles = {
     builder: require('role.builder'),
     claimer: require('role.claimer'),
+    distributor: require('role.distributor'),
     harvester: require('role.harvester'),
     miner: require('role.miner'),
     repairer: require('role.repairer'),
@@ -96,8 +97,7 @@ Creep.prototype.getEnergy =
 
                     if (!target) {
                         target = this.pos.findClosestByPath(FIND_STRUCTURES, {
-                            filter: s => (s.structureType == STRUCTURE_CONTAINER
-                                      || (s.structureType == STRUCTURE_LINK && !s.isCollector())) &&
+                            filter: s => (s.structureType == STRUCTURE_CONTAINER) &&
                                 s.store[RESOURCE_ENERGY] >= 100
                         });
                     }
