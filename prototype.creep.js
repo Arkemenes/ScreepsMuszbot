@@ -73,19 +73,11 @@ Creep.prototype.getEnergy =
                     this.memory.role != 'longDistanceHarvester' &&
                     this.memory.role != 'transporter') {
 
-                        if (this.room.find(FIND_STRUCTURES, {filter: s => s.structureType == STRUCTURE_STORAGE})[0]) {
-                            target = this.pos.findClosestByPath(FIND_STRUCTURES, {
-                                filter: s => (s.structureType == STRUCTURE_STORAGE
-                                           || (s.structureType == STRUCTURE_LINK && !s.isCollector())) &&
-                                    s.store[RESOURCE_ENERGY] >= 100
-                            });
-                        }
-                        else {
-                            
-                            target = this.pos.findClosestByPath(FIND_STRUCTURES, {
-                            filter: s => (s.structureType == STRUCTURE_CONTAINER) &&
+                        target = this.pos.findClosestByPath(FIND_STRUCTURES, {
+                            filter: s => (s.structureType == STRUCTURE_STORAGE
+                                       || (s.structureType == STRUCTURE_LINK && !s.isCollector())) &&
                                 s.store[RESOURCE_ENERGY] >= 100
-                        });}
+                        });
                     
                 }
                 else if (this.memory.role == 'harvester' || this.memory.role == 'longDistanceHarvester') {

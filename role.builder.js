@@ -7,10 +7,18 @@ module.exports = {
             creep.execAction(creep.memory.action, creep.memory.target.id);
         }
         else if (creep.store.getFreeCapacity() < 0.9 * creep.store.getCapacity()) {
-            if (!creep.buildConstruction()) {
-                if (!creep.repairStructure()) {
-                    if (!creep.depositEnergy()) {
-                        creep.upgrade();
+            target = creep.pos.findInRange(FIND_STRUCTURES, 10, {
+                filter: s => s.hits < 1000
+            })[0];
+            if (target) {
+                creep.repairStructure();
+            }
+            else {
+                if (!creep.buildConstruction()) {
+                    if (!creep.repairStructure()) {
+                        if (!creep.depositEnergy()) {
+                            creep.upgrade();
+                        }
                     }
                 }
             }
