@@ -133,7 +133,10 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
 
         let dyingCreep = this.pos.findInRange(FIND_MY_CREEPS,1, {filter: (creep) => creep.ticksToLive <= 200})[0];
 
-        if (dyingCreep && this.room.controller.level >= 7) {
+        if (dyingCreep && 
+            (dyingCreep.body.length >= 33 ||
+            (_.filter(dyingCreep.body, function(bp){return bp.type == MOVE;}).length == 0 &&
+            _.filter(dyingCreep.body, function(bp){return bp.type == CARRY;}).length >= 16))) {
             this.renewCreep(dyingCreep);
         }
         else if (numberofMiners < targetNumbers['miner']) {
