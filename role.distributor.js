@@ -5,7 +5,7 @@ module.exports = {
 
         let nearTowers = creep.pos.findInRange(FIND_STRUCTURES, 1, {
             filter: s => (s.structureType == STRUCTURE_TOWER)
-                && s.store.energy < 0.9 * s.store.getCapacity(RESOURCE_ENERGY)
+                && s.store.energy < s.store.getCapacity(RESOURCE_ENERGY)
         });
 
         let nearTower = _.sortBy(nearTowers, s => s.store.energy)[0];

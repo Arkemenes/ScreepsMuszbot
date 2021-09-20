@@ -17,8 +17,12 @@ module.exports = {
         else if (creep.store.energy.valueOf()) {
 
             if (!creep.depositEnergy()) {
-                if (!creep.buildConstruction()) {
-                    creep.upgrade();
+                if (!creep.depositEnergy()) {
+                    if (!creep.repairStructure()) {
+                        if (!creep.repairWall()) {
+                            creep.upgrade();
+                        }
+                    }
                 }
 
             }

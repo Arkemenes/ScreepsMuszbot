@@ -7,7 +7,7 @@ StructureTower.prototype.runRole =
         }
 
         if (_.sum(Game.creeps, (c) => c.memory.role == 'miner') >= 2) {
-            if (this.store.energy > 0.7 * this.store.getCapacity(RESOURCE_ENERGY)) {
+            if (this.store.energy >= 0.7 * this.store.getCapacity(RESOURCE_ENERGY)) {
                 let damagedStructures = this.room.find(FIND_STRUCTURES, {
                     filter: (structure) => structure.hits < structure.hitsMax &&
                         ((structure.structureType != STRUCTURE_WALL &&
@@ -22,9 +22,21 @@ StructureTower.prototype.runRole =
                 }
             }
 
-            if (this.store.energy > 0.9 * this.store.getCapacity(RESOURCE_ENERGY)) {
+            if (this.store.energy >= 0.9 * this.store.getCapacity(RESOURCE_ENERGY)) {
                 let damagedStructures = this.room.find(FIND_STRUCTURES, {
-                    filter: (structure) => structure.hits < structure.hitsMax
+                    filter: (structure) => structure.hits < structure.hitsMax && structure.structureType != STRUCTURE_RAMPART && structure.structureType != STRUCTURE_WALL
+                });
+
+                let target = _.sortBy(damagedStructures, s => s.hits)[0];
+                if (target) {
+                    this.repair(target);
+                }
+    
+            }
+
+            if (Game.time % 3 == this.pos.x % 3 && this.store.energy >= 0.8 * this.store.getCapacity(RESOURCE_ENERGY)) {
+                let damagedStructures = this.room.find(FIND_STRUCTURES, {
+                    filter: (structure) => structure.hits < structure.hitsMax && (structure.structureType == STRUCTURE_RAMPART || structure.structureType == STRUCTURE_WALL)
                 });
 
                 let target = _.sortBy(damagedStructures, s => s.hits)[0];
