@@ -77,7 +77,7 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
             case 5:
                 targetNumbers['harvester'] = 3;
                 targetNumbers['builder'] = 2;
-                targetNumbers['upgrader'] = 1;
+                targetNumbers['upgrader'] = 2;
                 targetNumbers['repairer'] = 0;
                 targetNumbers['wall_repairer'] = 0;
                 targetNumbers['transporter'] = 2;
@@ -86,7 +86,7 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
             case 6:
                 targetNumbers['harvester'] = 2;
                 targetNumbers['builder'] = 1;
-                targetNumbers['upgrader'] = 1;
+                targetNumbers['upgrader'] = 2;
                 targetNumbers['repairer'] = 0;
                 targetNumbers['wall_repairer'] = 0;
                 targetNumbers['transporter'] = 2;
@@ -95,7 +95,7 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
             case 7:
                 targetNumbers['harvester'] = 2;
                 targetNumbers['builder'] = 1;
-                targetNumbers['upgrader'] = 1;
+                targetNumbers['upgrader'] = 2;
                 targetNumbers['repairer'] = 0;
                 targetNumbers['wall_repairer'] = 0;
                 targetNumbers['transporter'] = 2;
@@ -104,7 +104,7 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
             case 8:
                 targetNumbers['harvester'] = 2;
                 targetNumbers['builder'] = 1;
-                targetNumbers['upgrader'] = 1;
+                targetNumbers['upgrader'] = 0;
                 targetNumbers['repairer'] = 0;
                 targetNumbers['wall_repairer'] = 0;
                 targetNumbers['transporter'] = 2;
