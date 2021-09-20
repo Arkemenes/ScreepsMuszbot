@@ -12,7 +12,7 @@ module.exports = {
 
         let nearSpawn = creep.pos.findInRange(FIND_STRUCTURES, 1, {
             filter: s => (s.structureType == STRUCTURE_SPAWN)
-                && s.store.energy < s.store.getCapacity(RESOURCE_ENERGY)
+                && s.store.energy <= 0.95 * s.store.getCapacity(RESOURCE_ENERGY)
         })[0];
 
         let nearLink = creep.pos.findInRange(FIND_STRUCTURES, 1, {
