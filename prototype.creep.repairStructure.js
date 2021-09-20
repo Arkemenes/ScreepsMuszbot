@@ -3,11 +3,41 @@
     Creep.prototype.repairStructure =
     function (target) {
         if (!target) {
-            let targets = this.room.find(FIND_STRUCTURES, {
-                filter: (s) => s.hits < s.hitsMax
-            });
+            if (this.memory.role == 'harvester') {
 
-            target = _.sortBy(targets, s => s.hits)[0];
+                let targets = this.pos.findInRange(FIND_STRUCTURES, 5, {
+                    filter: (s) => s.hits < 0.5 * s.hitsMax
+                });
+    
+                target = _.sortBy(targets, s => s.hits)[0];
+
+
+                if (!target) {
+                    let targets = this.room.find(FIND_STRUCTURES, {
+                        filter: (s) => s.hits < 0.5 * s.hitsMax
+                    });
+        
+                    target = _.sortBy(targets, s => s.hits)[0];
+                }
+                
+            }
+            else {
+                let targets = this.pos.findInRange(FIND_STRUCTURES, 5, {
+                    filter: (s) => s.hits < s.hitsMax
+                });
+    
+                target = _.sortBy(targets, s => s.hits)[0];
+
+
+                if (!target) {
+                    let targets = this.room.find(FIND_STRUCTURES, {
+                        filter: (s) => s.hits < s.hitsMax
+                    });
+        
+                    target = _.sortBy(targets, s => s.hits)[0];
+                }
+            }
+            
         }
 
         if (target) {

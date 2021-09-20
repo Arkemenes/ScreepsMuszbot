@@ -6,13 +6,14 @@
         Game.getObjectById()
         if (!target) {
 
-            target = this.pos.findInRange(FIND_DROPPED_RESOURCES, 10)[0];
+            let targets = this.pos.findInRange(FIND_DROPPED_RESOURCES, 5);
+            target = _.sortBy(targets, s => s.pos.getDirectionTo(this.pos.x,this.pos.y))[0];
 
             if (!target) {
 
                 if (this.memory.role == 'harvester') {
 
-                    target = this.room.find(FIND_DROPPED_RESOURCES)[0];
+                    target = this.pos.findClosestByPath(FIND_DROPPED_RESOURCES);
 
                     if (!target) {
 
@@ -36,7 +37,7 @@
 
                 }
                 else if (this.memory.role == 'transporter') {
-                    target = this.room.find(FIND_DROPPED_RESOURCES)[0];
+                    target = this.pos.findClosestByPath(FIND_DROPPED_RESOURCES);
 
                     if (!target) {
                         target = this.pos.findClosestByPath(FIND_STRUCTURES, {
@@ -109,7 +110,8 @@
                 return true;
             }
             else if (this.store.getFreeCapacity() &&
-                ((target.store && (target.store[RESOURCE_ENERGY] > 0 || (this.memory.role != 'transporter' && target.store[RESOURCE_ENERGY] > 0))) ||
+                    ((target.store && target.store[RESOURCE_ENERGY] > 0) ||
+                    (this.memory.role != 'transporter' && target.store && target.store[RESOURCE_ENERGY] > 0) ||
                     (_.sum(Game.creeps, (c) => c.memory.role == 'miner') < 2 && target.structureType != STRUCTURE_CONTAINER))) {
                 this.memory.action = 'getEnergy';
                 this.memory.target = target;
