@@ -117,7 +117,7 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
 
 
         if (numberOfHarvesters == 0) {
-            var energy = this.room.energyCapacityAvailable;
+            var energy = Math.max(this.room.energyAvailable, 250);
             var body = createBody([WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE], energy);
 
             this.spawnCreep(body, Game.time, {
@@ -126,7 +126,7 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
             });
         }
         else {
-            var energy = Math.max(this.room.energyAvailable, 250);
+            var energy = this.room.energyCapacityAvailable;
 
 
         }
