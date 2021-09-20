@@ -1152,7 +1152,7 @@ function planStructures(roomName) {
                 });
             }
             else {
-                console.log('Unable to find a focation for link')
+                console.log('[WARNING]: Unable to find a location for link')
             }
             
         }
