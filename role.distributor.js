@@ -10,6 +10,11 @@ module.exports = {
 
         let nearTower = _.sortBy(nearTowers, s => s.store.energy)[0];
 
+        let nearSpawn = creep.pos.findInRange(FIND_STRUCTURES, 1, {
+            filter: s => (s.structureType == STRUCTURE_SPAWN)
+                && s.store.energy < s.store.getCapacity(RESOURCE_ENERGY)
+        })[0];
+
         let nearLink = creep.pos.findInRange(FIND_STRUCTURES, 1, {
             filter: s => (s.structureType == STRUCTURE_LINK)
                 && s.store.energy.valueOf() > 0
@@ -18,6 +23,9 @@ module.exports = {
 
         if (creep.store.getUsedCapacity() && nearTower) {
             creep.transfer(nearTower, RESOURCE_ENERGY);
+        }
+        else if (creep.store.getUsedCapacity() && nearSpawn) {
+            creep.transfer(nearSpawn, RESOURCE_ENERGY);
         }
         else if (creep.store.getUsedCapacity() && creep.room.storage.store.getFreeCapacity()) {
             creep.transfer(creep.room.storage, RESOURCE_ENERGY);

@@ -65,8 +65,12 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
             
         }
 
-        
-        if (numberofMiners < config["miner_number"]){
+        let dyingCreep = this.pos.findInRange(FIND_MY_CREEPS,1, {filter: (creep) => creep.ticksToLive <= 200})[0];
+
+        if (dyingCreep) {
+            this.renewCreep(dyingCreep);
+        }
+        else if (numberofMiners < config["miner_number"]){
             
             var body = createBody([MOVE, WORK, WORK, WORK, WORK, WORK], energy);
             
