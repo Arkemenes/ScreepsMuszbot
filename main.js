@@ -35,24 +35,6 @@ module.exports.loop = function () {
         link.runRole();
     }
 
-    for (let roomName in Game.rooms) {
-
-        let room = Game.rooms[roomName];
-
-        let numberOfHarvesters = _.sum(Game.creeps, (c) => c.memory.role == 'harvester' && c.ticksToLive > 10);
-
-        if (numberOfHarvesters == 0) {
-            let newHarvester = room.find(FIND_CREEPS, {filter: (creep) => creep.memory.role != 'distributor' && 
-                                                                          creep.memory.role != 'miner' && 
-                                                                          creep.memory.role != 'transporter'})[0];
-            if (newHarvester) {
-                newHarvester.memory.role = 'harvester';
-            }
-            
-        }
-
-    }
-
     
     // for each creeps
     for (let name in Game.creeps) {

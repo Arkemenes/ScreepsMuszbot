@@ -26,14 +26,14 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
 
         }
 
-        var numberOfHarvesters = _.sum(Game.creeps, (c) => c.memory.role == 'harvester' && c.ticksToLive > 10);
-        var numberOfUpgraders = _.sum(Game.creeps, (c) => c.memory.role == 'upgrader' && c.ticksToLive > 10);
-        var numberOfBuilders = _.sum(Game.creeps, (c) => c.memory.role == 'builder' && c.ticksToLive > 10);
-        var numberOfRepairers = _.sum(Game.creeps, (c) => c.memory.role == 'repairer' && c.ticksToLive > 10);
-        var numberOfWallRepairers = _.sum(Game.creeps, (c) => c.memory.role == 'wallRepairer' && c.ticksToLive > 10);
-        var numberofMiners = _.sum(Game.creeps, (c) => c.memory.role == 'miner' && c.ticksToLive > 10);
-        var numberOfTransporters = _.sum(Game.creeps, (c) => c.memory.role == 'transporter' && c.ticksToLive > 10);
-        var numberOfDistributors = _.sum(Game.creeps, (c) => c.memory.role == 'distributor' && c.ticksToLive > 10);
+        var numberOfHarvesters = _.sum(Game.creeps, (c) => c.memory.role == 'harvester' && c.ticksToLive > 5);
+        var numberOfUpgraders = _.sum(Game.creeps, (c) => c.memory.role == 'upgrader' && c.ticksToLive > 5);
+        var numberOfBuilders = _.sum(Game.creeps, (c) => c.memory.role == 'builder' && c.ticksToLive > 5);
+        var numberOfRepairers = _.sum(Game.creeps, (c) => c.memory.role == 'repairer' && c.ticksToLive > 5);
+        var numberOfWallRepairers = _.sum(Game.creeps, (c) => c.memory.role == 'wallRepairer' && c.ticksToLive > 5);
+        var numberofMiners = _.sum(Game.creeps, (c) => c.memory.role == 'miner' && c.ticksToLive > 5);
+        var numberOfTransporters = _.sum(Game.creeps, (c) => c.memory.role == 'transporter' && c.ticksToLive > 5);
+        var numberOfDistributors = _.sum(Game.creeps, (c) => c.memory.role == 'distributor' && c.ticksToLive > 5);
 
 
         let targetNumbers = {}
@@ -77,7 +77,7 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
             case 5:
                 targetNumbers['harvester'] = 3;
                 targetNumbers['builder'] = 2;
-                targetNumbers['upgrader'] = 2;
+                targetNumbers['upgrader'] = 4;
                 targetNumbers['repairer'] = 0;
                 targetNumbers['wall_repairer'] = 0;
                 targetNumbers['transporter'] = 2;
@@ -86,7 +86,7 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
             case 6:
                 targetNumbers['harvester'] = 2;
                 targetNumbers['builder'] = 1;
-                targetNumbers['upgrader'] = 1;
+                targetNumbers['upgrader'] = 2;
                 targetNumbers['repairer'] = 0;
                 targetNumbers['wall_repairer'] = 0;
                 targetNumbers['transporter'] = 1;
@@ -120,10 +120,16 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
             var energy = this.room.energyAvailable;
             var body = createBody([WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE], energy);
 
-            this.spawnCreep(body, Game.time, {
-                memory: {role: 'harvester'},
-                directions: [TOP_RIGHT, TOP_LEFT, TOP, RIGHT, LEFT]
-            });
+            if (this.spawnCreep(body, Game.time, {memory: {role: 'harvester'}, directions: [TOP_RIGHT, TOP_LEFT, TOP, RIGHT, LEFT]}) != 0) {
+                let newHarvester = room.find(FIND_CREEPS, {filter: (creep) => creep.memory.role != 'distributor' && 
+                                                                          creep.memory.role != 'miner' && 
+                                                                          creep.memory.role != 'transporter'})[0];
+                if (newHarvester) {
+                    newHarvester.memory.role = 'harvester';
+                    newHarvester.memory.action = undefined;
+                    newHarvester.memory.target = undefined;
+                }
+            }
         }
         else {
             var energy = 0.8 * this.room.energyCapacityAvailable;
