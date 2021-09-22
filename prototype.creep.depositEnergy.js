@@ -43,8 +43,9 @@
                     });
 
                 }
-                if (!target && this.store.energy >= this.store.energyCapacity &&
-                    !this.pos.findClosestByPath(FIND_MY_STRUCTURES, { filter: (s) => s.structureType == STRUCTURE_LINK })) {
+                if (!target && 
+                    this.room.storage.store.energy < this.room.storage.store.getCapacity()) {
+                    
                     target = this.room.storage;
                 }
             }
