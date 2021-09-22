@@ -26,14 +26,14 @@ module.exports = {
         else if (creep.store.getUsedCapacity() && nearSpawn) {
             creep.transfer(nearSpawn, RESOURCE_ENERGY);
         }
-        else if (creep.store.getUsedCapacity() && nearLink.store.energy.valueOf() < 100) {
+        else if (creep.store.getUsedCapacity() && nearLink && nearLink.store.energy.valueOf() < 100) {
             creep.transfer(nearLink, RESOURCE_ENERGY, 100 - nearLink.store.energy.valueOf());
         }
-        else if (creep.store.getUsedCapacity() && creep.room.storage.store.getFreeCapacity()) {
+        else if (creep.store.getUsedCapacity() && creep.room.storage && creep.room.storage.store.getFreeCapacity()) {
             creep.transfer(creep.room.storage, RESOURCE_ENERGY);
         }
         else {
-            if (nearLink.store.energy.valueOf() > 100) {
+            if (nearLink && nearLink.store.energy.valueOf() > 100) {
                 creep.withdraw(nearLink, RESOURCE_ENERGY, nearLink.store.energy.valueOf() - 100);
             }
             else if (creep.room.storage.store.getUsedCapacity() > 2000 &&

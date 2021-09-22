@@ -109,9 +109,9 @@
                 this.smartMove(target);
                 return true;
             }
-            else if (this.store.getFreeCapacity() && target.store && target.store[RESOURCE_ENERGY] > 0 &&
-                    ((this.memory.role != 'transporter') ||
-                    (_.sum(Game.creeps, (c) => c.memory.role == 'miner') < 2 && target.structureType != STRUCTURE_CONTAINER))) {
+            else if (this.store.getFreeCapacity() && target.energy &&
+                    (this.memory.role != 'transporter' ||
+                    (_.sum(Game.creeps, (c) => c.memory.role == 'miner') < 2 && this.memory == 'harvester' && target.structureType != STRUCTURE_CONTAINER))) {
                 this.memory.action = 'getEnergy';
                 this.memory.target = target;
                 return true;

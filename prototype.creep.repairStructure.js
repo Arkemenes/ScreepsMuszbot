@@ -37,7 +37,7 @@
                     target = _.sortBy(targets, s => s.hits)[0];
                 }
             }
-            
+          
         }
 
         if (target) {
