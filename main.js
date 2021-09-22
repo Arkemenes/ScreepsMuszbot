@@ -8,9 +8,9 @@ require('prototype.link');
 
 module.exports.loop = function () {
 
-    
+
     architect.createBuildingSites();
-    
+
 
     // if there is no available spawn, it's possible to visualize using:
     // for (let i=0; i<11; i++){
@@ -28,6 +28,14 @@ module.exports.loop = function () {
         }
     }
     // find all towers
+    var towers = _.filter(Game.structures, s => s.structureType == STRUCTURE_TOWER);
+    // for each tower
+    for (let tower of towers) {
+        // run tower logic
+        tower.runRole();
+    }
+
+    // find all links
     var links = _.filter(Game.structures, s => s.structureType == STRUCTURE_LINK);
     // for each tower
     for (let link of links) {
@@ -35,19 +43,11 @@ module.exports.loop = function () {
         link.runRole();
     }
 
-    
+
     // for each creeps
     for (let name in Game.creeps) {
         // run creep logic
         Game.creeps[name].runRole();
-    }
-
-    // find all towers
-    var towers = _.filter(Game.structures, s => s.structureType == STRUCTURE_TOWER);
-    // for each tower
-    for (let tower of towers) {
-        // run tower logic
-        tower.runRole();
     }
 
     // for each spawn
