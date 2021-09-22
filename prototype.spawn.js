@@ -137,12 +137,12 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
 
         }
 
-        let dyingCreep = this.pos.findInRange(FIND_MY_CREEPS,1, {filter: (creep) => creep.ticksToLive <= 300})[0];
+        let dyingCreep = this.pos.findInRange(FIND_MY_CREEPS,1, {filter: (c) => c.ticksToLive <= 300 && 
+                                                                         (c.body.length >= 33 ||
+                                                                         (c.getActiveBodyparts(MOVE) == 0 &&
+                                                                            c.getActiveBodyparts(CARRY) >= 16))})[0];
 
-        if (dyingCreep && this.room.energyAvailable >= 0.8 * this.room.energyCapacityAvailable &&
-            (dyingCreep.body.length >= 33 ||
-            (_.filter(dyingCreep.body, function(bp){return bp.type == MOVE;}).length == 0 &&
-            _.filter(dyingCreep.body, function(bp){return bp.type == CARRY;}).length >= 16))) {
+        if (dyingCreep && this.room.energyAvailable >= 0.8 * this.room.energyCapacityAvailable) {
             this.renewCreep(dyingCreep);
         }
         else if (numberofMiners < targetNumbers['miner']) {
