@@ -93,6 +93,13 @@
                         || (s.structureType == STRUCTURE_LINK && !s.isCollector())) &&
                         s.store.energy > 0
                 });
+                
+                if (!target) {
+                    target = this.pos.findClosestByPath(FIND_STRUCTURES, {
+                    filter: s => s.structureType == STRUCTURE_CONTAINER &&
+                        s.store.energy > 0
+                });
+                }
             }
         }
         if (!target) {

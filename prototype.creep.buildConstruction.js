@@ -12,7 +12,6 @@
             let repairTarget = _.sortBy(targets, s => s.hits)[0];
 
             if (repairTarget) {
-                this.say(this.repair(repairTarget))
                 if (this.repair(repairTarget) == ERR_NOT_IN_RANGE) {
                     this.memory.action = 'repairStructure';
                     this.memory.target = repairTarget;
