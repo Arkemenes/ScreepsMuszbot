@@ -14,8 +14,8 @@ module.exports = {
 
         if (!isAboveContainer) {
 
-            let otherMiners = creep.room.find(FIND_CREEPS,{
-                filter: c => c.memory.role == 'miner' && c != creep
+            let otherMiners = creep.room.find(FIND_MY_CREEPS,{
+                filter: c => c.memory && c.memory.role == 'miner' && c != creep
             });
     
             let allContainers = creep.room.find(FIND_STRUCTURES,{

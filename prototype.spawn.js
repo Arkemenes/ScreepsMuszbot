@@ -121,7 +121,7 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
             var body = createBody([WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE], energy);
 
             if (this.spawnCreep(body, Game.time, {memory: {role: 'harvester'}, directions: [TOP_RIGHT, TOP_LEFT, TOP, RIGHT, LEFT]}) != 0) {
-                let newHarvester = room.find(FIND_CREEPS, {filter: (creep) => creep.memory.role != 'distributor' && 
+                let newHarvester = this.room.find(FIND_MY_CREEPS, {filter: (creep) => creep.memory.role != 'distributor' && 
                                                                           creep.memory.role != 'miner' && 
                                                                           creep.memory.role != 'transporter'})[0];
                 if (newHarvester) {
