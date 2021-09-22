@@ -15,7 +15,7 @@ module.exports = {
                     Memory.rooms[roomName] = {}
                 }
                 if (Game.time % 10 == 0 && (
-                    Memory.rooms[roomName].builds == undefined || !Memory.rooms[roomName].builds.length || !Memory.rooms[roomName].center)) {
+                    !Memory.rooms[roomName].builds || !Memory.rooms[roomName].builds.length || !Memory.rooms[roomName].center)) {
                     planStructures(roomName);
 
                 }

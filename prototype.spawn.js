@@ -61,7 +61,7 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
             case 3:
                 targetNumbers['harvester'] = 4;
                 targetNumbers['builder'] = 3;
-                targetNumbers['upgrader'] = 2;
+                targetNumbers['upgrader'] = 3;
                 targetNumbers['repairer'] = 0;
                 targetNumbers['wall_repairer'] = 0;
                 targetNumbers['transporter'] = 0;
@@ -86,10 +86,10 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
             case 6:
                 targetNumbers['harvester'] = 2;
                 targetNumbers['builder'] = 1;
-                targetNumbers['upgrader'] = 2;
+                targetNumbers['upgrader'] = 1;
                 targetNumbers['repairer'] = 0;
                 targetNumbers['wall_repairer'] = 0;
-                targetNumbers['transporter'] = 2;
+                targetNumbers['transporter'] = 1;
                 break;
 
             case 7:
@@ -117,8 +117,8 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
 
 
         if (numberOfHarvesters == 0) {
-            var energy = Math.max(this.room.energyAvailable, 250);
-            var body = createBody([WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE], energy);
+            var energy = this.room.energyAvailable;
+            var body = createBody([WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE], energy);
 
             this.spawnCreep(body, Game.time, {
                 memory: {role: 'harvester'},
@@ -126,14 +126,14 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
             });
         }
         else {
-            var energy = this.room.energyCapacityAvailable;
+            var energy = 0.8 * this.room.energyCapacityAvailable;
 
 
         }
 
-        let dyingCreep = this.pos.findInRange(FIND_MY_CREEPS,1, {filter: (creep) => creep.ticksToLive <= 200})[0];
+        let dyingCreep = this.pos.findInRange(FIND_MY_CREEPS,1, {filter: (creep) => creep.ticksToLive <= 300})[0];
 
-        if (dyingCreep && 
+        if (dyingCreep && this.room.energyAvailable >= 0.8 * this.room.energyCapacityAvailable &&
             (dyingCreep.body.length >= 33 ||
             (_.filter(dyingCreep.body, function(bp){return bp.type == MOVE;}).length == 0 &&
             _.filter(dyingCreep.body, function(bp){return bp.type == CARRY;}).length >= 16))) {
@@ -150,7 +150,7 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
         }
         else if (numberOfHarvesters < targetNumbers['harvester']) {
 
-            var body = createBody([WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE], energy);
+            var body = createBody([WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE], energy);
 
             this.spawnCreep(body, Game.time, {
                 memory: {role: 'harvester'},
@@ -160,7 +160,7 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
         }
         else if (numberOfBuilders < targetNumbers['builder']) {
 
-            var body = createBody([WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE], energy);
+            var body = createBody([WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE], energy);
 
             this.spawnCreep(body, Game.time, {
                 memory: {role: 'builder'},
@@ -169,7 +169,7 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
         }
         else if (numberOfUpgraders < targetNumbers['upgrader']) {
 
-            var body = createBody([WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE], energy);
+            var body = createBody([WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE], energy);
 
             this.spawnCreep(body, Game.time, {
                 memory: {role: 'upgrader'},
@@ -178,7 +178,7 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
         }
         else if (numberOfRepairers < targetNumbers['repairer']) {
 
-            var body = createBody([WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE], energy);
+            var body = createBody([WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE], energy);
 
             this.spawnCreep(body, Game.time, {
                 memory: {role: 'repairer'},
@@ -187,7 +187,7 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
         }
         else if (numberOfWallRepairers < targetNumbers['wall_repairer']) {
 
-            var body = createBody([WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE], energy);
+            var body = createBody([WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE], energy);
 
             this.spawnCreep(body, Game.time, {
                 memory: {role: 'wallRepairer'},
