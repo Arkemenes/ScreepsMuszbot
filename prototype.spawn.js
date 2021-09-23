@@ -147,7 +147,7 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
         }
         else if (numberofMiners < targetNumbers['miner']) {
 
-            var body = createBody([MOVE, WORK, WORK, WORK, WORK, WORK], energy);
+            var body = createBody([MOVE, WORK, WORK, WORK, WORK, WORK, MOVE, CARRY], energy);
 
             this.spawnCreep(body, Game.time, {
                 memory: {role: 'miner'},
