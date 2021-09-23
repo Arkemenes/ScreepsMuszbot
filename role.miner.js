@@ -49,9 +49,16 @@ module.exports = {
         // if creep is supposed to harvest energy from source
         else {
             creep.memory.action = 'harvest';
-            creep.memory.target = creep.pos.findClosestByPath(FIND_SOURCES);
+            let target = creep.pos.findInRange(FIND_SOURCES,1)[0];
 
-            creep.harvest(creep.memory.target);
+            if (!target) {
+                target = creep.pos.findInRange(FIND_MINERALS,1)[0];
+            }
+
+            creep.memory.target = target;
+
+            
+            creep.harvest(target)
         }
     }
 };

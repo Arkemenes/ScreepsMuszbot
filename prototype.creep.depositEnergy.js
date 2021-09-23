@@ -13,13 +13,23 @@
                 });
 
                 if (!target) {
+                    target = this.pos.findClosestByPath(FIND_MY_STRUCTURES, {
                     filter: (s) => ((s.structureType == STRUCTURE_TOWER)
                         && s.energy < s.energyCapacity)
+                    });
                 }
 
                 if (!target) {
+                    target = this.pos.findClosestByPath(FIND_MY_STRUCTURES, {
                     filter: (s) => ((s.structureType == STRUCTURE_STORAGE)
                         && s.energy < s.energyCapacity)
+                    });
+                }
+                if (!target) {
+                    target = this.pos.findClosestByPath(FIND_MY_STRUCTURES, {
+                        filter: (s) => (s.structureType == STRUCTURE_LAB && s.energy < s.energyCapacity)
+                    });
+
                 }
             }
 
@@ -43,6 +53,12 @@
                     });
 
                 }
+                if (!target) {
+                    target = this.pos.findClosestByPath(FIND_MY_STRUCTURES, {
+                        filter: (s) => (s.structureType == STRUCTURE_LAB && s.energy < s.energyCapacity)
+                    });
+
+                }
                 if (!target && 
                     this.room.storage.store.energy < this.room.storage.store.getCapacity()) {
                     
@@ -62,6 +78,12 @@
                             || s.structureType == STRUCTURE_EXTENSION)
                             && s.energy < s.energyCapacity)
                     });
+                }
+                if (!target) {
+                    target = this.pos.findClosestByPath(FIND_MY_STRUCTURES, {
+                        filter: (s) => (s.structureType == STRUCTURE_LAB && s.energy < s.energyCapacity)
+                    });
+
                 }
             }
 
