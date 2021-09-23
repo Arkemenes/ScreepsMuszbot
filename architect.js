@@ -168,9 +168,40 @@ function planStructures(roomName) {
 
     Memory.rooms[roomName].center = center;
 
-
-
     Memory.rooms[roomName].center = Game.rooms[roomName].getPositionAt(center[0], center[1]);
+
+    let externalRing = [[center[0] - 6, center[1] - 2],
+    [center[0] - 6, center[1] - 1],
+    [center[0] - 6, center[1]],
+    [center[0] - 6, center[1] + 1],
+    [center[0] - 6, center[1] + 2],
+    [center[0] - 5, center[1] - 3],
+    [center[0] - 5, center[1] + 3],
+    [center[0] - 4, center[1] - 4],
+    [center[0] - 4, center[1] + 4],
+    [center[0] - 3, center[1] - 5],
+    [center[0] - 3, center[1] + 5],
+    [center[0] - 2, center[1] - 6],
+    [center[0] - 2, center[1] + 6],
+    [center[0] - 1, center[1] - 6],
+    [center[0] - 1, center[1] + 6],
+    [center[0], center[1] - 6],
+    [center[0], center[1] + 6],
+    [center[0] + 1, center[1] - 6],
+    [center[0] + 1, center[1] + 6],
+    [center[0] + 2, center[1] - 6],
+    [center[0] + 2, center[1] + 6],
+    [center[0] + 3, center[1] - 5],
+    [center[0] + 3, center[1] + 5],
+    [center[0] + 4, center[1] - 4],
+    [center[0] + 4, center[1] + 4],
+    [center[0] + 5, center[1] - 3],
+    [center[0] + 5, center[1] + 3],
+    [center[0] + 6, center[1] - 2],
+    [center[0] + 6, center[1] + 2],
+    [center[0] + 6, center[1] + 1],
+    [center[0] + 6, center[1] + 1],
+    [center[0] + 6, center[1]]]
 
     // RCL 1
 
@@ -197,7 +228,7 @@ function planStructures(roomName) {
                         filter: s => s.pos &&
                             s.pos.x == sources[sourceName].pos.x + i &&
                             s.pos.y == sources[sourceName].pos.y + j &&
-                            s.structureType != STRUCTURE_CONTAINER
+                            s.structureType != STRUCTURE_CONTAINER && s.structureType != STRUCTURE_ROAD
                     })[0] &&
                     (i != 0 || j != 0)) {
                     possiblePositions.push([sources[sourceName].pos.x + i, sources[sourceName].pos.y + j]);
@@ -220,6 +251,26 @@ function planStructures(roomName) {
             'structureType': STRUCTURE_CONTAINER,
             'minimalRCL': 1
         });
+
+        // road to container
+
+        distances = []
+        for (let ref of externalRing) {
+            distances.push(Game.rooms[roomName].getPositionAt(ref[0], ref[1]).getRangeTo(
+                Game.rooms[roomName].getPositionAt(containerPos[0], containerPos[1])));
+        }
+        let roadStart = externalRing[distances.indexOf(Math.min(...distances))];
+
+        let path = Game.rooms[roomName].getPositionAt(roadStart[0], roadStart[1]).findPathTo(Game.rooms[roomName].getPositionAt(containerPos[0], containerPos[1]), {swampCost: 2, ignoreCreeps: true, ignoreDestructibleStructures: true});
+
+        for (var i = 0; i < path.length; i++) {
+            Memory.rooms[roomName].builds.push({
+                'x': path[i].x,
+                'y': path[i].y,
+                'structureType': STRUCTURE_ROAD,
+                'minimalRCL': 1
+            });
+        }
 
     }
 
@@ -1114,21 +1165,21 @@ function planStructures(roomName) {
         filter: s => s.structureType == STRUCTURE_CONTAINER
     });
 
-    for (let containerName in containers) {
+    for (let containerNumber in containers) {
 
-        if (containers[containerName].pos.findInRange(FIND_SOURCES, 1)[0]) {
+        if (containers[containerNumber].pos.findInRange(FIND_SOURCES, 1)[0]) {
             possiblePositions = [];
             for (let i = -1; i < 2; i++) {
                 for (let j = -1; j < 2; j++) {
-                    if (terrain.get(containers[containerName].pos.x + i, containers[containerName].pos.y + j) != TERRAIN_MASK_WALL &&
+                    if (terrain.get(containers[containerNumber].pos.x + i, containers[containerNumber].pos.y + j) != TERRAIN_MASK_WALL &&
                         !Game.rooms[roomName].find(FIND_STRUCTURES, {
                             filter: s => s.pos &&
-                                s.pos.x == containers[containerName].pos.x + i &&
-                                s.pos.y == containers[containerName].pos.y + j &&
-                                s.structureType != STRUCTURE_LINK
+                                s.pos.x == containers[containerNumber].pos.x + i &&
+                                s.pos.y == containers[containerNumber].pos.y + j &&
+                                s.structureType != STRUCTURE_LINK && s.structureType != STRUCTURE_ROAD
                         })[0] &&
                         (i != 0 || j != 0)) {
-                        possiblePositions.push([containers[containerName].pos.x + i, containers[containerName].pos.y + j]);
+                        possiblePositions.push([containers[containerNumber].pos.x + i, containers[containerNumber].pos.y + j]);
                     }
                 }
             }
@@ -1148,13 +1199,13 @@ function planStructures(roomName) {
                     'x': linkPos[0],
                     'y': linkPos[1],
                     'structureType': STRUCTURE_LINK,
-                    'minimalRCL': 5
+                    'minimalRCL': 5 + containerNumber
                 });
             }
             else {
                 console.log('[WARNING]: Unable to find a location for link')
             }
-            
+
         }
 
     }
@@ -1317,50 +1368,70 @@ function planStructures(roomName) {
 
     // 1 Extractor
 
-    // minerals = Game.rooms[roomName].find(FIND_MINERALS);
+    minerals = Game.rooms[roomName].find(FIND_MINERALS);
 
-    // for (let mineralName in minerals) {
+    for (let mineralName in minerals) {
 
-    //     Memory.rooms[roomName].builds.push({
-    //         'x': minerals[mineralName].pos.x,
-    //         'y': minerals[mineralName].pos.y,
-    //         'structureType': STRUCTURE_EXTRACTOR,
-    //         'minimalRCL': 6
-    //     });
+        Memory.rooms[roomName].builds.push({
+            'x': minerals[mineralName].pos.x,
+            'y': minerals[mineralName].pos.y,
+            'structureType': STRUCTURE_EXTRACTOR,
+            'minimalRCL': 6
+        });
 
 
-    //     possiblePositions = [];
-    //     for (let i = -1; i < 2; i++) {
-    //         for (let j = -1; j < 2; j++) {
-    //             if (terrain.get(minerals[mineralName].pos.x + i, minerals[mineralName].pos.y + j) != TERRAIN_MASK_WALL &&
-    //                 !Game.rooms[roomName].find(FIND_STRUCTURES, {
-    //                     filter: s => s.pos.x == minerals[mineralName].pos.x + i &&
-    //                         s.pos.y == minerals[mineralName].pos.y + j &&
-    //                         s.structureType != STRUCTURE_CONTAINER
-    //                 })[0] &&
-    //                 (i != 0 || j != 0)) {
-    //                 possiblePositions.push([minerals[mineralName].pos.x + i, minerals[mineralName].pos.y + j]);
-    //             }
-    //         }
-    //     }
+        possiblePositions = [];
+        for (let i = -1; i < 2; i++) {
+            for (let j = -1; j < 2; j++) {
+                if (terrain.get(minerals[mineralName].pos.x + i, minerals[mineralName].pos.y + j) != TERRAIN_MASK_WALL &&
+                    !Game.rooms[roomName].find(FIND_STRUCTURES, {
+                        filter: s => s.pos.x == minerals[mineralName].pos.x + i &&
+                            s.pos.y == minerals[mineralName].pos.y + j &&
+                            s.structureType != STRUCTURE_CONTAINER && s.structureType != STRUCTURE_ROAD
+                    })[0] &&
+                    (i != 0 || j != 0)) {
+                    possiblePositions.push([minerals[mineralName].pos.x + i, minerals[mineralName].pos.y + j]);
+                }
+            }
+        }
 
-    //     distances = [];
+        distances = [];
 
-    //     for (let posIndex in possiblePositions) {
-    //         distances.push(Game.rooms[roomName].getPositionAt(possiblePositions[posIndex][0],
-    //             possiblePositions[posIndex][1]).getRangeTo(
-    //                 Game.rooms[roomName].getPositionAt(center[0],
-    //                     center[1])));
-    //     }
-    //     containerPos = possiblePositions[distances.indexOf(Math.min(...distances))];
-    //     Memory.rooms[roomName].builds.push({
-    //         'x': containerPos[0],
-    //         'y': containerPos[1],
-    //         'structureType': STRUCTURE_CONTAINER,
-    //         'minimalRCL': 6
-    //     });
+        for (let posIndex in possiblePositions) {
+            distances.push(Game.rooms[roomName].getPositionAt(possiblePositions[posIndex][0],
+                possiblePositions[posIndex][1]).getRangeTo(
+                    Game.rooms[roomName].getPositionAt(center[0],
+                        center[1])));
+        }
+        containerPos = possiblePositions[distances.indexOf(Math.min(...distances))];
+        Memory.rooms[roomName].builds.push({
+            'x': containerPos[0],
+            'y': containerPos[1],
+            'structureType': STRUCTURE_CONTAINER,
+            'minimalRCL': 6
+        });
 
-    // }
+
+        // road to link
+        distances = []
+        for (let ref of externalRing) {
+            distances.push(Game.rooms[roomName].getPositionAt(ref[0], ref[1]).getRangeTo(
+                Game.rooms[roomName].getPositionAt(containerPos[0], containerPos[1])));
+        }
+        let roadStart = externalRing[distances.indexOf(Math.min(...distances))];
+
+        let path = Game.rooms[roomName].getPositionAt(roadStart[0], roadStart[1]).findPathTo(Game.rooms[roomName].getPositionAt(containerPos[0], containerPos[1]),{swampCost: 2, ignoreCreeps: true, ignoreDestructibleStructures: true});
+
+        for (var i = 0; i < path.length; i++) {
+            Memory.rooms[roomName].builds.push({
+                'x': path[i].x,
+                'y': path[i].y,
+                'structureType': STRUCTURE_ROAD,
+                'minimalRCL': 6
+            });
+        }
+
+    }
 
     // 3 Lab
     Memory.rooms[roomName].builds.push({
@@ -1969,14 +2040,14 @@ function planStructures(roomName) {
     controller = Game.rooms[roomName].controller;
 
     possiblePositions = [];
-    for (let i = -4; i < 5; i++) {
-        for (let j = -4; j < 5; j++) {
-            if ((i == -4 || i == 4 || j == -4 || j == 4) && terrain.get(controller.pos.x + i, controller.pos.y + j) != TERRAIN_MASK_WALL &&
+    for (let i = -2; i < 3; i++) {
+        for (let j = -2; j < 3; j++) {
+            if ((i == -2 || i == 2 || j == -2 || j == 2) && terrain.get(controller.pos.x + i, controller.pos.y + j) != TERRAIN_MASK_WALL &&
                 !Game.rooms[roomName].find(FIND_STRUCTURES, {
                     filter: s => s.pos &&
                         s.pos.x == controller.pos.x + i &&
                         s.pos.y == controller.pos.y + j &&
-                        s.structureType != STRUCTURE_LINK
+                        s.structureType != STRUCTURE_LINK && s.structureType != STRUCTURE_ROAD
                 })[0]) {
                 possiblePositions.push([controller.pos.x + i, controller.pos.y + j]);
             }
@@ -1999,6 +2070,26 @@ function planStructures(roomName) {
         'structureType': STRUCTURE_LINK,
         'minimalRCL': 7
     });
+
+    // road to link
+    distances = []
+    for (let ref of externalRing) {
+        distances.push(Game.rooms[roomName].getPositionAt(ref[0], ref[1]).getRangeTo(
+            Game.rooms[roomName].getPositionAt(linkPos[0], linkPos[1])));
+    }
+    let roadStart = externalRing[distances.indexOf(Math.min(...distances))];
+
+    let path = Game.rooms[roomName].getPositionAt(roadStart[0], roadStart[1]).findPathTo(Game.rooms[roomName].getPositionAt(linkPos[0], linkPos[1]),{swampCost: 2, ignoreCreeps: true, ignoreDestructibleStructures: true});
+
+    for (var i = 0; i < path.length; i++) {
+        Memory.rooms[roomName].builds.push({
+            'x': path[i].x,
+            'y': path[i].y,
+            'structureType': STRUCTURE_ROAD,
+            'minimalRCL': 1
+        });
+    }
+
 
 
 
