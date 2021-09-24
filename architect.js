@@ -129,8 +129,8 @@ function getPossibleSpawns(roomName, visualize = true) {
     let possibleSpawns = [];
 
 
-    for (let i = 7; i < 43; i++) {
-        for (let j = 6; j < 42; j++) {
+    for (let i = 8; i < 42; i++) {
+        for (let j = 7; j < 41; j++) {
 
             for (let k = -6; k < 7; k++) {
                 for (let l = -5; l < 8; l++) {
