@@ -26,14 +26,15 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
 
         }
 
-        var numberOfHarvesters = _.sum(Game.creeps, (c) => c.memory.role == 'harvester' && c.ticksToLive > 5);
-        var numberOfUpgraders = _.sum(Game.creeps, (c) => c.memory.role == 'upgrader' && c.ticksToLive > 5);
-        var numberOfBuilders = _.sum(Game.creeps, (c) => c.memory.role == 'builder' && c.ticksToLive > 5);
-        var numberOfRepairers = _.sum(Game.creeps, (c) => c.memory.role == 'repairer' && c.ticksToLive > 5);
-        var numberOfWallRepairers = _.sum(Game.creeps, (c) => c.memory.role == 'wallRepairer' && c.ticksToLive > 5);
-        var numberofMiners = _.sum(Game.creeps, (c) => c.memory.role == 'miner' && c.ticksToLive > 5);
-        var numberOfTransporters = _.sum(Game.creeps, (c) => c.memory.role == 'transporter' && c.ticksToLive > 5);
-        var numberOfDistributors = _.sum(Game.creeps, (c) => c.memory.role == 'distributor' && c.ticksToLive > 5);
+        var numberOfHarvesters = _.sum(Game.creeps, (c) => c.memory.role == 'harvester' && c.ticksToLive > 5 && c.memory.home == this.room.name);
+        var numberOfUpgraders = _.sum(Game.creeps, (c) => c.memory.role == 'upgrader' && c.ticksToLive > 5 && c.memory.home == this.room.name);
+        var numberOfBuilders = _.sum(Game.creeps, (c) => c.memory.role == 'builder' && c.ticksToLive > 5 && c.memory.home == this.room.name);
+        var numberOfRepairers = _.sum(Game.creeps, (c) => c.memory.role == 'repairer' && c.ticksToLive > 5 && c.memory.home == this.room.name);
+        var numberOfWallRepairers = _.sum(Game.creeps, (c) => c.memory.role == 'wallRepairer' && c.ticksToLive > 5 && c.memory.home == this.room.name);
+        var numberofMiners = _.sum(Game.creeps, (c) => c.memory.role == 'miner' && c.ticksToLive > 5 && c.memory.home == this.room.name);
+        var numberOfTransporters = _.sum(Game.creeps, (c) => c.memory.role == 'transporter' && c.ticksToLive > 5 && c.memory.home == this.room.name);
+        var numberOfScouts = _.sum(Game.creeps, (c) => c.memory.role == 'scout' && c.ticksToLive > 5 && c.memory.home == this.room.name);
+        var numberOfDistributors = _.sum(Game.creeps, (c) => c.memory.role == 'distributor' && c.ticksToLive > 5 && c.memory.home == this.room.name);
 
 
         let targetNumbers = {}
@@ -43,71 +44,79 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
 
         switch (this.room.controller.level) {
             case 1:
-                targetNumbers['harvester'] = 4;
-                targetNumbers['builder'] = 2;
-                targetNumbers['upgrader'] = 2;
-                targetNumbers['repairer'] = 0;
-                targetNumbers['wall_repairer'] = 0;
-                targetNumbers['transporter'] = 0;
+                targetNumbers['harvester'] = Math.ceil(4 / (3-this.room.find(FIND_SOURCES).length));
+                targetNumbers['builder'] = Math.ceil(2 / (3-this.room.find(FIND_SOURCES).length));
+                targetNumbers['upgrader'] = Math.ceil(2 / (3-this.room.find(FIND_SOURCES).length));
+                targetNumbers['repairer'] = Math.ceil(0 / (3-this.room.find(FIND_SOURCES).length));
+                targetNumbers['wall_repairer'] = Math.ceil(0 / (3-this.room.find(FIND_SOURCES).length));
+                targetNumbers['transporter'] = Math.ceil(0 / (3-this.room.find(FIND_SOURCES).length));
+                targetNumbers['scout'] = Math.ceil(0 / (3-this.room.find(FIND_SOURCES).length));
                 break;
             case 2:
-                targetNumbers['harvester'] = 8;
-                targetNumbers['builder'] = 3;
-                targetNumbers['upgrader'] = 2;
-                targetNumbers['repairer'] = 0;
-                targetNumbers['wall_repairer'] = 0;
-                targetNumbers['transporter'] = 0;
+                targetNumbers['harvester'] = Math.ceil(8 / (3-this.room.find(FIND_SOURCES).length));
+                targetNumbers['builder'] = Math.ceil(3 / (3-this.room.find(FIND_SOURCES).length));
+                targetNumbers['upgrader'] = Math.ceil(2 / (3-this.room.find(FIND_SOURCES).length));
+                targetNumbers['repairer'] = Math.ceil(0 / (3-this.room.find(FIND_SOURCES).length));
+                targetNumbers['wall_repairer'] = Math.ceil(0 / (3-this.room.find(FIND_SOURCES).length));
+                targetNumbers['scout'] = Math.ceil(1 / (3-this.room.find(FIND_SOURCES).length));
+                targetNumbers['transporter'] = Math.ceil(0 / (3-this.room.find(FIND_SOURCES).length));
                 break;
             case 3:
-                targetNumbers['harvester'] = 5;
-                targetNumbers['builder'] = 3;
-                targetNumbers['upgrader'] = 4;
-                targetNumbers['repairer'] = 0;
-                targetNumbers['wall_repairer'] = 0;
-                targetNumbers['transporter'] = 0;
+                targetNumbers['harvester'] = Math.ceil(5 / (3-this.room.find(FIND_SOURCES).length));
+                targetNumbers['builder'] = Math.ceil(3 / (3-this.room.find(FIND_SOURCES).length));
+                targetNumbers['upgrader'] = Math.ceil(4 / (3-this.room.find(FIND_SOURCES).length));
+                targetNumbers['repairer'] = Math.ceil(0 / (3-this.room.find(FIND_SOURCES).length));
+                targetNumbers['wall_repairer'] = Math.ceil(0 / (3-this.room.find(FIND_SOURCES).length));
+                targetNumbers['scout'] = Math.ceil(1 / (3-this.room.find(FIND_SOURCES).length));
+                targetNumbers['transporter'] = Math.ceil(0 / (3-this.room.find(FIND_SOURCES).length));
                 break;
             case 4:
-                targetNumbers['harvester'] = 3;
-                targetNumbers['builder'] = 3;
-                targetNumbers['upgrader'] = 2;
-                targetNumbers['repairer'] = 0;
-                targetNumbers['wall_repairer'] = 0;
-                targetNumbers['transporter'] = 2;
+                targetNumbers['harvester'] = Math.ceil(3 / (3-this.room.find(FIND_SOURCES).length));
+                targetNumbers['builder'] = Math.ceil(3 / (3-this.room.find(FIND_SOURCES).length));
+                targetNumbers['upgrader'] = Math.ceil(2 / (3-this.room.find(FIND_SOURCES).length));
+                targetNumbers['repairer'] = Math.ceil(0 / (3-this.room.find(FIND_SOURCES).length));
+                targetNumbers['wall_repairer'] = Math.ceil(0 / (3-this.room.find(FIND_SOURCES).length));
+                targetNumbers['scout'] = Math.ceil(1 / (3-this.room.find(FIND_SOURCES).length));
+                targetNumbers['transporter'] = Math.ceil(2 / (3-this.room.find(FIND_SOURCES).length));
                 break;
             case 5:
-                targetNumbers['harvester'] = 3;
-                targetNumbers['builder'] = 2;
-                targetNumbers['upgrader'] = 4;
-                targetNumbers['repairer'] = 0;
-                targetNumbers['wall_repairer'] = 0;
-                targetNumbers['transporter'] = 2;
+                targetNumbers['harvester'] = Math.ceil(3 / (3-this.room.find(FIND_SOURCES).length));
+                targetNumbers['builder'] = Math.ceil(2 / (3-this.room.find(FIND_SOURCES).length));
+                targetNumbers['upgrader'] = Math.ceil(4 / (3-this.room.find(FIND_SOURCES).length));
+                targetNumbers['repairer'] = Math.ceil(0 / (3-this.room.find(FIND_SOURCES).length));
+                targetNumbers['wall_repairer'] = Math.ceil(0 / (3-this.room.find(FIND_SOURCES).length));
+                targetNumbers['scout'] = Math.ceil(1 / (3-this.room.find(FIND_SOURCES).length));
+                targetNumbers['transporter'] = Math.ceil(2 / (3-this.room.find(FIND_SOURCES).length));
                 break;
 
             case 6:
-                targetNumbers['harvester'] = 2;
-                targetNumbers['builder'] = 1;
-                targetNumbers['upgrader'] = 2;
-                targetNumbers['repairer'] = 0;
-                targetNumbers['wall_repairer'] = 0;
-                targetNumbers['transporter'] = 1;
+                targetNumbers['harvester'] = Math.ceil(2 / (3-this.room.find(FIND_SOURCES).length));
+                targetNumbers['builder'] = Math.ceil(1 / (3-this.room.find(FIND_SOURCES).length));
+                targetNumbers['upgrader'] = Math.ceil(2 / (3-this.room.find(FIND_SOURCES).length));
+                targetNumbers['repairer'] = Math.ceil(0 / (3-this.room.find(FIND_SOURCES).length));
+                targetNumbers['wall_repairer'] = Math.ceil(0 / (3-this.room.find(FIND_SOURCES).length));
+                targetNumbers['scout'] = Math.ceil(1 / (3-this.room.find(FIND_SOURCES).length));
+                targetNumbers['transporter'] = Math.ceil(1 / (3-this.room.find(FIND_SOURCES).length));
                 break;
 
             case 7:
-                targetNumbers['harvester'] = 2;
-                targetNumbers['builder'] = 1;
-                targetNumbers['upgrader'] = 2;
-                targetNumbers['repairer'] = 0;
-                targetNumbers['wall_repairer'] = 0;
-                targetNumbers['transporter'] = 2;
+                targetNumbers['harvester'] = Math.ceil(2 / (3-this.room.find(FIND_SOURCES).length));
+                targetNumbers['builder'] = Math.ceil(1 / (3-this.room.find(FIND_SOURCES).length));
+                targetNumbers['upgrader'] = Math.ceil(2 / (3-this.room.find(FIND_SOURCES).length));
+                targetNumbers['repairer'] = Math.ceil(0 / (3-this.room.find(FIND_SOURCES).length));
+                targetNumbers['wall_repairer'] = Math.ceil(0 / (3-this.room.find(FIND_SOURCES).length));
+                targetNumbers['scout'] = Math.ceil(1 / (3-this.room.find(FIND_SOURCES).length));
+                targetNumbers['transporter'] = Math.ceil(2 / (3-this.room.find(FIND_SOURCES).length));
                 break;
 
             case 8:
-                targetNumbers['harvester'] = 2;
-                targetNumbers['builder'] = 1;
-                targetNumbers['upgrader'] = 0;
-                targetNumbers['repairer'] = 0;
-                targetNumbers['wall_repairer'] = 0;
-                targetNumbers['transporter'] = 2;
+                targetNumbers['harvester'] = Math.ceil(2 / (3-this.room.find(FIND_SOURCES).length));
+                targetNumbers['builder'] = Math.ceil(1 / (3-this.room.find(FIND_SOURCES).length));
+                targetNumbers['upgrader'] = Math.ceil(0 / (3-this.room.find(FIND_SOURCES).length));
+                targetNumbers['repairer'] = Math.ceil(0 / (3-this.room.find(FIND_SOURCES).length));
+                targetNumbers['wall_repairer'] = Math.ceil(0 / (3-this.room.find(FIND_SOURCES).length));
+                targetNumbers['transporter'] = Math.ceil(2 / (3-this.room.find(FIND_SOURCES).length));
+                targetNumbers['scout'] = Math.ceil(0 / (3-this.room.find(FIND_SOURCES).length));
                 break;
             default:
                 break;
@@ -115,12 +124,11 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
 
         }
 
-
         if (numberOfHarvesters == 0) {
-            var energy = this.room.energyAvailable;
+            var energy = Math.max(this.room.energyAvailable,201);
             var body = createBody([WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE], energy);
 
-            if (this.spawnCreep(body, Game.time, {memory: {role: 'harvester'}, directions: [TOP_RIGHT, TOP_LEFT, TOP, RIGHT, LEFT]}) != 0) {
+            if (this.spawnCreep(body, Game.time, {memory: {role: 'harvester', home: this.room.name, targetRoom: this.room.name}, directions: [TOP_RIGHT, TOP_LEFT, TOP, RIGHT, LEFT]}) != 0) {
                 let newHarvester = this.room.find(FIND_MY_CREEPS, {filter: (creep) => creep.memory.role != 'distributor' && 
                                                                           creep.memory.role != 'miner' && 
                                                                           creep.memory.role != 'transporter'})[0];
@@ -150,7 +158,7 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
             var body = createBody([MOVE, WORK, WORK, WORK, WORK, WORK, MOVE, CARRY], energy);
 
             this.spawnCreep(body, Game.time, {
-                memory: {role: 'miner'},
+                memory: {role: 'miner', home: this.room.name, targetRoom: this.room.name},
                 directions: [TOP_RIGHT, TOP_LEFT, TOP, RIGHT, LEFT]
             });
         }
@@ -159,7 +167,7 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
             var body = createBody([WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE], energy);
 
             this.spawnCreep(body, Game.time, {
-                memory: {role: 'harvester'},
+                memory: {role: 'harvester', home: this.room.name, targetRoom: this.room.name},
                 directions: [TOP_RIGHT, TOP_LEFT, TOP, RIGHT, LEFT]
             });
 
@@ -169,7 +177,7 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
             var body = createBody([WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE], energy);
 
             this.spawnCreep(body, Game.time, {
-                memory: {role: 'builder'},
+                memory: {role: 'builder', home: this.room.name, targetRoom: this.room.name},
                 directions: [TOP_RIGHT, TOP_LEFT, TOP, RIGHT, LEFT]
             });
         }
@@ -178,7 +186,7 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
             var body = createBody([WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE], energy);
 
             this.spawnCreep(body, Game.time, {
-                memory: {role: 'upgrader'},
+                memory: {role: 'upgrader', home: this.room.name, targetRoom: this.room.name},
                 directions: [TOP_RIGHT, TOP_LEFT, TOP, RIGHT, LEFT]
             });
         }
@@ -187,7 +195,7 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
             var body = createBody([WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE], energy);
 
             this.spawnCreep(body, Game.time, {
-                memory: {role: 'repairer'},
+                memory: {role: 'repairer', home: this.room.name, targetRoom: this.room.name},
                 directions: [TOP_RIGHT, TOP_LEFT, TOP, RIGHT, LEFT]
             });
         }
@@ -196,7 +204,7 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
             var body = createBody([WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE], energy);
 
             this.spawnCreep(body, Game.time, {
-                memory: {role: 'wallRepairer'},
+                memory: {role: 'wallRepairer', home: this.room.name, targetRoom: this.room.name},
                 directions: [TOP_RIGHT, TOP_LEFT, TOP, RIGHT, LEFT]
             });
         }
@@ -205,7 +213,7 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
             var body = createBody([MOVE, CARRY, CARRY, MOVE, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY], energy);
 
             this.spawnCreep(body, Game.time, {
-                memory: {role: 'transporter'},
+                memory: {role: 'transporter', home: this.room.name, targetRoom: this.room.name},
                 directions: [TOP_RIGHT, TOP_LEFT, TOP, RIGHT, LEFT]
             });
         }
@@ -214,9 +222,62 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
             var body = createBody([CARRY, WORK, CARRY, WORK, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY], energy);
 
             Game.spawns.Spawn1.spawnCreep(body, Game.time, {
-                memory: { role: 'distributor' },
+                memory: { role: 'distributor' , home: this.room.name, targetRoom: this.room.name},
                 directions: [BOTTOM]
             });
+        }
+        else if (numberOfScouts < targetNumbers['scout']) {
+
+            var body = createBody([MOVE, MOVE], energy);
+
+            this.spawnCreep(body, Game.time, {
+                memory: {role: 'scout', home: this.room.name, targetRoom: undefined},
+                directions: [TOP_RIGHT, TOP_LEFT, TOP, RIGHT, LEFT]
+            });
+        }
+        else {
+            for (let exitId in Memory.rooms[this.room.name].exits) {
+
+                let exit = Memory.rooms[this.room.name].exits[exitId];
+
+                let numberOfClaimers = _.sum(Game.creeps, (c) => c.memory.role == 'claimer' && c.ticksToLive > 10 && c.memory.targetRoom == exit);
+                let numberOfBuilders = _.sum(Game.creeps, (c) => c.memory.role == 'builder' && c.ticksToLive > 10 && c.memory.targetRoom == exit);
+                let numberOfHarvesters = _.sum(Game.creeps, (c) => c.memory.role == 'harvester' && c.ticksToLive > 10 && c.memory.targetRoom == exit);
+
+                if (!Memory.rooms[exit].enemies && 
+                    !numberOfClaimers && 
+                    Memory.rooms[exit].hasController && 
+                    Memory.rooms[exit].center && 
+                    Memory.rooms[exit.name].owner && 
+                    Memory.rooms[exit.name].owner.username != "Arkemenes") {
+
+                    var body = createBody([MOVE, CLAIM], energy);
+                    this.spawnCreep(body, Game.time, {
+                        memory: {role: 'claimer', home: this.room.name, targetRoom: exit},
+                        directions: [TOP_RIGHT, TOP_LEFT, TOP, RIGHT, LEFT]
+                    });
+                }
+
+                if (Memory.rooms[exit.name].owner && Memory.rooms[exit.name].owner.username == "Arkemenes") {
+                    if (numberOfBuilders < 2) {
+                        var body = createBody([WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE], energy);
+
+                        this.spawnCreep(body, Game.time, {
+                            memory: {role: 'builder', home: this.room.name, targetRoom: exit.name},
+                            directions: [TOP_RIGHT, TOP_LEFT, TOP, RIGHT, LEFT]
+                        });
+                    }
+                    else if (numberOfHarvesters < 2) {
+                        var body = createBody([WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE], energy);
+
+                        this.spawnCreep(body, Game.time, {
+                            memory: {role: 'harvester', home: this.room.name, targetRoom: exit.name},
+                            directions: [TOP_RIGHT, TOP_LEFT, TOP, RIGHT, LEFT]
+                        });
+
+                    }
+                }
+            }
         }
 
 

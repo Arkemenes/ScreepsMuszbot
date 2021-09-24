@@ -60,7 +60,7 @@
 
                 }
                 if (!target && 
-                    this.room.storage.store.energy < this.room.storage.store.getCapacity()) {
+                    this.room.storage.store.energy < this.room.storage.store.energyCapacity) {
                     
                     target = this.room.storage;
                 }

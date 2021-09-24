@@ -54,6 +54,5 @@ module.exports.loop = function () {
     for (let spawnName in Game.spawns) {
         // run spawn logic
         Game.spawns[spawnName].spawnCreepsIfNecessary();
-        break;
     }
 };

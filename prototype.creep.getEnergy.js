@@ -3,7 +3,7 @@
     Creep.prototype.getEnergy =
     function (target) {
 
-        Game.getObjectById()
+
         if (!target) {
 
             let targets = this.pos.findInRange(FIND_DROPPED_RESOURCES, 5);
@@ -51,7 +51,7 @@
                 else {
 
                     if (this.room.find(FIND_STRUCTURES, { filter: s => s.structureType == STRUCTURE_STORAGE })[0] &&
-                        this.room.find(FIND_STRUCTURES, { filter: s => s.structureType == STRUCTURE_CONTAINER }).length >= 2) {
+                        this.room.find(FIND_STRUCTURES, { filter: s => s.structureType == STRUCTURE_CONTAINER }).length >= this.room.find(FIND_SOURCES).length) {
                         target = this.pos.findClosestByPath(FIND_STRUCTURES, {
                             filter: s => (s.structureType == STRUCTURE_STORAGE
                                 || (s.structureType == STRUCTURE_LINK && !s.isCollector())) &&
@@ -103,8 +103,8 @@
             }
         }
         if (!target) {
-            let numberofMiners = _.sum(Game.creeps, (c) => c.memory.role == 'miner');
-            if (this.memory.role == 'miner' || numberofMiners < 2) {
+            let numberofMiners = _.sum(Game.creeps, (c) => c.memory.role == 'miner' && c.memory.target == this.room.name);
+            if (this.memory.role == 'miner' || numberofMiners < this.room.find(FIND_SOURCES).length) {
                 target = this.pos.findClosestByPath(FIND_SOURCES_ACTIVE);
             }
         }
@@ -118,7 +118,7 @@
             }
             else if (this.store.getFreeCapacity() && target.energy &&
                     (this.memory.role != 'transporter' ||
-                    (_.sum(Game.creeps, (c) => c.memory.role == 'miner') < 2 && this.memory == 'harvester' && target.structureType != STRUCTURE_CONTAINER))) {
+                    (_.sum(Game.creeps, (c) => c.memory.role == 'miner' && c.memory.target == this.room.name) < this.room.find(FIND_SOURCES).length && this.memory == 'harvester' && target.structureType != STRUCTURE_CONTAINER))) {
                 this.memory.action = 'getEnergy';
                 this.memory.target = target;
                 return true;

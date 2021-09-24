@@ -13,6 +13,7 @@ var roles = {
     harvester: require('role.harvester'),
     miner: require('role.miner'),
     repairer: require('role.repairer'),
+    scout: require('role.scout'),
     transporter: require('role.transporter'),
     upgrader: require('role.upgrader'),
     wallRepairer: require('role.wallRepairer')
