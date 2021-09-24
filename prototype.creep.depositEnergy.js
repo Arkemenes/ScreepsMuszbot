@@ -89,6 +89,14 @@
 
         }
 
+        if (!target && this.room.name != this.memory.home) {
+            let exitDir = Game.map.findExit(this.room.name, this.memory.home);
+            let Exit = this.pos.findClosestByPath(exitDir);
+            this.memory.action = undefined;
+            this.memory.target = undefined;
+            this.moveTo(Exit);
+        }
+
         if (target) {
 
             if (this.transfer(target, RESOURCE_ENERGY) == ERR_NOT_IN_RANGE) {
