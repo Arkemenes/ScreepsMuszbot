@@ -30,13 +30,13 @@
 
 
         if (target) {
-            if (this.build(target) == ERR_NOT_IN_RANGE) {
+            if (this.room.name == this.memory.targetRoom && this.build(target) == ERR_NOT_IN_RANGE) {
                 this.memory.action = 'buildConstruction';
                 this.memory.target = target;
                 this.smartMove(target);
                 return true;
             }
-            else if (target.structureType == STRUCTURE_RAMPART || target.structureType == STRUCTURE_WALL) {
+            else if (this.room.name == this.memory.targetRoom && (target.structureType == STRUCTURE_RAMPART || target.structureType == STRUCTURE_WALL)) {
                 this.memory.action = 'repairStructure';
                 this.memory.target = target;
             }

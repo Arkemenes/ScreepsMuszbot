@@ -89,12 +89,13 @@
 
         }
 
-        if (!target && this.room.name != this.memory.home) {
+        if ((!target || target.room.name != this.room.name) && this.room.name != this.memory.home) {
             let exitDir = Game.map.findExit(this.room.name, this.memory.home);
             let Exit = this.pos.findClosestByPath(exitDir);
             this.memory.action = undefined;
             this.memory.target = undefined;
             this.moveTo(Exit);
+            return true;
         }
 
         if (target) {

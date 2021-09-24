@@ -282,9 +282,9 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
 
                 if (!Memory.rooms[exit].enemies) {
                     let exit = Memory.rooms[this.room.name].exits[exitId];
-                    let numberOfClaimers = _.sum(Game.creeps, (c) => c.memory.role == 'claimer' && c.ticksToLive > 10 && c.memory.targetRoom == exit);
-                    let numberOfBuilders = _.sum(Game.creeps, (c) => c.memory.role == 'builder' && c.ticksToLive > 10 && c.memory.targetRoom == exit);
-                    let numberOfHarvesters = _.sum(Game.creeps, (c) => c.memory.role == 'harvester' && c.ticksToLive > 10 && c.memory.targetRoom == exit);
+                    let numberOfClaimers = _.sum(Game.creeps, (c) => c.memory.role == 'claimer' && c.ticksToLive > 5 && c.memory.targetRoom == exit);
+                    let numberOfBuilders = _.sum(Game.creeps, (c) => c.memory.role == 'builder' && c.ticksToLive > 5 && c.memory.targetRoom == exit);
+                    let numberOfHarvesters = _.sum(Game.creeps, (c) => c.memory.role == 'harvester' && c.ticksToLive > 5 && c.memory.targetRoom == exit);
 
                     if (_.filter(Game.rooms, (r) => {
                             return r.controller && r.controller.my

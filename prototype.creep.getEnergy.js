@@ -3,6 +3,15 @@
     Creep.prototype.getEnergy =
     function (target) {
 
+        if (this.room.name != this.memory.targetRoom) {
+
+            let exitDir = Game.map.findExit(this.room.name, this.memory.targetRoom);
+            let Exit = this.pos.findClosestByPath(exitDir);
+            this.memory.action = 'getEnergy';
+            this.memory.target = target;
+            this.moveTo(Exit);
+            return true;
+        }
 
         if (!target) {
 
@@ -110,13 +119,13 @@
         }
 
         if (target) {
-            if (this.harvest(target) == ERR_NOT_IN_RANGE || this.withdraw(target, RESOURCE_ENERGY) == ERR_NOT_IN_RANGE || this.pickup(target) == ERR_NOT_IN_RANGE) {
+            if (this.room.name == this.memory.targetRoom && (this.harvest(target) == ERR_NOT_IN_RANGE || this.withdraw(target, RESOURCE_ENERGY) == ERR_NOT_IN_RANGE || this.pickup(target) == ERR_NOT_IN_RANGE)) {
                 this.memory.action = 'getEnergy';
                 this.memory.target = target;
                 this.smartMove(target);
                 return true;
             }
-            else if (this.store.getFreeCapacity() && target.energy &&
+            else if (this.store.getFreeCapacity() && target.energy && this.room.name == this.memory.targetRoom &&
                     (this.memory.role != 'transporter' ||
                     (_.sum(Game.creeps, (c) => c.memory.role == 'miner' && c.memory.target == this.room.name) < this.room.find(FIND_SOURCES).length && this.memory == 'harvester' && target.structureType != STRUCTURE_CONTAINER))) {
                 this.memory.action = 'getEnergy';

@@ -50,12 +50,12 @@ module.exports = {
                 Memory.rooms[roomName].builds = {}
             }
 
-
+            
             if (Game.time % 10 == 0 && (
                     !Memory.rooms[roomName].builds || !Memory.rooms[roomName].builds.length)) {
                 planStructures(roomName);
 
-            } else {
+            } else if (Game.rooms[roomName] && Game.rooms[roomName].controller && Game.rooms[roomName].controller.my){
 
                 for (let i = 0; i < Math.min(Memory.rooms[roomName].builds.length, 10); i++) {
                     if (room.find(FIND_CONSTRUCTION_SITES)[0]) {
