@@ -37,9 +37,9 @@ module.exports.loop = function () {
         }
 
         // if there is no available spawn, it's possible to visualize using:
-        // for (let i=0; i<11; i++){
-        //     for (let j=0; j<11; j++) {
-        //         architect.getPossibleSpawns("W" + i + "N" + j);
+        // for (let i=18; i<20; i++){
+        //     for (let j=56; j<58; j++) {
+        //         architect.getPossibleSpawns("E" + i + "N" + j);
         //     }
         // }
 

@@ -19,16 +19,16 @@ Creep.prototype.runRoleDistributor =
         })[0];
 
 
-        if (this.store.getUsedCapacity() && nearTower) {
+        if ((this.store.getUsedCapacity() > 50 || !nearLink || nearLink.store.energy <= 100) && nearTower) {
             this.transfer(nearTower, RESOURCE_ENERGY);
         }
-        else if (this.store.getUsedCapacity() && nearSpawn) {
+        else if ((this.store.getUsedCapacity() > 50 || !nearLink || nearLink.store.energy <= 100) && nearSpawn) {
             this.transfer(nearSpawn, RESOURCE_ENERGY);
         }
-        else if (this.store.getUsedCapacity() && nearLink && nearLink.store.energy.valueOf() < 100) {
+        else if ((this.store.getUsedCapacity() > 50 || !nearLink || nearLink.store.energy <= 100) && nearLink && nearLink.store.energy.valueOf() < 100) {
             this.transfer(nearLink, RESOURCE_ENERGY, 100 - nearLink.store.energy.valueOf());
         }
-        else if (this.store.getUsedCapacity() && this.room.storage && this.room.storage.store.getFreeCapacity()) {
+        else if ((this.store.getUsedCapacity() > 50 || !nearLink || nearLink.store.energy <= 100) && this.room.storage && this.room.storage.store.getFreeCapacity()) {
             this.transfer(this.room.storage, RESOURCE_ENERGY);
         }
         else {

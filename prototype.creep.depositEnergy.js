@@ -64,7 +64,7 @@
 
                 }
                 if (!target && 
-                    this.room.storage.store.energy < this.room.storage.store.energyCapacity) {
+                    this.room.storage.store.energy < this.room.storage.storeCapacity) {
                     
                     target = this.room.storage;
                 }
@@ -96,7 +96,7 @@
         if (!target && this.room.name != this.memory.home) {
             let exitDir = Game.map.findExit(this.room.name, this.memory.home);
             let Exit = this.pos.findClosestByPath(exitDir);
-            this.memory.action = undefined;
+            this.memory.action = 'depositEnergy';
             this.memory.target = undefined;
             this.moveTo(Exit);
             return true;

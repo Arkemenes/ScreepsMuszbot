@@ -217,6 +217,8 @@ function planStructures(roomName) {
     [center[0] + 6, center[1] + 1],
     [center[0] + 6, center[1]]]
 
+    Memory.rooms[roomName].externalRing = externalRing;
+
     // RCL 1
 
     Memory.rooms[roomName].builds.push({
@@ -2323,4 +2325,40 @@ function planStructures(roomName) {
 
     // 1 nuker
     // TODO
+
+
+
+    // connection to other maps
+
+    for (let exit of Memory.rooms[roomName].exits) {
+        if (!Memory.rooms[exit].enemies && Game.rooms[exit]) {
+
+            if (Memory.rooms[exit].my) {
+
+            }
+            else {
+                let containers = Game.rooms[exit].find(FIND_STRUCTURES, {filter: (s) => s.structureType == STRUCTURE_CONTAINER});
+
+                for (let container of containers) {
+                    distances = []
+                    for (let ref of externalRing) {
+                        distances.push(Game.rooms[roomName].getPositionAt(ref[0], ref[1]).getRangeTo(
+                            Game.rooms[roomName].getPositionAt(container.pos.x, container.pos.y)));
+                    }
+                    let roadStart = externalRing[distances.indexOf(Math.min(...distances))];
+
+                    let path = Game.rooms[roomName].getPositionAt(roadStart[0], roadStart[1]).findPathTo(Game.rooms[roomName].getPositionAt(container.pos.x, container.pos.y), {swampCost: 2, ignoreCreeps: true, ignoreDestructibleStructures: true});
+
+                    for (var i = 0; i < path.length; i++) {
+                        Memory.rooms[roomName].builds.push({
+                            'x': path[i].x,
+                            'y': path[i].y,
+                            'structureType': STRUCTURE_ROAD,
+                            'minimalRCL': 1
+                        });
+                    }
+                }
+            }
+        }
+    }
 }

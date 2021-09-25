@@ -2,6 +2,10 @@
 Creep.prototype.runRoleScout =
     function () {
 
+        if (this.room.find(FIND_HOSTILE_CREEPS)[0]) {
+            this.say('Oi Duuuh!')
+        }
+
         if (this.room.controller && (!this.room.controller.sign || this.room.controller.sign.username != 'Arkemenes')) {
             if (this.signController(this.room.controller, "I'm watching you!") == ERR_NOT_IN_RANGE) {
                 if (this.moveTo(this.room.controller) == 0) {

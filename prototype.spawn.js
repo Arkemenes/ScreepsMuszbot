@@ -295,8 +295,42 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
                     let exit = Memory.rooms[this.room.name].exits[exitId];
 
 
+                    // If the room is mine and has less than 1 builders, create a remote one
+                    if (Memory.rooms[exit].numberOfBuilders < 1 && Memory.rooms[exit].sourceNumber) {
+                        var body = createBody([WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE], energy);
+
+                        if (this.spawnCreep(body, Game.time, {
+                            memory: {
+                                role: 'builder',
+                                home: this.room.name,
+                                targetRoom: exit
+                            },
+                            directions: [TOP_RIGHT, TOP_LEFT, TOP, RIGHT, LEFT]
+                        }) == 0) {
+                            Memory.rooms[exit].numberOfBuilders++;
+                        }
+                    } 
+                    
+                    // If the room is mine or reserved for me and has less than 2 builders, create a remote one
+                    else if (!Memory.rooms[exit].numberOfHarvesters || Memory.rooms[exit].numberOfHarvesters < Memory.rooms[exit].sourceNumber) {
+                        var body = createBody([WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE], energy);
+
+                        if (this.spawnCreep(body, Game.time, {
+                            memory: {
+                                role: 'harvester',
+                                home: this.room.name,
+                                targetRoom: exit
+                            },
+                            directions: [TOP_RIGHT, TOP_LEFT, TOP, RIGHT, LEFT]
+                        }) == 0) {
+                            Memory.rooms[exit].numberOfHarvesters++;
+                        }
+
+                    }
+
+
                     // If can claim that room, create a claimer
-                    if (Memory.myRooms.length < Game.gcl &&
+                    else if (Memory.myRooms.length < Game.gcl &&
                         !Memory.rooms[this.room.name].numberOfClaimers &&
                         Memory.rooms[exit].hasController &&
                         Memory.rooms[exit].center &&
@@ -320,6 +354,7 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
                     // If cannot claim that room, but can reserve it, also create a claimer
                     else if (!Memory.rooms[this.room.name].numberOfClaimers &&
                                 Memory.rooms[exit].hasController &&
+                                !Memory.rooms[exit].my &&
                                 this.room.energyAvailable > 1300) {
 
                         var body = createBody([MOVE, CLAIM, CLAIM], energy);
@@ -335,42 +370,6 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
                             console.log('building new reserver from ' + this.room.name + ' to room ' + exit);
                         }
                         
-                    }
-
-
-                    // If the room is mine and has less than 2 builders, create a remote one
-                    if (Memory.rooms[exit].numberOfBuilders < 2 && Memory.rooms[exit].owner && Memory.rooms[exit].owner.username == "Arkemenes") {
-                        var body = createBody([WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE], energy);
-
-                        if (this.spawnCreep(body, Game.time, {
-                            memory: {
-                                role: 'builder',
-                                home: this.room.name,
-                                targetRoom: exit
-                            },
-                            directions: [TOP_RIGHT, TOP_LEFT, TOP, RIGHT, LEFT]
-                        }) == 0) {
-                            Memory.rooms[exit].numberOfBuilders++;
-                        }
-                    } 
-                    
-                    // If the room is mine or reserved for me and has less than 2 builders, create a remote one
-                    else if (Memory.rooms[exit].numberOfHarvesters < 2 &&
-                        (Memory.rooms[exit].owner && Memory.rooms[exit].owner.username == "Arkemenes" ||
-                            Memory.rooms[exit].reservation && Memory.rooms[exit].reservation.username == "Arkemenes")) {
-                        var body = createBody([WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE], energy);
-
-                        if (this.spawnCreep(body, Game.time, {
-                            memory: {
-                                role: 'harvester',
-                                home: this.room.name,
-                                targetRoom: exit
-                            },
-                            directions: [TOP_RIGHT, TOP_LEFT, TOP, RIGHT, LEFT]
-                        }) == 0) {
-                            Memory.rooms[exit].numberOfHarvesters++;
-                        }
-
                     }
 
                 }
