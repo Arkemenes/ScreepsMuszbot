@@ -103,7 +103,7 @@ function findBaseCenter(roomName) {
         let distance = 0;
         for (let energyName in energySources) {
             distance += Game.rooms[roomName].getPositionAt(possibleSpawns[spawnIndex][0],
-                possibleSpawns[spawnIndex][1] + 1).getRangeTo(energySources[energyName]);
+                possibleSpawns[spawnIndex][1] + 1).findPathTo(energySources[energyName], {swampCost: 1, ignoreCreeps: true, ignoreDestructibleStructures: true}).length;
         }
         distances.push(distance);
     }

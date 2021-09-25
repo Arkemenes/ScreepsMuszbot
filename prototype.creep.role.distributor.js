@@ -36,7 +36,7 @@ Creep.prototype.runRoleDistributor =
                 this.withdraw(nearLink, RESOURCE_ENERGY, nearLink.store.energy.valueOf() - 100);
             }
             else if (this.room.storage.store.getUsedCapacity() > 2000 &&
-                (nearLink.store.energy.valueOf() < 100 || nearTower || nearSpawn)) {
+                ((nearLink && nearLink.store.energy.valueOf() < 100) || nearTower || nearSpawn)) {
                 this.withdraw(this.room.storage, RESOURCE_ENERGY,);
             }
 

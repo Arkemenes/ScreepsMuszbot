@@ -4,6 +4,10 @@ Creep.prototype.getEnergy =
     function (target) {
 
 
+        if (target && this.room != target.room) {
+            target = undefined;
+        }
+
         if (this.room.name != this.memory.targetRoom) {
 
             let exitDir = Game.map.findExit(this.room.name, this.memory.targetRoom);
@@ -124,7 +128,7 @@ Creep.prototype.getEnergy =
                 this.memory.target = target;
                 this.smartMove(target);
                 return true;
-            } else if (this.store.getFreeCapacity() && (target.structureType == STRUCTURE_CONTAINER || (target.energy  && Memory.rooms[this.room.name].numberOfMiners == 0) )) {
+            } else if (this.store.getFreeCapacity() && (this.memory.role == 'harvester' || target.structureType == STRUCTURE_CONTAINER || (target.energy && Memory.rooms[this.room.name].numberOfMiners == 0) )) {
                 this.memory.action = 'getEnergy';
                 this.memory.target = target;
                 return true;

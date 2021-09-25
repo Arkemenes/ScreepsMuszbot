@@ -3,6 +3,10 @@
     Creep.prototype.depositEnergy =
     function (target) {
 
+        if (target && this.room != target.room) {
+            target = undefined;
+        }
+
         if (!target) {
 
             if (this.memory.role == 'harvester') {
@@ -89,7 +93,7 @@
 
         }
 
-        if ((!target || target.room.name != this.room.name) && this.room.name != this.memory.home) {
+        if (!target && this.room.name != this.memory.home) {
             let exitDir = Game.map.findExit(this.room.name, this.memory.home);
             let Exit = this.pos.findClosestByPath(exitDir);
             this.memory.action = undefined;
@@ -98,8 +102,11 @@
             return true;
         }
 
+        
+
         if (target) {
 
+            
             if (this.transfer(target, RESOURCE_ENERGY) == ERR_NOT_IN_RANGE) {
                 this.memory.action = 'depositEnergy';
                 this.memory.target = target;
