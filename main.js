@@ -13,13 +13,28 @@ require('prototype.link');
 
 // This line monkey patches the global prototypes.
 profiler.enable();
-module.exports.loop = function() {
-    profiler.wrap(function() {
+module.exports.loop = function () {
+    profiler.wrap(function () {
+
+        let cpu = Game.cpu.getUsed();
+        let new_cpu = cpu;
 
         intel.getIntel();
-        
+
+
+        if (Memory.visualizeCPU) {
+            new_cpu = Game.cpu.getUsed();
+            console.log('CPU usage on intel: ' + (new_cpu - cpu))
+            cpu = new_cpu;
+        }
+
         architect.createBuildingSites();
 
+        if (Memory.visualizeCPU) {
+            new_cpu = Game.cpu.getUsed();
+            console.log('CPU usage on architect: ' + (new_cpu - cpu))
+            cpu = new_cpu;
+        }
 
         // if there is no available spawn, it's possible to visualize using:
         // for (let i=0; i<11; i++){
@@ -38,12 +53,25 @@ module.exports.loop = function() {
                 delete Memory.creeps[name];
             }
         }
+
+        if (Memory.visualizeCPU) {
+            new_cpu = Game.cpu.getUsed();
+            console.log('CPU usage on memory clean: ' + (new_cpu - cpu))
+            cpu = new_cpu;
+        }
+
         // find all towers
         var towers = _.filter(Game.structures, s => s.structureType == STRUCTURE_TOWER);
         // for each tower
         for (let tower of towers) {
             // run tower logic
             tower.runRole();
+        }
+
+        if (Memory.visualizeCPU) {
+            new_cpu = Game.cpu.getUsed();
+            console.log('CPU usage on towers: ' + (new_cpu - cpu))
+            cpu = new_cpu;
         }
 
         // find all links
@@ -54,6 +82,11 @@ module.exports.loop = function() {
             link.runRole();
         }
 
+        if (Memory.visualizeCPU) {
+            new_cpu = Game.cpu.getUsed();
+            console.log('CPU usage on links: ' + (new_cpu - cpu))
+            cpu = new_cpu;
+        }
 
         // for each creeps
         for (let name in Game.creeps) {
@@ -61,10 +94,21 @@ module.exports.loop = function() {
             Game.creeps[name].runRole();
         }
 
+        if (Memory.visualizeCPU) {
+            new_cpu = Game.cpu.getUsed();
+            console.log('CPU usage on creeps: ' + (new_cpu - cpu))
+            cpu = new_cpu;
+        }
+
         // for each spawn
         for (let spawnName in Game.spawns) {
             // run spawn logic
             Game.spawns[spawnName].spawnCreepsIfNecessary();
+        }
+        if (Memory.visualizeCPU) {
+            new_cpu = Game.cpu.getUsed();
+            console.log('CPU usage on spawn: ' + (new_cpu - cpu))
+            cpu = new_cpu;
         }
 
     });

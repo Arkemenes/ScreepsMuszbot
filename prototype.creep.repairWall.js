@@ -5,7 +5,7 @@
 
         if (!target) {
             let targets = this.room.find(FIND_STRUCTURES, {
-                filter: (s) => s.hits < s.hitsMax && s.structureType == STRUCTURE_WALL
+                filter: (s) => s.hits < s.hitsMax && (s.structureType == STRUCTURE_WALL || s.structureType == STRUCTURE_RAMPART)
             });
 
             target = _.sortBy(targets, s => s.hits)[0];

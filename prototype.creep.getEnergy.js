@@ -124,7 +124,7 @@ Creep.prototype.getEnergy =
                 this.memory.target = target;
                 this.smartMove(target);
                 return true;
-            } else if (this.store.getFreeCapacity() && target.energy) {
+            } else if (this.store.getFreeCapacity() && (target.structureType == STRUCTURE_CONTAINER || (target.energy  && Memory.rooms[this.room.name].numberOfMiners == 0) )) {
                 this.memory.action = 'getEnergy';
                 this.memory.target = target;
                 return true;

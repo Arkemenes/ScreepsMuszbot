@@ -6,30 +6,62 @@ require('prototype.creep.repairWall');
 require('prototype.creep.smartMove');
 require('prototype.creep.upgrade');
 
-var roles = {
-    builder: require('role.builder'),
-    claimer: require('role.claimer'),
-    distributor: require('role.distributor'),
-    harvester: require('role.harvester'),
-    miner: require('role.miner'),
-    repairer: require('role.repairer'),
-    scout: require('role.scout'),
-    transporter: require('role.transporter'),
-    upgrader: require('role.upgrader'),
-    wallRepairer: require('role.wallRepairer')
-};
+require('prototype.creep.role.builder')
+require('prototype.creep.role.claimer')
+require('prototype.creep.role.distributor')
+require('prototype.creep.role.harvester')
+require('prototype.creep.role.miner')
+require('prototype.creep.role.repairer')
+require('prototype.creep.role.scout')
+require('prototype.creep.role.transporter')
+require('prototype.creep.role.upgrader')
+require('prototype.creep.role.wallRepairer')
 
 Creep.prototype.runRole =
     function () {
+
+        switch (this.memory.role) {
+            case 'builder':
+                this.runRoleBuilder();
+                break;
+            case 'claimer':
+                this.runRoleClaimer();
+                break;
+            case 'distributor':
+                this.runRoleDistributor();
+                break;
+            case 'harvester':
+                this.runRoleHarvester();
+                break;
+            case 'miner':
+                this.runRoleMiner();
+                break;
+            case 'repairer':
+                this.runRoleRepairer();
+                break;
+            case 'scout':
+                this.runRoleScout();
+                break;
+            case 'transporter':
+                this.runRoleTransporter();
+                break;
+            case 'upgrader':
+                this.runRoleUpgrader();
+                break;
+            case 'wallRepairer':
+                this.runRoleWallRepairer();
+                break;
+            default:
+                this.memory.role = 'harvester'
+                this.memory.action = undefined;
+                this.memory.target = undefined;
+        }
 
         if (!this.memory || !this.memory.role) {
             this.memory = { 'role': 'harvester' }
         }
         
-        if (this.ticksToLive > 2) {
-            roles[this.memory.role].run(this);
-        }
-        else {
+        if (this.ticksToLive <= 2) {
             this.drop(RESOURCE_ENERGY);
         }
 
@@ -65,6 +97,9 @@ Creep.prototype.execAction =
                 break;
             case 'harvest':
                 this.harvest(target);
+                break;
+            case 'moveTo':
+                this.moveTo(target);
                 break;
             default:
                 this.memory.action = undefined;

@@ -36,7 +36,8 @@ StructureTower.prototype.runRole =
 
             if (Game.time % 3 == this.pos.x % 3 && this.store.energy >= 0.8 * this.store.getCapacity(RESOURCE_ENERGY)) {
                 let damagedStructures = this.room.find(FIND_STRUCTURES, {
-                    filter: (structure) => structure.hits < structure.hitsMax && (structure.structureType == STRUCTURE_RAMPART || structure.structureType == STRUCTURE_WALL)
+                    filter: (structure) => ((this.room.controller.level == 8 && structure.hits < structure.hitsMax) || structure.hits < 0.05 * structure.hitsMax)
+                                            && (structure.structureType == STRUCTURE_RAMPART || structure.structureType == STRUCTURE_WALL)
                 });
 
                 let target = _.sortBy(damagedStructures, s => s.hits)[0];

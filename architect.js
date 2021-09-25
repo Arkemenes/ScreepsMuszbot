@@ -9,29 +9,73 @@ module.exports = {
 
         for (let roomName in Game.rooms) {
             let room = Game.rooms[roomName];
-            if (Game.time % 10 == 0 && (
-                    !Memory.rooms[roomName].builds || !Memory.rooms[roomName].builds.length || !Memory.rooms[roomName].center || Memory.rooms[roomName].center[0])) {
-                planStructures(roomName);
 
-            } else if (Game.rooms[roomName] && Game.rooms[roomName].controller && Game.rooms[roomName].controller.my){
+            if (!Memory.rooms[roomName]) {
+                Memory.rooms[roomName] = {}
+            }
+            if (Memory.rooms[roomName].center == undefined) {
+                let center = null;
 
-                for (let i = 0; i < Math.min(Memory.rooms[roomName].builds.length, 10); i++) {
-                    if (room.find(FIND_CONSTRUCTION_SITES)[0]) {
-                        break;
-                    } else if (room.controller && room.controller.level >= Memory.rooms[roomName].builds[i].minimalRCL) {
-                        if (room.createConstructionSite(Memory.rooms[roomName].builds[i].x,
+                if (!Memory.rooms[roomName].center || !Memory.rooms[roomName].center[0] == undefined || Memory.rooms[roomName].center[1] == undefined) {
+                    let mySpawns = Game.rooms[roomName].find(FIND_MY_SPAWNS);
+                    if (!mySpawns[0]) {
+                        center = findBaseCenter(roomName);
+                    }
+                    else {
+                        let possibleSpawns = getPossibleSpawns(roomName, false);
+            
+                        for (let spawnName in mySpawns) {
+                            for (let possibleSpawnName in possibleSpawns) {
+                                if (mySpawns[spawnName].pos.x == possibleSpawns[possibleSpawnName][0] &&
+                                    mySpawns[spawnName].pos.y == possibleSpawns[possibleSpawnName][1]) {
+                                    center = possibleSpawns[possibleSpawnName];
+                                    center[1]++;
+                                    break;
+                                }
+                            }
+                            if (center) {
+                                break;
+                            }
+            
+                        }
+                    }
+                }
+
+                Memory.rooms[roomName].center = center;
+            }
+
+
+            if (room.controller && room.controller.my) {
+                if (Game.time % 10 == 0 && (
+                    !Memory.rooms[roomName].builds || !Memory.rooms[roomName].builds.length || !Memory.rooms[roomName].center)) {
+                    planStructures(roomName);
+
+                }
+                else {
+
+                    for (let i = 0; i < Math.min(Memory.rooms[roomName].builds.length, 10); i++) {
+                        if (room.find(FIND_CONSTRUCTION_SITES)[0]) {
+                            break;
+                        }
+                        else if (room.controller.level >= Memory.rooms[roomName].builds[i].minimalRCL) {
+                            if (room.createConstructionSite(Memory.rooms[roomName].builds[i].x,
                                 Memory.rooms[roomName].builds[i].y,
                                 Memory.rooms[roomName].builds[i].structureType) == 0) {
 
-                            break;
-                        } else {
+                                break;
+                            }
+                            else {
+                                Memory.rooms[roomName].builds.splice(i, 1);
+                            }
+                        }
+                        else {
                             Memory.rooms[roomName].builds.splice(i, 1);
                         }
-                    } else {
-                        Memory.rooms[roomName].builds.splice(i, 1);
-                    }
 
+                    }
                 }
+
+
             }
 
         }
@@ -64,16 +108,15 @@ function findBaseCenter(roomName) {
         distances.push(distance);
     }
 
-    let target = possibleSpawns[distances.indexOf(Math.min(...distances))];
+    target = possibleSpawns[distances.indexOf(Math.min(...distances))];
 
     if (target) {
         target[1] = target[1] + 1;
 
         return target;
     }
-    else {
-        return;
-    }
+    else return null;
+
 
 }
 
@@ -87,8 +130,8 @@ function getPossibleSpawns(roomName, visualize = true) {
     let possibleSpawns = [];
 
 
-    for (let i = 8; i < 42; i++) {
-        for (let j = 7; j < 41; j++) {
+    for (let i = 7; i < 43; i++) {
+        for (let j = 6; j < 42; j++) {
 
             for (let k = -6; k < 7; k++) {
                 for (let l = -5; l < 8; l++) {
@@ -102,7 +145,8 @@ function getPossibleSpawns(roomName, visualize = true) {
                         (k == 5 && (l <= -3 || l >= 5)) ||
                         (k == 6 && (l <= -2 || l >= 4))) {
                         valid = true;
-                    } else {
+                    }
+                    else {
                         valid = false;
                         break
                     }
@@ -134,71 +178,44 @@ function planStructures(roomName) {
     const terrain = new Room.Terrain(roomName);
     Memory.rooms[roomName].builds = [];
 
-    let center = undefined;
-
-    if (!Memory.rooms[roomName].center || !Memory.rooms[roomName].center[0] == undefined || Memory.rooms[roomName].center[1] == undefined) {
-        let mySpawns = Game.rooms[roomName].find(FIND_MY_SPAWNS);
-        if (!mySpawns[0]) {
-            center = findBaseCenter(roomName);
-        } else {
-            let possibleSpawns = getPossibleSpawns(roomName, false);
-
-            for (let spawnName in mySpawns) {
-                for (let possibleSpawnName in possibleSpawns) {
-                    if (mySpawns[spawnName].pos.x == possibleSpawns[possibleSpawnName][0] &&
-                        mySpawns[spawnName].pos.y == possibleSpawns[possibleSpawnName][1]) {
-                        center = possibleSpawns[possibleSpawnName];
-                        center[1]++;
-                        break;
-                    }
-                }
-                if (center) {
-                    break;
-                }
-
-            }
-        }
-    }
+    center = Memory.rooms[roomName].center;
 
     if (!center) {
         return false;
     }
-    Memory.rooms[roomName].center = center;
 
-    let externalRing = [
-        [center[0] - 6, center[1] - 2],
-        [center[0] - 6, center[1] - 1],
-        [center[0] - 6, center[1]],
-        [center[0] - 6, center[1] + 1],
-        [center[0] - 6, center[1] + 2],
-        [center[0] - 5, center[1] - 3],
-        [center[0] - 5, center[1] + 3],
-        [center[0] - 4, center[1] - 4],
-        [center[0] - 4, center[1] + 4],
-        [center[0] - 3, center[1] - 5],
-        [center[0] - 3, center[1] + 5],
-        [center[0] - 2, center[1] - 6],
-        [center[0] - 2, center[1] + 6],
-        [center[0] - 1, center[1] - 6],
-        [center[0] - 1, center[1] + 6],
-        [center[0], center[1] - 6],
-        [center[0], center[1] + 6],
-        [center[0] + 1, center[1] - 6],
-        [center[0] + 1, center[1] + 6],
-        [center[0] + 2, center[1] - 6],
-        [center[0] + 2, center[1] + 6],
-        [center[0] + 3, center[1] - 5],
-        [center[0] + 3, center[1] + 5],
-        [center[0] + 4, center[1] - 4],
-        [center[0] + 4, center[1] + 4],
-        [center[0] + 5, center[1] - 3],
-        [center[0] + 5, center[1] + 3],
-        [center[0] + 6, center[1] - 2],
-        [center[0] + 6, center[1] + 2],
-        [center[0] + 6, center[1] + 1],
-        [center[0] + 6, center[1] + 1],
-        [center[0] + 6, center[1]]
-    ]
+    let externalRing = [[center[0] - 6, center[1] - 2],
+    [center[0] - 6, center[1] - 1],
+    [center[0] - 6, center[1]],
+    [center[0] - 6, center[1] + 1],
+    [center[0] - 6, center[1] + 2],
+    [center[0] - 5, center[1] - 3],
+    [center[0] - 5, center[1] + 3],
+    [center[0] - 4, center[1] - 4],
+    [center[0] - 4, center[1] + 4],
+    [center[0] - 3, center[1] - 5],
+    [center[0] - 3, center[1] + 5],
+    [center[0] - 2, center[1] - 6],
+    [center[0] - 2, center[1] + 6],
+    [center[0] - 1, center[1] - 6],
+    [center[0] - 1, center[1] + 6],
+    [center[0], center[1] - 6],
+    [center[0], center[1] + 6],
+    [center[0] + 1, center[1] - 6],
+    [center[0] + 1, center[1] + 6],
+    [center[0] + 2, center[1] - 6],
+    [center[0] + 2, center[1] + 6],
+    [center[0] + 3, center[1] - 5],
+    [center[0] + 3, center[1] + 5],
+    [center[0] + 4, center[1] - 4],
+    [center[0] + 4, center[1] + 4],
+    [center[0] + 5, center[1] - 3],
+    [center[0] + 5, center[1] + 3],
+    [center[0] + 6, center[1] - 2],
+    [center[0] + 6, center[1] + 2],
+    [center[0] + 6, center[1] + 1],
+    [center[0] + 6, center[1] + 1],
+    [center[0] + 6, center[1]]]
 
     // RCL 1
 
@@ -238,8 +255,8 @@ function planStructures(roomName) {
         for (let posIndex in possiblePositions) {
             distances.push(Game.rooms[roomName].getPositionAt(possiblePositions[posIndex][0],
                 possiblePositions[posIndex][1]).getRangeTo(
-                Game.rooms[roomName].getPositionAt(center[0],
-                    center[1])));
+                    Game.rooms[roomName].getPositionAt(center[0],
+                        center[1])));
         }
         containerPos = possiblePositions[distances.indexOf(Math.min(...distances))];
         Memory.rooms[roomName].builds.push({
@@ -258,18 +275,14 @@ function planStructures(roomName) {
         }
         let roadStart = externalRing[distances.indexOf(Math.min(...distances))];
 
-        let path = Game.rooms[roomName].getPositionAt(roadStart[0], roadStart[1]).findPathTo(Game.rooms[roomName].getPositionAt(containerPos[0], containerPos[1]), {
-            swampCost: 2,
-            ignoreCreeps: true,
-            ignoreDestructibleStructures: true
-        });
+        let path = Game.rooms[roomName].getPositionAt(roadStart[0], roadStart[1]).findPathTo(Game.rooms[roomName].getPositionAt(containerPos[0], containerPos[1]), {swampCost: 2, ignoreCreeps: true, ignoreDestructibleStructures: true});
 
         for (var i = 0; i < path.length; i++) {
             Memory.rooms[roomName].builds.push({
                 'x': path[i].x,
                 'y': path[i].y,
                 'structureType': STRUCTURE_ROAD,
-                'minimalRCL': 2
+                'minimalRCL': 1
             });
         }
 
@@ -1191,8 +1204,8 @@ function planStructures(roomName) {
             for (let posIndex in possiblePositions) {
                 distances.push(Game.rooms[roomName].getPositionAt(possiblePositions[posIndex][0],
                     possiblePositions[posIndex][1]).getRangeTo(
-                    Game.rooms[roomName].getPositionAt(center[0],
-                        center[1])));
+                        Game.rooms[roomName].getPositionAt(center[0],
+                            center[1])));
             }
             linkPos = possiblePositions[distances.indexOf(Math.max(...distances))];
             if (linkPos) {
@@ -1202,7 +1215,8 @@ function planStructures(roomName) {
                     'structureType': STRUCTURE_LINK,
                     'minimalRCL': 5 + containerNumber
                 });
-            } else {
+            }
+            else {
                 console.log('[WARNING]: Unable to find a location for link')
             }
 
@@ -1400,8 +1414,8 @@ function planStructures(roomName) {
         for (let posIndex in possiblePositions) {
             distances.push(Game.rooms[roomName].getPositionAt(possiblePositions[posIndex][0],
                 possiblePositions[posIndex][1]).getRangeTo(
-                Game.rooms[roomName].getPositionAt(center[0],
-                    center[1])));
+                    Game.rooms[roomName].getPositionAt(center[0],
+                        center[1])));
         }
         containerPos = possiblePositions[distances.indexOf(Math.min(...distances))];
         Memory.rooms[roomName].builds.push({
@@ -1420,11 +1434,7 @@ function planStructures(roomName) {
         }
         let roadStart = externalRing[distances.indexOf(Math.min(...distances))];
 
-        let path = Game.rooms[roomName].getPositionAt(roadStart[0], roadStart[1]).findPathTo(Game.rooms[roomName].getPositionAt(containerPos[0], containerPos[1]), {
-            swampCost: 2,
-            ignoreCreeps: true,
-            ignoreDestructibleStructures: true
-        });
+        let path = Game.rooms[roomName].getPositionAt(roadStart[0], roadStart[1]).findPathTo(Game.rooms[roomName].getPositionAt(containerPos[0], containerPos[1]),{swampCost: 2, ignoreCreeps: true, ignoreDestructibleStructures: true});
 
         for (var i = 0; i < path.length; i++) {
             Memory.rooms[roomName].builds.push({
@@ -2043,63 +2053,55 @@ function planStructures(roomName) {
     // 1 Link
     controller = Game.rooms[roomName].controller;
 
-    if (controller) {
-        possiblePositions = [];
-        for (let i = -2; i < 3; i++) {
-            for (let j = -2; j < 3; j++) {
-                if ((i == -2 || i == 2 || j == -2 || j == 2) && terrain.get(controller.pos.x + i, controller.pos.y + j) != TERRAIN_MASK_WALL &&
-                    !Game.rooms[roomName].find(FIND_STRUCTURES, {
-                        filter: s => s.pos &&
-                            s.pos.x == controller.pos.x + i &&
-                            s.pos.y == controller.pos.y + j &&
-                            s.structureType != STRUCTURE_LINK && s.structureType != STRUCTURE_ROAD
-                    })[0]) {
-                    possiblePositions.push([controller.pos.x + i, controller.pos.y + j]);
-                }
+    possiblePositions = [];
+    for (let i = -2; i < 3; i++) {
+        for (let j = -2; j < 3; j++) {
+            if ((i == -2 || i == 2 || j == -2 || j == 2) && terrain.get(controller.pos.x + i, controller.pos.y + j) != TERRAIN_MASK_WALL &&
+                !Game.rooms[roomName].find(FIND_STRUCTURES, {
+                    filter: s => s.pos &&
+                        s.pos.x == controller.pos.x + i &&
+                        s.pos.y == controller.pos.y + j &&
+                        s.structureType != STRUCTURE_LINK && s.structureType != STRUCTURE_ROAD
+                })[0]) {
+                possiblePositions.push([controller.pos.x + i, controller.pos.y + j]);
             }
         }
-    
-    
-        distances = [];
-    
-        for (let posIndex in possiblePositions) {
-            distances.push(Game.rooms[roomName].getPositionAt(possiblePositions[posIndex][0],
-                possiblePositions[posIndex][1]).getRangeTo(
+    }
+
+
+    distances = [];
+
+    for (let posIndex in possiblePositions) {
+        distances.push(Game.rooms[roomName].getPositionAt(possiblePositions[posIndex][0],
+            possiblePositions[posIndex][1]).getRangeTo(
                 Game.rooms[roomName].getPositionAt(center[0],
                     center[1])));
-        }
-        linkPos = possiblePositions[distances.indexOf(Math.min(...distances))];
+    }
+    linkPos = possiblePositions[distances.indexOf(Math.min(...distances))];
+    Memory.rooms[roomName].builds.push({
+        'x': linkPos[0],
+        'y': linkPos[1],
+        'structureType': STRUCTURE_LINK,
+        'minimalRCL': 7
+    });
+
+    // road to link
+    distances = []
+    for (let ref of externalRing) {
+        distances.push(Game.rooms[roomName].getPositionAt(ref[0], ref[1]).getRangeTo(
+            Game.rooms[roomName].getPositionAt(linkPos[0], linkPos[1])));
+    }
+    let roadStart = externalRing[distances.indexOf(Math.min(...distances))];
+
+    let path = Game.rooms[roomName].getPositionAt(roadStart[0], roadStart[1]).findPathTo(Game.rooms[roomName].getPositionAt(linkPos[0], linkPos[1]),{swampCost: 2, ignoreCreeps: true, ignoreDestructibleStructures: true});
+
+    for (var i = 0; i < path.length; i++) {
         Memory.rooms[roomName].builds.push({
-            'x': linkPos[0],
-            'y': linkPos[1],
-            'structureType': STRUCTURE_LINK,
-            'minimalRCL': 7
+            'x': path[i].x,
+            'y': path[i].y,
+            'structureType': STRUCTURE_ROAD,
+            'minimalRCL': 1
         });
-
-    
-
-        // road to link
-        distances = []
-        for (let ref of externalRing) {
-            distances.push(Game.rooms[roomName].getPositionAt(ref[0], ref[1]).getRangeTo(
-                Game.rooms[roomName].getPositionAt(linkPos[0], linkPos[1])));
-        }
-        let roadStart = externalRing[distances.indexOf(Math.min(...distances))];
-
-        let path = Game.rooms[roomName].getPositionAt(roadStart[0], roadStart[1]).findPathTo(Game.rooms[roomName].getPositionAt(linkPos[0], linkPos[1]), {
-            swampCost: 2,
-            ignoreCreeps: true,
-            ignoreDestructibleStructures: true
-        });
-
-        for (var i = 0; i < path.length; i++) {
-            Memory.rooms[roomName].builds.push({
-                'x': path[i].x,
-                'y': path[i].y,
-                'structureType': STRUCTURE_ROAD,
-                'minimalRCL': 1
-            });
-        }
     }
 
 
