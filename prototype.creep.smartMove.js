@@ -15,7 +15,7 @@ Creep.prototype.smartMove =
 
         if (this.store.getFreeCapacity() > 0 && near) {
             if (this.harvest(near) == ERR_NOT_IN_RANGE || this.withdraw(near, RESOURCE_ENERGY) == ERR_NOT_IN_RANGE || this.pickup(near) == ERR_NOT_IN_RANGE) {
-                this.moveTo(near, { reusePath: 50 });
+                this.moveTo(near, { reusePath: 5 });
             }
             if (this.memory.action == 'harvest') {
                 this.memory.action = undefined;
@@ -23,7 +23,7 @@ Creep.prototype.smartMove =
             }
         }
         else {
-            this.moveTo(target, { reusePath: 50 });
+            this.moveTo(target, { reusePath: 5 });
         }
 
 

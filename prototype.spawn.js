@@ -14,7 +14,7 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
         switch (this.room.controller.level) {
             case 1:
                 targetNumbers['harvester'] = Math.ceil(4 / (3 - Memory.rooms[this.room.name].sourceNumber));
-                targetNumbers['builder'] = Math.ceil(2 / (3 - Memory.rooms[this.room.name].sourceNumber));
+                targetNumbers['builder'] = Math.ceil(3 / (3 - Memory.rooms[this.room.name].sourceNumber));
                 targetNumbers['upgrader'] = Math.ceil(2 / (3 - Memory.rooms[this.room.name].sourceNumber));
                 targetNumbers['repairer'] = Math.ceil(0 / (3 - Memory.rooms[this.room.name].sourceNumber));
                 targetNumbers['wall_repairer'] = Math.ceil(0 / (3 - Memory.rooms[this.room.name].sourceNumber));
@@ -284,7 +284,7 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
             }
         } else {
 
-            Memory.rooms[this.room.name].exits = _.sortBy(Memory.rooms[this.room.name].exits, e => Memory.rooms[e].sourceNumber ? Memory.rooms[e].sourceNumber : 0).reverse();
+            Memory.rooms[this.room.name].exits = _.sortBy(Memory.rooms[this.room.name].exits, e => (Memory.rooms[e] && Memory.rooms[e].sourceNumber) ? Memory.rooms[e].sourceNumber : 0).reverse();
             // If the room has all the workers, create workers for nearby rooms
             for (let exitId in Memory.rooms[this.room.name].exits) {
 

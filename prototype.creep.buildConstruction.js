@@ -30,7 +30,14 @@
 
 
         if (target) {
-            if (this.room.name == this.memory.targetRoom && this.build(target) == ERR_NOT_IN_RANGE) {
+
+            if (this.pos.isEqualTo(target.pos)){
+                this.moveTo(this.room.controller);
+                this.memory.action = 'buildConstruction';
+                this.memory.target = target;
+                return true;
+            }
+            else if (this.room.name == this.memory.targetRoom && this.build(target) == ERR_NOT_IN_RANGE) {
                 this.memory.action = 'buildConstruction';
                 this.memory.target = target;
                 this.smartMove(target);
