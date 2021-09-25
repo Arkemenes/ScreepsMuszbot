@@ -9,50 +9,8 @@ module.exports = {
 
         for (let roomName in Game.rooms) {
             let room = Game.rooms[roomName];
-            if (!Memory.rooms[roomName]) {
-                Memory.rooms[roomName] = {}
-            }
-
-            if (!Memory.rooms[roomName].exits) {
-                Memory.rooms[roomName].exits = Game.map.describeExits(roomName);
-
-                for (let exit in Memory.rooms[roomName].exits) {
-                    if (!Memory.rooms[Memory.rooms[roomName].exits[exit.roomName]]) {
-                        Memory.rooms[Memory.rooms[roomName].exits[exit.roomName]] = {};
-                    }
-                }
-            }
-
-            if (Memory.rooms[roomName].resourceNumber == undefined) {
-                Memory.rooms[roomName].sourceNumber = room.find(FIND_SOURCES).length;
-            }
-
-            if (Memory.rooms[roomName].resourceNumber == undefined) {
-                let mineral = room.find(FIND_MINERALS)[0];
-                Memory.rooms[roomName].mineral = (mineral) ? mineral.mineralType : null;
-            }
-
-            if (Memory.rooms[roomName].hasController == undefined) {
-                Memory.rooms[roomName].hasController = (room.controller) ? true : false;
-            }
-
-            Memory.rooms[roomName].reservation = (room.controller) ? room.controller.reservation : undefined;
-
-            Memory.rooms[roomName].owner = (room.controller) ? room.controller.owner : undefined;
-
-            Memory.rooms[roomName].enemies = room.find(FIND_HOSTILE_CREEPS).length;
-
-            Memory.rooms[roomName].lastVisit = Game.time;
-
-
-
-            if (!Memory.rooms[roomName].builds) {
-                Memory.rooms[roomName].builds = {}
-            }
-
-            
             if (Game.time % 10 == 0 && (
-                    !Memory.rooms[roomName].builds || !Memory.rooms[roomName].builds.length)) {
+                    !Memory.rooms[roomName].builds || !Memory.rooms[roomName].builds.length || !Memory.rooms[roomName].center || Memory.rooms[roomName].center[0])) {
                 planStructures(roomName);
 
             } else if (Game.rooms[roomName] && Game.rooms[roomName].controller && Game.rooms[roomName].controller.my){
@@ -176,6 +134,8 @@ function planStructures(roomName) {
     const terrain = new Room.Terrain(roomName);
     Memory.rooms[roomName].builds = [];
 
+    let center = undefined;
+
     if (!Memory.rooms[roomName].center || !Memory.rooms[roomName].center[0] == undefined || Memory.rooms[roomName].center[1] == undefined) {
         let mySpawns = Game.rooms[roomName].find(FIND_MY_SPAWNS);
         if (!mySpawns[0]) {
@@ -201,12 +161,9 @@ function planStructures(roomName) {
     }
 
     if (!center) {
-        return;
+        return false;
     }
-
     Memory.rooms[roomName].center = center;
-
-    Memory.rooms[roomName].center = Game.rooms[roomName].getPositionAt(center[0], center[1]);
 
     let externalRing = [
         [center[0] - 6, center[1] - 2],

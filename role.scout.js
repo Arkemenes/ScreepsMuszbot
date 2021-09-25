@@ -10,7 +10,6 @@ module.exports = {
                 }
             }
         }
-        
         let targetRooms = _.sortBy(Memory.rooms[creep.room.name].exits, r => (Memory.rooms[r]) ? Memory.rooms[r].lastVisit : 0);
 
         for (let targetRoom of targetRooms) {

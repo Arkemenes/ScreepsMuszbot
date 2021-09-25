@@ -6,7 +6,7 @@ StructureTower.prototype.runRole =
             this.attack(closestHostile);
         }
 
-        if (_.sum(Game.creeps, (c) => c.memory.role == 'miner') >= this.room.find(FIND_SOURCES).length) {
+        if (Memory.rooms[this.room.name].numberOfMiners >= Memory.rooms[this.room.name].numberOfLinks) {
             if (this.store.energy >= 0.7 * this.store.getCapacity(RESOURCE_ENERGY)) {
                 let damagedStructures = this.room.find(FIND_STRUCTURES, {
                     filter: (structure) => structure.hits < structure.hitsMax &&

@@ -25,7 +25,8 @@ Creep.prototype.runRole =
         if (!this.memory || !this.memory.role) {
             this.memory = { 'role': 'harvester' }
         }
-        if (this.ticksToLive > 1) {
+        
+        if (this.ticksToLive > 2) {
             roles[this.memory.role].run(this);
         }
         else {
@@ -33,6 +34,8 @@ Creep.prototype.runRole =
         }
 
     };
+
+
 /** @function 
     @param {string} action
     @param {string} targetID */
