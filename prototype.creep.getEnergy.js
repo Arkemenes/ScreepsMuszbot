@@ -128,7 +128,7 @@ Creep.prototype.getEnergy =
                 this.memory.target = target;
                 this.smartMove(target);
                 return true;
-            } else if (this.store.getFreeCapacity() && (this.memory.role == 'harvester' || (target.energy && Memory.rooms[this.room.name].numberOfMiners <  Memory.rooms[this.room.name].sourceNumber) )) {
+            } else if (this.store.getFreeCapacity() && ((target.structureType == STRUCTURE_CONTAINER && Memory.rooms[this.room.name].numberOfMiners ==  Memory.rooms[this.room.name].sourceNumber) || this.memory.role == 'harvester' || (target.energy && Memory.rooms[this.room.name].numberOfMiners <  Memory.rooms[this.room.name].sourceNumber) )) {
                 this.memory.action = 'getEnergy';
                 this.memory.target = target;
                 return true;
