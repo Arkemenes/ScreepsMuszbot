@@ -3,6 +3,7 @@ Creep.prototype.runRoleScout =
     function () {
 
         if (this.room.find(FIND_HOSTILE_CREEPS)[0]) {
+            this.notifyWhenAttacked(false)
             this.say('Hello!')
         }
 
