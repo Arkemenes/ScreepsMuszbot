@@ -20,8 +20,8 @@ Creep.prototype.getEnergy =
 
         if (!target) {
 
-            let targets = this.pos.findInRange(FIND_DROPPED_RESOURCES, 20);
-            target = _.sortBy(targets, s => s.pos.getDirectionTo(this.pos.x, this.pos.y))[0];
+            // let targets = this.pos.findInRange(FIND_DROPPED_RESOURCES, 20);
+            // target = _.sortBy(targets, s => s.pos.getDirectionTo(this.pos.x, this.pos.y))[0];
 
             if (!target) {
 
@@ -30,7 +30,7 @@ Creep.prototype.getEnergy =
                 }
                 else if (this.memory.role == 'harvester') {
 
-                    target = this.pos.findClosestByPath(FIND_DROPPED_RESOURCES);
+                    // target = this.pos.findClosestByPath(FIND_DROPPED_RESOURCES);
 
                     if (!target) {
 
@@ -128,7 +128,7 @@ Creep.prototype.getEnergy =
                 this.memory.target = target;
                 this.smartMove(target);
                 return true;
-            } else if (this.store.getFreeCapacity() && (this.memory.role == 'harvester' || target.structureType == STRUCTURE_CONTAINER || (target.energy && Memory.rooms[this.room.name].numberOfMiners <  Memory.rooms[this.room.name].sourceNumber) )) {
+            } else if (this.store.getFreeCapacity() && (this.memory.role == 'harvester' || (target.energy && Memory.rooms[this.room.name].numberOfMiners <  Memory.rooms[this.room.name].sourceNumber) )) {
                 this.memory.action = 'getEnergy';
                 this.memory.target = target;
                 return true;

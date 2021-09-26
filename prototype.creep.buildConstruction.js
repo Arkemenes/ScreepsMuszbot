@@ -7,8 +7,8 @@
 
             let exitDir = Game.map.findExit(this.room.name, this.memory.targetRoom);
             let Exit = this.pos.findClosestByPath(exitDir);
-            this.memory.action = 'getEnergy';
-            this.memory.target = target;
+            this.memory.action = undefined;
+            this.memory.target = undefined;
             this.moveTo(Exit);
             return true;
         }
@@ -16,7 +16,7 @@
 
         if (!target) {
             let targets = this.pos.findInRange(FIND_STRUCTURES, 5, {
-                filter: (s) => s.hits < 500 && s.hits < s.hitsMax
+                filter: (s) => s.hits < Math.min(1000, 0.2 * s.hitsMax) && s.hits < s.hitsMax
             });
 
             let repairTarget = _.sortBy(targets, s => s.hits)[0];

@@ -7,7 +7,9 @@ Creep.prototype.runRoleRepairer =
         }
         else if (this.store.getFreeCapacity() < 0.9 * this.store.getCapacity()) {
             if (!this.repairStructure()) {
-                this.upgrade();
+                if (!this.buildConstruction()) {
+                    this.upgrade();
+                }
             }
         }
         // if creep is supposed to harvest energy from source

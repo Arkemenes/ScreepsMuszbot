@@ -1,7 +1,4 @@
 
-// Any modules that you use that modify the game's prototypes should be require'd
-// before you require the profiler.
-const profiler = require('screeps-profiler');
 const intel = require('intel');
 const architect = require('architect');
 
@@ -10,6 +7,10 @@ require('prototype.creep');
 require('prototype.tower');
 require('prototype.spawn');
 require('prototype.link');
+
+// Any modules that you use that modify the game's prototypes should be require'd
+// before you require the profiler.
+const profiler = require('screeps-profiler');
 
 // This line monkey patches the global prototypes.
 profiler.enable();

@@ -294,10 +294,8 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
                 if (Memory.rooms[exit] && !Memory.rooms[exit].owner) {
                     let exit = Memory.rooms[this.room.name].exits[exitId];
 
-
                     // If the room is mine and has less than 1 and has a construction site, create a remote one
-                    if (Memory.rooms[exit].numberOfBuilders < 1 && Game.rooms[exit] && 
-                                (Game.rooms[exit].find(FIND_CONSTRUCTION_SITES)[0] || Game.rooms[exit].find(FIND_STRUCTURES, {filter : (s) => s.my || !s.owner })[0])) {
+                    if (Memory.rooms[exit].numberOfBuilders < 1 && Game.rooms[exit] && Game.rooms[exit].find(FIND_CONSTRUCTION_SITES)[0]) {
                         var body = createBody([WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE], energy);
 
                         if (this.spawnCreep(body, 'b' + Game.time, {
@@ -329,6 +327,23 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
 
                     }
 
+                    // If the room is mine and has less than 1 and has a construction site, create a remote one
+                    else if (Memory.rooms[exit].numberOfRepairers < 1 && Game.rooms[exit] && 
+                            (Game.rooms[exit].find(FIND_STRUCTURES, {filter : (s) => s.my || !s.owner })[0])) {
+                        var body = createBody([WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE], energy);
+
+                        if (this.spawnCreep(body, 'r' + Game.time, {
+                            memory: {
+                                role: 'repairer',
+                                home: this.room.name,
+                                targetRoom: exit
+                            },
+                            directions: [TOP_RIGHT, TOP_LEFT, TOP, RIGHT, LEFT]
+                        }) == 0) {
+                            Memory.rooms[exit].numberOfRepairers++;
+                        }
+                    } 
+
                     // If the room is mine and has less miners than containers, create a remote one
                     else if (Memory.rooms[exit].numberOfMiners < Memory.rooms[exit].numberOfContainers) {
                         var body = createBody([MOVE, WORK, WORK, WORK, WORK, WORK, MOVE], energy);
@@ -346,7 +361,7 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
                     } 
 
                     // If the room is mine and has less transporters than containers, create a remote one
-                    if (Memory.rooms[exit].numberOfTransporters < Memory.rooms[exit].numberOfContainers) {
+                    if (Memory.rooms[exit].numberOfTransporters < Memory.rooms[exit].numberOfContainers && Game.rooms[Memory.this.home].storage) {
                         var body = createBody([MOVE, CARRY, CARRY, MOVE, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY], energy);
 
                         if (this.spawnCreep(body, 't' + Game.time, {
