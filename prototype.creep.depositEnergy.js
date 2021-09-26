@@ -7,6 +7,10 @@
             target = undefined;
         }
 
+        if (target && target.energy == target.energyCapacity) {
+            target = undefined;
+        }
+
         if (!target) {
 
             if (this.memory.role == 'harvester') {
