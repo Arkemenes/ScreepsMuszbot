@@ -63,10 +63,18 @@
                     });
 
                 }
-                if (!target && 
+                if (!target &&  this.room.storage &&
                     this.room.storage.store.energy < this.room.storage.storeCapacity) {
                     
                     target = this.room.storage;
+                }
+
+                if (!target) {
+                    target = this.pos.findClosestByPath(FIND_MY_STRUCTURES, {
+                        filter: (s) => ((s.structureType == STRUCTURE_SPAWN
+                            || s.structureType == STRUCTURE_EXTENSION)
+                            && s.energy < s.energyCapacity)
+                    });
                 }
             }
             else {
@@ -93,7 +101,8 @@
 
         }
 
-        if (!target && this.room.name != this.memory.home) {
+        if (!target && this.room.name != this.memory.home && Game.rooms[this.memory.home] &&
+                Game.rooms[this.memory.home].energyAvailable <= 0.9 * Game.rooms[this.memory.home].energyCapacityAvailable) {
             let exitDir = Game.map.findExit(this.room.name, this.memory.home);
             let Exit = this.pos.findClosestByPath(exitDir);
             this.memory.action = 'depositEnergy';

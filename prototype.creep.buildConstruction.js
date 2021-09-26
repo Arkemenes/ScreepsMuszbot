@@ -3,10 +3,20 @@
     Creep.prototype.buildConstruction =
     function (target) {
 
+        if (this.room.name != this.memory.targetRoom && Game.rooms[this.memory.targetRoom] && Game.rooms[this.memory.targetRoom].find(FIND_CONSTRUCTION_SITES)[0]) {
+
+            let exitDir = Game.map.findExit(this.room.name, this.memory.targetRoom);
+            let Exit = this.pos.findClosestByPath(exitDir);
+            this.memory.action = 'getEnergy';
+            this.memory.target = target;
+            this.moveTo(Exit);
+            return true;
+        }
+
 
         if (!target) {
             let targets = this.pos.findInRange(FIND_STRUCTURES, 5, {
-                filter: (s) => s.hits < 100
+                filter: (s) => s.hits < 500 && s.hits < s.hitsMax
             });
 
             let repairTarget = _.sortBy(targets, s => s.hits)[0];
@@ -37,13 +47,13 @@
                 this.memory.target = target;
                 return true;
             }
-            else if (this.room.name == this.memory.targetRoom && this.build(target) == ERR_NOT_IN_RANGE) {
+            else if (this.build(target) == ERR_NOT_IN_RANGE) {
                 this.memory.action = 'buildConstruction';
                 this.memory.target = target;
                 this.smartMove(target);
                 return true;
             }
-            else if (this.room.name == this.memory.targetRoom && (target.structureType == STRUCTURE_RAMPART || target.structureType == STRUCTURE_WALL)) {
+            else if ((target.structureType == STRUCTURE_RAMPART || target.structureType == STRUCTURE_WALL)) {
                 this.memory.action = 'repairStructure';
                 this.memory.target = target;
             }

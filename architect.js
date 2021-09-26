@@ -47,13 +47,13 @@ module.exports = {
 
             if (room.controller && room.controller.my) {
                 if (Game.time % 10 == 0 && (
-                    !Memory.rooms[roomName].builds || !Memory.rooms[roomName].builds.length || !Memory.rooms[roomName].center)) {
+                    !Memory.rooms[roomName].builds || !Memory.rooms[roomName].builds.length)) {
                     planStructures(roomName);
 
                 }
                 else {
 
-                    for (let i = 0; i < Math.min(Memory.rooms[roomName].builds.length, 10); i++) {
+                    for (let i = 0; i < Math.min(Memory.rooms[roomName].builds.length, 3); i++) {
                         if (room.find(FIND_CONSTRUCTION_SITES)[0]) {
                             break;
                         }
@@ -62,7 +62,7 @@ module.exports = {
                                 Memory.rooms[roomName].builds[i].y,
                                 Memory.rooms[roomName].builds[i].structureType) == 0) {
 
-                                break;
+                                // break;
                             }
                             else {
                                 Memory.rooms[roomName].builds.splice(i, 1);
@@ -2331,7 +2331,7 @@ function planStructures(roomName) {
     // connection to other maps
 
     for (let exit of Memory.rooms[roomName].exits) {
-        if (!Memory.rooms[exit].enemies && Game.rooms[exit]) {
+        if (Memory.rooms[exit] && !Memory.rooms[exit].enemies && Game.rooms[exit]) {
 
             if (Memory.rooms[exit].my) {
 

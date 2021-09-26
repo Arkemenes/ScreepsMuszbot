@@ -4,7 +4,7 @@ Creep.prototype.smartMove =
     function (target) {
 
 
-        let near = this.pos.findInRange(FIND_DROPPED_RESOURCES, 1)[0];
+        let near = this.pos.findInRange(FIND_DROPPED_RESOURCES, 3)[0];
 
         if (!near) {
             near = this.pos.findInRange(FIND_STRUCTURES, 1, {

@@ -22,8 +22,8 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
                 targetNumbers['scout'] = Math.ceil(0 / (3 - Memory.rooms[this.room.name].sourceNumber));
                 break;
             case 2:
-                targetNumbers['harvester'] = Math.ceil(8 / (3 - Memory.rooms[this.room.name].sourceNumber));
-                targetNumbers['builder'] = Math.ceil(3 / (3 - Memory.rooms[this.room.name].sourceNumber));
+                targetNumbers['harvester'] = Math.ceil(2 / (3 - Memory.rooms[this.room.name].sourceNumber));
+                targetNumbers['builder'] = Math.ceil(4 / (3 - Memory.rooms[this.room.name].sourceNumber));
                 targetNumbers['upgrader'] = Math.ceil(2 / (3 - Memory.rooms[this.room.name].sourceNumber));
                 targetNumbers['repairer'] = Math.ceil(0 / (3 - Memory.rooms[this.room.name].sourceNumber));
                 targetNumbers['wall_repairer'] = Math.ceil(0 / (3 - Memory.rooms[this.room.name].sourceNumber));
@@ -97,7 +97,7 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
             var energy = Math.max(this.room.energyAvailable, 201);
             var body = createBody([WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE], energy);
 
-            if (this.spawnCreep(body, Game.time, {  memory: {role: 'harvester', home: this.room.name, targetRoom: this.room.name },
+            if (this.spawnCreep(body, 'h' + Game.time, {  memory: {role: 'harvester', home: this.room.name, targetRoom: this.room.name },
                                                     directions: [TOP_RIGHT, TOP_LEFT, TOP, RIGHT, LEFT]}) != 0) {
 
                 // if the spawn has failed, transform a valid creep on harvester
@@ -136,7 +136,7 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
 
             var body = createBody([MOVE, WORK, WORK, WORK, WORK, WORK, MOVE, CARRY], energy);
 
-            if (this.spawnCreep(body, Game.time, {
+            if (this.spawnCreep(body, 'm' + Game.time, {
                     memory: {
                         role: 'miner',
                         home: this.room.name,
@@ -153,7 +153,7 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
 
             var body = createBody([WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE], energy);
 
-            if (this.spawnCreep(body, Game.time, {
+            if (this.spawnCreep(body, 'h' + Game.time, {
                     memory: {
                         role: 'harvester',
                         home: this.room.name,
@@ -171,7 +171,7 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
 
             var body = createBody([WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE], energy);
 
-            if (this.spawnCreep(body, Game.time, {
+            if (this.spawnCreep(body, 'b' + Game.time, {
                     memory: {
                         role: 'builder',
                         home: this.room.name,
@@ -188,7 +188,7 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
 
             var body = createBody([WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE], energy);
 
-            if (this.spawnCreep(body, Game.time, {
+            if (this.spawnCreep(body, 'u' + Game.time, {
                     memory: {
                         role: 'upgrader',
                         home: this.room.name,
@@ -203,7 +203,7 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
         // If there is less repairers than target, create a new one
         else if (Memory.rooms[this.room.name].numberOfRepairers < targetNumbers['repairer']) {
             var body = createBody([WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE], energy);
-            if (this.spawnCreep(body, Game.time, {
+            if (this.spawnCreep(body, 'r' + Game.time, {
                     memory: {
                         role: 'repairer',
                         home: this.room.name,
@@ -220,7 +220,7 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
 
             var body = createBody([WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE], energy);
 
-            if (this.spawnCreep(body, Game.time, {
+            if (this.spawnCreep(body, 'w' + Game.time, {
                     memory: {
                         role: 'wallRepairer',
                         home: this.room.name,
@@ -239,7 +239,7 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
 
             var body = createBody([MOVE, CARRY, CARRY, MOVE, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY], energy);
 
-            if (this.spawnCreep(body, Game.time, {
+            if (this.spawnCreep(body, 't' + Game.time, {
                     memory: {
                         role: 'transporter',
                         home: this.room.name,
@@ -255,7 +255,7 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
         else if (Memory.rooms[this.room.name].numberOfDistributors == 0 && Memory.rooms[this.room.name].numberOfLinks &&
             this.pos.x == Memory.rooms[this.room.name].center[0] && this.pos.y+1 == Memory.rooms[this.room.name].center[1]) {
             var body = createBody([CARRY, WORK, CARRY, WORK, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY], energy);
-            if (this.spawnCreep(body, Game.time, {
+            if (this.spawnCreep(body, 'd' + Game.time, {
                     memory: {
                         role: 'distributor',
                         home: this.room.name,
@@ -272,7 +272,7 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
 
             var body = createBody([MOVE, MOVE], energy);
 
-            if (this.spawnCreep(body, Game.time, {
+            if (this.spawnCreep(body, 's' + Game.time, {
                     memory: {
                         role: 'scout',
                         home: this.room.name,
@@ -291,15 +291,16 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
                 let exit = Memory.rooms[this.room.name].exits[exitId];
 
                 // Only create long distance workers if there is no enemies on that room
-                if (Memory.rooms[exit] && !Memory.rooms[exit].enemies) {
+                if (Memory.rooms[exit] && !Memory.rooms[exit].owner) {
                     let exit = Memory.rooms[this.room.name].exits[exitId];
 
 
-                    // If the room is mine and has less than 1 builders, create a remote one
-                    if (Memory.rooms[exit].numberOfBuilders < 1 && Memory.rooms[exit].sourceNumber) {
+                    // If the room is mine and has less than 1 and has a construction site, create a remote one
+                    if (Memory.rooms[exit].numberOfBuilders < 1 && Game.rooms[exit] && 
+                                (Game.rooms[exit].find(FIND_CONSTRUCTION_SITES)[0] || Game.rooms[exit].find(FIND_STRUCTURES, {filter : (s) => s.my || !s.owner })[0])) {
                         var body = createBody([WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE], energy);
 
-                        if (this.spawnCreep(body, Game.time, {
+                        if (this.spawnCreep(body, 'b' + Game.time, {
                             memory: {
                                 role: 'builder',
                                 home: this.room.name,
@@ -311,11 +312,11 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
                         }
                     } 
                     
-                    // If the room is mine or reserved for me and has less than 2 builders, create a remote one
-                    else if (!Memory.rooms[exit].numberOfHarvesters || Memory.rooms[exit].numberOfHarvesters < Memory.rooms[exit].sourceNumber) {
+                    // If the room is mine or reserved for me and has less than source number, create a remote one
+                    else if (Memory.rooms[exit].numberOfHarvesters < Memory.rooms[exit].sourceNumber * 2) {
                         var body = createBody([WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE, WORK, CARRY, MOVE], energy);
 
-                        if (this.spawnCreep(body, Game.time, {
+                        if (this.spawnCreep(body, 'h' + Game.time, {
                             memory: {
                                 role: 'harvester',
                                 home: this.room.name,
@@ -328,6 +329,37 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
 
                     }
 
+                    // If the room is mine and has less miners than containers, create a remote one
+                    else if (Memory.rooms[exit].numberOfMiners < Memory.rooms[exit].numberOfContainers) {
+                        var body = createBody([MOVE, WORK, WORK, WORK, WORK, WORK, MOVE], energy);
+
+                        if (this.spawnCreep(body, 'm' + Game.time, {
+                            memory: {
+                                role: 'miner',
+                                home: this.room.name,
+                                targetRoom: exit
+                            },
+                            directions: [TOP_RIGHT, TOP_LEFT, TOP, RIGHT, LEFT]
+                        }) == 0) {
+                            Memory.rooms[exit].numberOfMiners++;
+                        }
+                    } 
+
+                    // If the room is mine and has less transporters than containers, create a remote one
+                    if (Memory.rooms[exit].numberOfTransporters < Memory.rooms[exit].numberOfContainers) {
+                        var body = createBody([MOVE, CARRY, CARRY, MOVE, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY], energy);
+
+                        if (this.spawnCreep(body, 't' + Game.time, {
+                            memory: {
+                                role: 'transporter',
+                                home: this.room.name,
+                                targetRoom: exit
+                            },
+                            directions: [TOP_RIGHT, TOP_LEFT, TOP, RIGHT, LEFT]
+                        }) == 0) {
+                            Memory.rooms[exit].numberOfTransporters++;
+                        }
+                    } 
 
                     // If can claim that room, create a claimer
                     else if (Memory.myRooms.length < Game.gcl &&
@@ -340,7 +372,7 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
                                 Memory.rooms[exit].owner.username != "Arkemenes"))) {
 
                         var body = createBody([MOVE, CLAIM, WORK, CARRY, WORK, CARRY, WORK, CARRY, WORK, CARRY], energy);
-                        this.spawnCreep(body, Game.time, {
+                        this.spawnCreep(body, 'c' + Game.time, {
                             memory: {
                                 role: 'claimer',
                                 home: this.room.name,
@@ -358,7 +390,7 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
                                 this.room.energyAvailable > 1300) {
 
                         var body = createBody([MOVE, CLAIM, CLAIM], energy);
-                        if (this.spawnCreep(body, Game.time, {
+                        if (this.spawnCreep(body, 'r' + Game.time, {
                             memory: {
                                 role: 'claimer',
                                 home: this.room.name,

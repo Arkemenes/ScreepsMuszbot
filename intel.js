@@ -51,7 +51,6 @@ module.exports = {
                 Memory.rooms[roomName].builds = {}
             }
 
-            // console.log(room.name)
             if (room.controller) {
                 Memory.rooms[roomName].numberOfHarvesters = _.sum(Game.creeps, (c) => c.memory.role == 'harvester' && c.ticksToLive > 5 && c.memory.targetRoom == room.name);
                 Memory.rooms[roomName].numberOfUpgraders =  _.sum(Game.creeps, (c) => c.memory.role == 'upgrader' && c.ticksToLive > 5 && c.memory.targetRoom == room.name);

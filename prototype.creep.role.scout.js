@@ -3,11 +3,11 @@ Creep.prototype.runRoleScout =
     function () {
 
         if (this.room.find(FIND_HOSTILE_CREEPS)[0]) {
-            this.say('Oi Duuuh!')
+            this.say('Hello!')
         }
 
-        if (this.room.controller && (!this.room.controller.sign || this.room.controller.sign.username != 'Arkemenes')) {
-            if (this.signController(this.room.controller, "I'm watching you!") == ERR_NOT_IN_RANGE) {
+        if (this.room.controller && (this.room.controller.sign) && !Memory.rooms[this.room.name].enemies && this.room.name != 'E18N59') {
+            if (this.signController(this.room.controller, "") == ERR_NOT_IN_RANGE) {
                 if (this.moveTo(this.room.controller) == 0) {
                     return true;
                 }
@@ -31,7 +31,8 @@ Creep.prototype.runRoleScout =
                 this.memory.targetRoom = targetRoom;
     
                 let exitDir = Game.map.findExit(this.room.name, this.memory.targetRoom);
-                let Exit = this.pos.findClosestByPath(exitDir);
+                let Exit = this.pos.findClosestByPath(exitDir, {filter : (p) => !p.findInRange(FIND_STRUCTURES,0)[0] });
+
                 if (this.moveTo(Exit) == 0) {
                     this.memory.target = Exit;
                     return true;

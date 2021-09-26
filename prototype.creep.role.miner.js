@@ -1,6 +1,16 @@
 /** @function */
 Creep.prototype.runRoleMiner =
     function () {
+        
+        if (this.room.name != this.memory.targetRoom) {
+
+            let exitDir = Game.map.findExit(this.room.name, this.memory.targetRoom);
+            let Exit = this.pos.findClosestByPath(exitDir);
+            this.memory.action = 'getEnergy';
+            this.memory.target = target;
+            this.moveTo(Exit);
+            return true;
+        }
 
         if (this.memory.action && this.memory.target && (this.pos.x != this.memory.target.pos.x || this.pos.y != this.memory.target.pos.y)) {
             this.execAction(this.memory.action, this.memory.target.id);
