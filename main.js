@@ -112,6 +112,11 @@ module.exports.loop = function () {
             cpu = new_cpu;
         }
 
+
+        if(Game.cpu.bucket == 10000) {
+            Game.cpu.generatePixel();
+        }
+
     });
 };
 
