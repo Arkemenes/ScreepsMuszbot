@@ -1,4 +1,4 @@
-StructureSpawn.prototype.spawnCreepsIfNecessary =
+Spawn.prototype.spawnCreepsIfNecessary =
     function () {
 
         // If busy, there is nothing to do
@@ -290,8 +290,23 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
 
                 let exit = Memory.rooms[this.room.name].exits[exitId];
 
+                if (Memory.rooms[exit] && Memory.rooms[exit].numberOfBrusiers < Math.max(Memory.rooms[exit].enemies, Memory.rooms[exit].enemyStructures)) {
+                    var body = createBody([ATTACK, MOVE, ATTACK, MOVE, HEAL, ATTACK, MOVE, ATTACK, MOVE, HEAL], energy);
+
+                    if (this.spawnCreep(body, 'B' + Game.time, {
+                        memory: {
+                            role: 'brusier',
+                            home: this.room.name,
+                            targetRoom: exit
+                        },
+                        directions: [TOP_RIGHT, TOP_LEFT, TOP, RIGHT, LEFT]
+                    }) == 0) {
+                        Memory.rooms[exit].numberOfBrusiers++;
+                    }
+                }
+
                 // Only create long distance workers if there is no enemies on that room
-                if (Memory.rooms[exit] && !Memory.rooms[exit].owner) {
+                else if (Memory.rooms[exit] && !Memory.rooms[exit].owner) {
                     let exit = Memory.rooms[this.room.name].exits[exitId];
 
                     // If the room is mine and has less than 1 and has a construction site, create a remote one
@@ -378,7 +393,7 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
 
                     // If can claim that room, create a claimer
                     else if (Memory.myRooms.length < Game.gcl &&
-                        !Memory.rooms[this.room.name].numberOfClaimers &&
+                        !Memory.rooms[exit].numberOfClaimers &&
                         Memory.rooms[exit].hasController &&
                         Memory.rooms[exit].center &&
                         energy > 800 &&
@@ -395,11 +410,12 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
                             },
                             directions: [TOP_RIGHT, TOP_LEFT, TOP, RIGHT, LEFT]
                         });
+                        Memory.rooms[exit].numberOfClaimers++;
                         console.log('building new claimer from ' + this.room.name + ' to room ' + exit)
                     } 
                     
                     // If cannot claim that room, but can reserve it, also create a claimer
-                    else if (!Memory.rooms[this.room.name].numberOfClaimers &&
+                    else if (!Memory.rooms[exit].numberOfClaimers &&
                                 Memory.rooms[exit].hasController &&
                                 !Memory.rooms[exit].my &&
                                 this.room.energyAvailable > 1300) {
@@ -413,7 +429,7 @@ StructureSpawn.prototype.spawnCreepsIfNecessary =
                             },
                             directions: [TOP_RIGHT, TOP_LEFT, TOP, RIGHT, LEFT]
                         }) == 0) {
-                            Memory.rooms[this.room.name].numberOfClaimers++;
+                            Memory.rooms[exit].numberOfClaimers++;
                             console.log('building new reserver from ' + this.room.name + ' to room ' + exit);
                         }
                         

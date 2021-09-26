@@ -12,6 +12,10 @@ Creep.prototype.runRoleMiner =
             return true;
         }
 
+        if (this.memory.action = 'moveTo' && Game.time % 10 == 0) {
+            this.memory.target = undefined;
+        }
+
         if (this.memory.action && this.memory.target && (this.pos.x != this.memory.target.pos.x || this.pos.y != this.memory.target.pos.y)) {
             this.execAction(this.memory.action, this.memory.target.id);
         }

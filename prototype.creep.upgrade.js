@@ -8,7 +8,7 @@
         }
 
 
-        if (target) {
+        if (target && target.my) {
             if (this.upgradeController(this.room.controller) == ERR_NOT_IN_RANGE) {
                 this.memory.action = 'upgrade';
                 this.memory.target = target;

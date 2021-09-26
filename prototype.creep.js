@@ -6,6 +6,7 @@ require('prototype.creep.repairWall');
 require('prototype.creep.smartMove');
 require('prototype.creep.upgrade');
 
+require('prototype.creep.role.brusier')
 require('prototype.creep.role.builder')
 require('prototype.creep.role.claimer')
 require('prototype.creep.role.distributor')
@@ -21,6 +22,9 @@ Creep.prototype.runRole =
     function () {
 
         switch (this.memory.role) {
+            case 'brusier':
+                this.runRoleBrusier();
+                break;
             case 'builder':
                 this.runRoleBuilder();
                 break;

@@ -1,5 +1,5 @@
 
-const intel = require('intel');
+require('intel');
 const architect = require('architect');
 
 // import modules
@@ -12,7 +12,7 @@ require('prototype.link');
 // before you require the profiler.
 const profiler = require('screeps-profiler');
 
-// This line monkey patches the global prototypes.
+// // This line monkey patches the global prototypes.
 profiler.enable();
 module.exports.loop = function () {
     profiler.wrap(function () {
@@ -20,7 +20,7 @@ module.exports.loop = function () {
         let cpu = Game.cpu.getUsed();
         let new_cpu = cpu;
 
-        intel.getIntel();
+        getIntel();
 
 
         if (Memory.visualizeCPU) {
@@ -113,7 +113,7 @@ module.exports.loop = function () {
         }
 
 
-        if(Game.cpu.bucket == 10000) {
+        if(Game.cpu.bucket == 10000 && Game.cpu.generatePixel) {
             Game.cpu.generatePixel();
         }
 

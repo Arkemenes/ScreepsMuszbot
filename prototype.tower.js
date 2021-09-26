@@ -1,7 +1,13 @@
 // create a new function for StructureTower
 StructureTower.prototype.runRole =
     function () {
-        let closestHostile = this.pos.findClosestByRange(FIND_HOSTILE_CREEPS);
+        let hostiles = this.room.find(FIND_HOSTILE_CREEPS, {filter : (x) => _.some(x.body, y => [ATTACK, WORK, RANGED_ATTACK, CARRY, CLAIM].includes(y.type))});
+
+        hostiles = _.sortBy(hostiles, s => s.hits);
+
+        let closestHostile = _.sortBy(hostiles, s => s.pos.getDirectionTo(this.pos.x, this.pos.y))[0];
+
+
         if (closestHostile) {
             this.attack(closestHostile);
         }

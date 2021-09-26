@@ -15,9 +15,9 @@ Creep.prototype.runRoleHarvester =
         else if (this.store.energy.valueOf()) {
             if (!this.depositEnergy()) {
                 if (!this.buildConstruction()) {
-                    if (!this.repairStructure()) {
-                        if (!this.repairWall()) {
-                            this.upgrade();
+                    if (!this.upgrade()) {
+                        if (!this.repairStructure()) {
+                            this.repairWall();
                         }
                     }
                 }
