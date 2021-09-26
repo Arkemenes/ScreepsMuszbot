@@ -35,6 +35,10 @@
 
 
         if (!target) {
+            target = this.pos.findClosestByPath(FIND_CONSTRUCTION_SITES, {filter: (c) => c.structureType == STRUCTURE_CONTAINER});
+        }
+
+        if (!target) {
             target = this.pos.findClosestByPath(FIND_CONSTRUCTION_SITES);
         }
 
