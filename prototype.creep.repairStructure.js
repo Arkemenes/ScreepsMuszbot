@@ -3,7 +3,7 @@
     Creep.prototype.repairStructure =
     function (target) {
 
-        if (this.room.name != this.memory.targetRoom && Game.rooms[this.memory.targetRoom] && Game.rooms[exit].find(FIND_STRUCTURES, {filter : (s) => s.my || !s.owner })[0]) {
+        if (this.room.name != this.memory.targetRoom && Game.rooms[this.memory.targetRoom] && Game.rooms[this.memory.targetRoom].find(FIND_STRUCTURES, {filter : (s) => s.my || !s.owner })[0]) {
 
             let exitDir = Game.map.findExit(this.room.name, this.memory.targetRoom);
             let Exit = this.pos.findClosestByPath(exitDir);
@@ -11,6 +11,10 @@
             this.memory.target = undefined;
             this.moveTo(Exit);
             return true;
+        }
+
+        if (target && target.hit == target.hitsMax) {
+            target = undefined;
         }
 
 
