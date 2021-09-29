@@ -293,6 +293,7 @@ function planStructures(roomName) {
     // 2 Containers
 
     sources = Game.rooms[roomName].find(FIND_SOURCES);
+    sources = _.sortBy(sources, s => s.pos.findPathTo(center[0], center[1]).length);
 
     for (let sourceName in sources) {
 
@@ -1240,6 +1241,8 @@ function planStructures(roomName) {
     containers = Game.rooms[roomName].find(FIND_STRUCTURES, {
         filter: s => s.structureType == STRUCTURE_CONTAINER
     });
+
+    sources = _.sortBy(sources, s => s.pos.findPathTo(center[0], center[1]).length).reverse();
 
     for (let containerNumber in containers) {
 

@@ -5,7 +5,7 @@ Structure.prototype.runRoleTower =
 
         hostiles = _.sortBy(hostiles, s => s.hits);
 
-        let closestHostile = _.sortBy(hostiles, s => s.pos.getDirectionTo(this.pos.x, this.pos.y))[0];
+        let closestHostile = _.sortBy(hostiles, s => s.pos.findPathTo(this).length)[0];
 
 
         if (closestHostile) {

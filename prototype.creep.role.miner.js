@@ -12,7 +12,7 @@ Creep.prototype.runRoleMiner =
             let Exit = this.pos.findClosestByPath(exitDir);
             this.memory.action = 'getEnergy';
             this.memory.target = undefined;
-            this.say(this.moveTo(Exit));
+            this.moveTo(Exit);
             return true;
         }
 

@@ -21,7 +21,7 @@ Creep.prototype.getEnergy =
         if (!target) {
 
             let targets = this.pos.findInRange(FIND_DROPPED_RESOURCES, 20);
-            target = _.sortBy(targets, s => s.pos.getDirectionTo(this.pos.x, this.pos.y))[0];
+            target = _.sortBy(targets, s => s.pos.findPathTo(this).length)[0];
 
             if (!target) {
 
