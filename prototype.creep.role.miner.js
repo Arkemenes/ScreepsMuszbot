@@ -4,11 +4,15 @@ Creep.prototype.runRoleMiner =
         
         if (this.room.name != this.memory.targetRoom) {
 
+            if (Game.rooms[this.memory.targetRoom] && Game.rooms[this.memory.targetRoom].controller) {
+                this.moveTo(Game.rooms[this.memory.targetRoom].controller);
+            }
+
             let exitDir = Game.map.findExit(this.room.name, this.memory.targetRoom);
             let Exit = this.pos.findClosestByPath(exitDir);
             this.memory.action = 'getEnergy';
-            this.memory.target = target;
-            this.moveTo(Exit);
+            this.memory.target = undefined;
+            this.say(this.moveTo(Exit));
             return true;
         }
 

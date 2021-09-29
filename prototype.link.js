@@ -9,7 +9,7 @@ StructureLink.prototype.isCollector =
         
     };
 
-StructureLink.prototype.runRole =
+Structure.prototype.runRoleLink =
     function () {
         if (this.isCollector() && this.store['energy'] >= 50 && this.isActive()){
 

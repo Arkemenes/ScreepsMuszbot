@@ -20,6 +20,15 @@ require('prototype.creep.role.wallRepairer')
 
 Creep.prototype.runRole =
     function () {
+        if (this.ticksToLive <= 5) {
+            this.drop(RESOURCE_ENERGY);
+            return false;
+        } 
+
+        if (!this.memory || !this.memory.role) {
+            this.memory = { 'role': 'harvester' }
+        }
+        
 
         switch (this.memory.role) {
             case 'brusier':
@@ -61,13 +70,6 @@ Creep.prototype.runRole =
                 this.memory.target = undefined;
         }
 
-        if (!this.memory || !this.memory.role) {
-            this.memory = { 'role': 'harvester' }
-        }
-        
-        if (this.ticksToLive <= 2) {
-            this.drop(RESOURCE_ENERGY);
-        }
 
     };
 

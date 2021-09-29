@@ -2,6 +2,22 @@
 Creep.prototype.runRoleBrusier =
     function () {
 
+        if (Memory.rooms[this.memory.target] && (Memory.rooms[this.memory.target].enemies || Memory.rooms[this.memory.target].enemyStructures)) {
+            // Keep the current target
+        }
+        else if (Memory.rooms[this.memory.home].enemies || Memory.rooms[this.memory.home].enemyStructures) {
+            this.memory.targetRoom = this.memory.home;
+        } 
+        else{
+            for (let exitID in Memory.rooms[this.room.name].exits) {
+                let exit = Memory.rooms[this.room.name].exits[exitID];
+                if (Memory.rooms[exit] && (Memory.rooms[exit].enemies || Memory.rooms[exit].enemyStructures)) {
+                    this.memory.targetRoom = exit;
+                    break;
+                }
+            }
+        }
+
         let hostiles = this.room.find(FIND_HOSTILE_CREEPS, {filter : (x) => _.some(x.body, y => [ATTACK, WORK, RANGED_ATTACK, CARRY, CLAIM].includes(y.type))});
 
         hostiles = _.sortBy(hostiles, s => s.hits);
@@ -19,7 +35,7 @@ Creep.prototype.runRoleBrusier =
         let target = this.pos.findClosestByPath(FIND_HOSTILE_STRUCTURES, {filter: (s) => s.structureType == STRUCTURE_TOWER});
 
         if (!target) {
-            target = this.pos.findClosestByPath(FIND_HOSTILE_STRUCTURES);
+            target = this.pos.findClosestByPath(FIND_HOSTILE_STRUCTURES, {filter: (s) => s.structureType != STRUCTURE_POWER_BANK});
         }
 
         
@@ -31,7 +47,7 @@ Creep.prototype.runRoleBrusier =
         }
 
 
-        if (this.room.name != this.memory.targetRoom) {
+        if (this.room.name != this.memory.targetRoom && (Memory.rooms[this.memory.targetRoom].enemies || Memory.rooms[this.memory.targetRoom].enemyStructures)) {
 
             let exitDir = Game.map.findExit(this.room.name, this.memory.targetRoom);
             let Exit = this.pos.findClosestByPath(exitDir);
@@ -39,5 +55,22 @@ Creep.prototype.runRoleBrusier =
             this.memory.target = target;
             this.moveTo(Exit);
             return true;
+        }
+
+        if (this.store.energy.valueOf()) {
+            if (!this.depositEnergy()) {
+                if (!this.buildConstruction()) {
+                    if (!this.upgrade()) {
+                        if (!this.repairStructure()) {
+                            this.repairWall();
+                        }
+                    }
+                }
+
+            }
+        }
+        // if this is supposed to harvest energy from source
+        else {
+            this.getEnergy();
         }
     };

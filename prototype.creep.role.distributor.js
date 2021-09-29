@@ -19,21 +19,21 @@ Creep.prototype.runRoleDistributor =
         })[0];
 
 
-        if ((this.store.getUsedCapacity() > 50 || !nearLink || nearLink.store.energy <= 100) && nearTower) {
+        if ((this.store.getUsedCapacity() > 50 && nearTower)) {
             this.transfer(nearTower, RESOURCE_ENERGY);
         }
-        else if ((this.store.getUsedCapacity() > 50 || !nearLink || nearLink.store.energy <= 100) && nearSpawn) {
+        else if (this.store.getUsedCapacity() > 50 && nearSpawn) {
             this.transfer(nearSpawn, RESOURCE_ENERGY);
         }
-        else if ((this.store.getUsedCapacity() > 50 || !nearLink || nearLink.store.energy <= 100) && nearLink && nearLink.store.energy.valueOf() < 100) {
-            this.transfer(nearLink, RESOURCE_ENERGY, 100 - nearLink.store.energy.valueOf());
+        else if (this.store.getUsedCapacity() > 50 && nearLink && nearLink.store.energy.valueOf() <= 100) {
+            this.transfer(nearLink, RESOURCE_ENERGY, Math.min(100 - nearLink.store.energy.valueOf(), this.store.getUsedCapacity()));
         }
-        else if ((this.store.getUsedCapacity() > 50 || !nearLink || nearLink.store.energy <= 100) && this.room.storage && this.room.storage.store.getFreeCapacity()) {
+        else if (this.store.getUsedCapacity() > 50 && this.room.storage && this.room.storage.store.getFreeCapacity()) {
             this.transfer(this.room.storage, RESOURCE_ENERGY);
         }
         else {
             if (nearLink && nearLink.store.energy.valueOf() > 100) {
-                this.withdraw(nearLink, RESOURCE_ENERGY, nearLink.store.energy.valueOf() - 100);
+                this.withdraw(nearLink, RESOURCE_ENERGY, Math.min(200,nearLink.store.energy.valueOf() - 100));
             }
             else if (this.room.storage.store.getUsedCapacity() > 2000 &&
                 ((nearLink && nearLink.store.energy.valueOf() < 100) || nearTower || nearSpawn)) {

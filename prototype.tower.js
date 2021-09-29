@@ -1,5 +1,5 @@
 // create a new function for StructureTower
-StructureTower.prototype.runRole =
+Structure.prototype.runRoleTower =
     function () {
         let hostiles = this.room.find(FIND_HOSTILE_CREEPS, {filter : (x) => _.some(x.body, y => [ATTACK, WORK, RANGED_ATTACK, CARRY, CLAIM].includes(y.type))});
 

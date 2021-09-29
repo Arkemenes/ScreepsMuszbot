@@ -28,7 +28,7 @@
                     && (s.structureType == STRUCTURE_RAMPART || s.structureType == STRUCTURE_WALL))
                 });
     
-                target = _.sortBy(targets, s => s.hits)[0];
+                target = _.sortBy(targets, s => s.hits/s.hitsMax)[0];
 
 
                 if (!target) {
@@ -38,7 +38,7 @@
                         && (s.structureType == STRUCTURE_RAMPART || s.structureType == STRUCTURE_WALL))
                     });
         
-                    target = _.sortBy(targets, s => s.hits)[0];
+                    target = _.sortBy(targets, s => s.hits/s.hitsMax)[0];
                 }
                 
             }
@@ -47,14 +47,14 @@
                     filter: (s) => s.structureType != STRUCTURE_CONTROLLER && (s.structureType != STRUCTURE_RAMPART && s.structureType != STRUCTURE_WALL && s.hits < s.hitsMax) || (((this.room.controller.level == 8 && s.hits < s.hitsMax) || s.hits < 0.05 * s.hitsMax)
                     && (s.structureType == STRUCTURE_RAMPART || s.structureType == STRUCTURE_WALL))
                 });
+                target = _.sortBy(targets, s => s.hits/s.hitsMax)[0];
     
                 if (!target) {
                     let targets = this.room.find(FIND_STRUCTURES, {
                         filter: (s) => s.structureType != STRUCTURE_CONTROLLER && (s.structureType != STRUCTURE_RAMPART && s.structureType != STRUCTURE_WALL && s.hits < s.hitsMax) || (((this.room.controller.level == 8 && s.hits < s.hitsMax) || s.hits < 0.05 * s.hitsMax)
                         && (s.structureType == STRUCTURE_RAMPART || s.structureType == STRUCTURE_WALL))
                     });
-        
-                    target = _.sortBy(targets, s => s.hits)[0];
+                    target = _.sortBy(targets, s => s.hits/s.hitsMax)[0];
                 }
             }
           

@@ -22,20 +22,8 @@ module.exports.loop = function () {
 
         getIntel();
 
-
-        if (Memory.visualizeCPU) {
-            new_cpu = Game.cpu.getUsed();
-            console.log('CPU usage on intel: ' + (new_cpu - cpu))
-            cpu = new_cpu;
-        }
-
         architect.createBuildingSites();
 
-        if (Memory.visualizeCPU) {
-            new_cpu = Game.cpu.getUsed();
-            console.log('CPU usage on architect: ' + (new_cpu - cpu))
-            cpu = new_cpu;
-        }
 
         // if there is no available spawn, it's possible to visualize using:
         // for (let i=18; i<20; i++){
@@ -43,7 +31,6 @@ module.exports.loop = function () {
         //         architect.getPossibleSpawns("E" + i + "N" + j);
         //     }
         // }
-
 
 
         // check for memory entries of died creeps by iterating over Memory.creeps
@@ -66,13 +53,7 @@ module.exports.loop = function () {
         // for each tower
         for (let tower of towers) {
             // run tower logic
-            tower.runRole();
-        }
-
-        if (Memory.visualizeCPU) {
-            new_cpu = Game.cpu.getUsed();
-            console.log('CPU usage on towers: ' + (new_cpu - cpu))
-            cpu = new_cpu;
+            tower.runRoleTower();
         }
 
         // find all links
@@ -80,13 +61,7 @@ module.exports.loop = function () {
         // for each tower
         for (let link of links) {
             // run tower logic
-            link.runRole();
-        }
-
-        if (Memory.visualizeCPU) {
-            new_cpu = Game.cpu.getUsed();
-            console.log('CPU usage on links: ' + (new_cpu - cpu))
-            cpu = new_cpu;
+            link.runRoleLink();
         }
 
         // for each creeps
@@ -95,27 +70,18 @@ module.exports.loop = function () {
             Game.creeps[name].runRole();
         }
 
-        if (Memory.visualizeCPU) {
-            new_cpu = Game.cpu.getUsed();
-            console.log('CPU usage on creeps: ' + (new_cpu - cpu))
-            cpu = new_cpu;
-        }
-
         // for each spawn
         for (let spawnName in Game.spawns) {
             // run spawn logic
             Game.spawns[spawnName].spawnCreepsIfNecessary();
-        }
-        if (Memory.visualizeCPU) {
-            new_cpu = Game.cpu.getUsed();
-            console.log('CPU usage on spawn: ' + (new_cpu - cpu))
-            cpu = new_cpu;
         }
 
 
         if(Game.cpu.bucket == 10000 && Game.cpu.generatePixel) {
             Game.cpu.generatePixel();
         }
+
+        exportData()
 
     });
 };
