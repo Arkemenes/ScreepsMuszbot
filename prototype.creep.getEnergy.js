@@ -20,7 +20,7 @@ Creep.prototype.getEnergy =
 
         if (!target) {
 
-            let targets = this.pos.findInRange(FIND_DROPPED_RESOURCES, 20);
+            let targets = this.pos.findInRange(FIND_DROPPED_RESOURCES, 20, {filter: r => r.energy > 20});
             target = _.sortBy(targets, s => s.pos.findPathTo(this).length)[0];
 
             if (!target) {
@@ -30,7 +30,7 @@ Creep.prototype.getEnergy =
                 }
                 else if (this.memory.role == 'harvester') {
 
-                    target = this.pos.findClosestByPath(FIND_DROPPED_RESOURCES);
+                    target = this.pos.findClosestByPath(FIND_DROPPED_RESOURCES, {filter: r => r.energy > 20});
 
                     if (!target && this.room.energyAvailable < this.room.energyCapacityAvailable) {
                         target = this.pos.findClosestByPath(FIND_STRUCTURES, {
@@ -59,7 +59,7 @@ Creep.prototype.getEnergy =
 
 
                 } else if (this.memory.role == 'transporter') {
-                    target = this.pos.findClosestByPath(FIND_DROPPED_RESOURCES);
+                    target = this.pos.findClosestByPath(FIND_DROPPED_RESOURCES, {filter: r => r.energy > 20});
 
                     if (!target) {
                         target = this.pos.findClosestByPath(FIND_STRUCTURES, {
