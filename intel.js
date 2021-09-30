@@ -53,7 +53,7 @@ global.getIntel = function () {
         }
 
         if (room.controller) {
-            Memory.rooms[roomName].numberOfBrusiers = _.sum(Game.creeps, (c) => c.memory.role == 'brusier' && c.ticksToLive > 5 && c.memory.targetRoom == room.name);
+            Memory.rooms[roomName].numberOfDefenders = _.sum(Game.creeps, (c) => c.memory.role == 'defender' && c.ticksToLive > 5 && c.memory.targetRoom == room.name);
             Memory.rooms[roomName].numberOfHarvesters = _.sum(Game.creeps, (c) => c.memory.role == 'harvester' && c.ticksToLive > 5 && c.memory.targetRoom == room.name);
             Memory.rooms[roomName].numberOfUpgraders = _.sum(Game.creeps, (c) => c.memory.role == 'upgrader' && c.ticksToLive > 5 && c.memory.targetRoom == room.name);
             Memory.rooms[roomName].numberOfBuilders = _.sum(Game.creeps, (c) => c.memory.role == 'builder' && c.ticksToLive > 5 && c.memory.targetRoom == room.name);
@@ -61,7 +61,7 @@ global.getIntel = function () {
             Memory.rooms[roomName].numberOfWallRepairers = _.sum(Game.creeps, (c) => c.memory.role == 'wallRepairer' && c.ticksToLive > 5 && c.memory.targetRoom == room.name);
             Memory.rooms[roomName].numberOfMiners = _.sum(Game.creeps, (c) => c.memory.role == 'miner' && c.ticksToLive > 5 && c.memory.targetRoom == room.name);
             Memory.rooms[roomName].numberOfTransporters = _.sum(Game.creeps, (c) => c.memory.role == 'transporter' && c.ticksToLive > 5 && c.memory.targetRoom == room.name);
-            Memory.rooms[roomName].numberOfDistributors = _.sum(Game.creeps, (c) => c.memory.role == 'distributor' && c.memory.targetRoom == room.name);
+            Memory.rooms[roomName].numberOfLogistics = _.sum(Game.creeps, (c) => c.memory.role == 'logistic' && c.memory.targetRoom == room.name);
             Memory.rooms[roomName].numberOfClaimers = _.sum(Game.creeps, (c) => c.memory.role == 'claimer' && c.ticksToLive > 5 && c.memory.targetRoom == room.name);
             Memory.rooms[roomName].numberOfScouts = _.sum(Game.creeps, (c) => c.memory.role == 'scout' && c.ticksToLive > 5 && c.memory.home == room.name);
 

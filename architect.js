@@ -71,10 +71,7 @@ module.exports = {
 
                             for (let i = 0; i < Math.min(Memory.rooms[thisRoom].builds.length, 3); i++) {
 
-                                if (Game.rooms[thisRoom].find(FIND_CONSTRUCTION_SITES)[0]) {
-                                    break;
-                                }
-                                else if (Game.rooms[thisRoom].controller.level >= Memory.rooms[thisRoom].builds[i].minimalRCL) {
+                                if (Game.rooms[thisRoom].controller.level >= Memory.rooms[thisRoom].builds[i].minimalRCL) {
                                     if (Game.rooms[thisRoom].createConstructionSite(Memory.rooms[thisRoom].builds[i].x,
                                         Memory.rooms[thisRoom].builds[i].y,
                                         Memory.rooms[thisRoom].builds[i].structureType) == 0) {
@@ -1242,7 +1239,7 @@ function planStructures(roomName) {
         filter: s => s.structureType == STRUCTURE_CONTAINER
     });
 
-    sources = _.sortBy(sources, s => s.pos.findPathTo(center[0], center[1]).length).reverse();
+    sources = _.sortBy(sources, s => s.pos.findPathTo(center[0], center[1]).length);
 
     for (let containerNumber in containers) {
 
@@ -1278,7 +1275,7 @@ function planStructures(roomName) {
                     'x': linkPos[0],
                     'y': linkPos[1],
                     'structureType': STRUCTURE_LINK,
-                    'minimalRCL': 5 + containerNumber
+                    'minimalRCL': 5 + parseInt(containerNumber)
                 });
             }
             else {

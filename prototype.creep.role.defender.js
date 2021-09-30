@@ -1,5 +1,5 @@
 /** @function */
-Creep.prototype.runRoleBrusier =
+Creep.prototype.runRoleDefender =
     function () {
 
         if (Memory.rooms[this.memory.target] && (Memory.rooms[this.memory.target].enemies || Memory.rooms[this.memory.target].enemyStructures)) {

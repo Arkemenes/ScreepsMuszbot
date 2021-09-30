@@ -6,10 +6,10 @@ require('prototype.creep.repairWall');
 require('prototype.creep.smartMove');
 require('prototype.creep.upgrade');
 
-require('prototype.creep.role.brusier')
+require('prototype.creep.role.defender')
 require('prototype.creep.role.builder')
 require('prototype.creep.role.claimer')
-require('prototype.creep.role.distributor')
+require('prototype.creep.role.logistic')
 require('prototype.creep.role.harvester')
 require('prototype.creep.role.miner')
 require('prototype.creep.role.repairer')
@@ -31,8 +31,8 @@ Creep.prototype.runRole =
         
 
         switch (this.memory.role) {
-            case 'brusier':
-                this.runRoleBrusier();
+            case 'defender':
+                this.runRoleDefender();
                 break;
             case 'builder':
                 this.runRoleBuilder();
@@ -40,8 +40,8 @@ Creep.prototype.runRole =
             case 'claimer':
                 this.runRoleClaimer();
                 break;
-            case 'distributor':
-                this.runRoleDistributor();
+            case 'logistic':
+                this.runRoleLogistic();
                 break;
             case 'harvester':
                 this.runRoleHarvester();
@@ -69,6 +69,12 @@ Creep.prototype.runRole =
                 this.memory.action = undefined;
                 this.memory.target = undefined;
         }
+
+        // Avoid getting stucked on border
+        if (this.pos.x == 49 || this.pos.x == 0 || this.pos.y == 49 || this.pos.y == 49) {
+            this.moveTo(25,25);
+        }
+        
 
 
     };

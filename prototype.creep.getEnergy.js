@@ -4,7 +4,7 @@ Creep.prototype.getEnergy =
     function (target) {
 
 
-        if (target && this.room != target.room) {
+        if (target && (this.room != target.room || !target.energy)) {
             target = undefined;
         }
 
@@ -84,6 +84,7 @@ Creep.prototype.getEnergy =
                         Memory.rooms[this.room.name].numberOfContainers >= Memory.rooms[this.room.name].sourceNumber) {
                         target = this.pos.findClosestByPath(FIND_STRUCTURES, {
                             filter: s => (s.structureType == STRUCTURE_STORAGE ||
+                                s.structureType == STRUCTURE_CONTAINER ||
                                 (s.structureType == STRUCTURE_LINK && !s.isCollector())) &&
                                 s.store.energy > 10
                         });
@@ -128,7 +129,7 @@ Creep.prototype.getEnergy =
                 this.smartMove(target);
                 return true;
             } else if (this.store.getFreeCapacity() &&
-                target.structureType == STRUCTURE_CONTAINER &&
+                (target.structureType == STRUCTURE_CONTAINER && !this.pos.findInRange(FIND_STRUCTURES,2,{filter: (s) => s.structureType == STRUCTURE_LINK && s.isCollector()}))&&
                 Memory.rooms[this.room.name].numberOfMiners == Memory.rooms[this.room.name].sourceNumber) {
                 this.memory.action = 'getEnergy';
                 this.memory.target = target;

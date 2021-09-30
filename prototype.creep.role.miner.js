@@ -20,19 +20,29 @@ Creep.prototype.runRoleMiner =
             this.memory.target = undefined;
         }
 
+        let nearLink = this.pos.findInRange(FIND_STRUCTURES, 1, {
+            filter: s => (s.structureType == STRUCTURE_LINK) && s.isCollector() && s.energy < s.energyCapacity
+        })[0];
+
+        if (this.store.getCapacity() && this.store.energy == this.store.getCapacity() && nearLink) {
+            this.transfer(nearLink, RESOURCE_ENERGY);
+        }
+
+        var nearContainer = this.pos.findInRange(FIND_STRUCTURES, 0, {
+            filter: s => s.structureType == STRUCTURE_CONTAINER
+        })[0];
+
+        if (nearContainer && nearContainer.store && nearContainer.store.energy && this.store.getFreeCapacity() && nearLink) {
+            this.withdraw(nearContainer, RESOURCE_ENERGY)
+        }
+
         if (this.memory.action && this.memory.target && (this.pos.x != this.memory.target.pos.x || this.pos.y != this.memory.target.pos.y)) {
             this.execAction(this.memory.action, this.memory.target.id);
         }
         else {
 
-            let isAboveContainer = this.room.find(FIND_STRUCTURES, {
-                filter: s => s.structureType == STRUCTURE_CONTAINER &&
-                    s.pos.isEqualTo(this.pos)
-            }).length;
 
-
-
-            if (!isAboveContainer) {
+            if (!nearContainer) {
 
                 let otherMiners = this.room.find(FIND_MY_CREEPS, {
                     filter: c => c.memory && c.memory.role == 'miner' && c != this

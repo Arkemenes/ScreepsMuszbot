@@ -1,5 +1,5 @@
 /** @function */
-Creep.prototype.runRoleDistributor =
+Creep.prototype.runRoleLogistic =
     function () {
 
         let nearTowers = this.pos.findInRange(FIND_STRUCTURES, 1, {
@@ -32,12 +32,13 @@ Creep.prototype.runRoleDistributor =
             this.transfer(this.room.storage, RESOURCE_ENERGY);
         }
         else {
+            
             if (nearLink && nearLink.store.energy.valueOf() > 100) {
-                this.withdraw(nearLink, RESOURCE_ENERGY, Math.min(200,nearLink.store.energy.valueOf() - 100));
+                this.withdraw(nearLink, RESOURCE_ENERGY);
             }
             else if (this.room.storage.store.getUsedCapacity() > 2000 &&
                 ((nearLink && nearLink.store.energy.valueOf() < 100) || nearTower || nearSpawn)) {
-                this.withdraw(this.room.storage, RESOURCE_ENERGY,);
+                this.withdraw(this.room.storage, RESOURCE_ENERGY);
             }
 
 

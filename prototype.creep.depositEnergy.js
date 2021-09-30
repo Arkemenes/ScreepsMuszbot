@@ -43,34 +43,12 @@
 
             else if (this.memory.role == 'transporter') {
                 if (!target) {
-                    target = this.pos.findInRange(FIND_MY_STRUCTURES, 5, {
-                        filter: (s) => ((s.structureType == STRUCTURE_LINK && s.isCollector())
-                            && s.energy < s.energyCapacity)
-                    })[0];
-
-                }
-                if (!target && !this.pos.findClosestByPath(FIND_MY_STRUCTURES, { filter: (s) => s.structureType == STRUCTURE_LINK })) {
-                    target = this.pos.findInRange(FIND_STRUCTURES, 5, {
-                        filter: (s) => (s.structureType == STRUCTURE_STORAGE)
-                    })[0];
-                }
-                if (!target) {
                     target = this.pos.findClosestByPath(FIND_MY_STRUCTURES, {
-                        filter: (s) => ((s.structureType == STRUCTURE_LINK && s.isCollector())
-                            && s.energy < s.energyCapacity)
+                        filter: (s) => (((s.structureType == STRUCTURE_LINK && s.isCollector() && s.energy < s.energyCapacity) ||
+                                (s.structureType == STRUCTURE_STORAGE))
+                            )
                     });
 
-                }
-                if (!target) {
-                    target = this.pos.findClosestByPath(FIND_MY_STRUCTURES, {
-                        filter: (s) => (s.structureType == STRUCTURE_LAB && s.energy < s.energyCapacity)
-                    });
-
-                }
-                if (!target &&  this.room.storage &&
-                    this.room.storage.store.energy < this.room.storage.storeCapacity) {
-                    
-                    target = this.room.storage;
                 }
 
                 if (!target) {
@@ -82,7 +60,7 @@
                 }
             }
             else {
-                if (!target) {
+                if (!target && !this.room.find(FIND_STRUCTURES, {filter: (s) => s.structureType == STRUCTURE_LINK})[0]) {
                     target = this.pos.findClosestByPath(FIND_MY_STRUCTURES, {
                         filter: (s) => (s.structureType == STRUCTURE_TOWER
                             && s.energy < s.energyCapacity)
@@ -105,8 +83,7 @@
 
         }
 
-        if (!target && this.room.name != this.memory.home && Game.rooms[this.memory.home] &&
-                Game.rooms[this.memory.home].energyAvailable <= 0.9 * Game.rooms[this.memory.home].energyCapacityAvailable) {
+        if (!target && this.room.name != this.memory.home && Game.rooms[this.memory.home]) {
             let exitDir = Game.map.findExit(this.room.name, this.memory.home);
             let Exit = this.pos.findClosestByPath(exitDir);
             this.memory.action = 'depositEnergy';
