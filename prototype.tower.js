@@ -12,7 +12,7 @@ Structure.prototype.runRoleTower =
             this.attack(closestHostile);
         }
 
-        if (Memory.rooms[this.room.name].numberOfMiners >= Memory.rooms[this.room.name].numberOfLinks) {
+        else if (Memory.rooms[this.room.name].numberOfMiners >= Memory.rooms[this.room.name].numberOfLinks) {
             if (this.store.energy >= 0.7 * this.store.getCapacity(RESOURCE_ENERGY)) {
                 let damagedStructures = this.room.find(FIND_STRUCTURES, {
                     filter: (structure) => structure.hits < structure.hitsMax &&

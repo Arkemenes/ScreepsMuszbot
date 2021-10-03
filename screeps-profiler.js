@@ -25,6 +25,9 @@ function setupProfiler() {
     background(filter) {
       setupMemory('background', false, filter);
     },
+    monitor(filter) {
+      setupMemory('monitor', false, filter);
+    },
     restart() {
       if (Profiler.isProfiling()) {
         const filter = Memory.profiler.filter;
@@ -315,6 +318,9 @@ module.exports = {
     }
 
     if (Profiler.isProfiling()) {
+      if (Memory.profiler.type == 'monitor') {
+        setupMemory(Memory.profiler.type, Memory.profiler.disableTick - Game.time, Memory.profiler.filter);
+      }
       usedOnStart = Game.cpu.getUsed();
 
       // Commented lines are part of an on going experiment to keep the profiler
@@ -331,6 +337,11 @@ module.exports = {
       // var unaccounted = end - profilerTime - callbackTime;
       // console.log('total-', end, 'profiler-', profilerTime, 'callbacktime-',
       // callbackTime, 'start-', start, 'unaccounted', unaccounted);
+
+      if (Memory.profiler.type == 'monitor') {
+        // Memory.stats.monitor = Memory.profiler.type;
+        // console.log(JSON.stringify(Memory.profiler.type));
+      }
       return returnVal;
     }
 

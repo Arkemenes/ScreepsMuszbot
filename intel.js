@@ -14,7 +14,7 @@ global.getIntel = function () {
 
         if (!Memory.rooms[roomName].exits) {
             Memory.rooms[roomName].exits = Game.map.describeExits(roomName);
-            Memory.rooms[roomName].exits = _.sortBy(Memory.rooms[roomName].exits, e => (Memory.rooms[e] && Memory.rooms[e].sourceNumber) ? Memory.rooms[e].sourceNumber : 0).reverse();
+            // Memory.rooms[roomName].exits = _.sortBy(Memory.rooms[roomName].exits, e => (Memory.rooms[e] && Memory.rooms[e].sourceNumber) ? Memory.rooms[e].sourceNumber : 0).reverse();
 
             for (let exit in Memory.rooms[roomName].exits) {
                 if (!Memory.rooms[Memory.rooms[roomName].exits[exit.roomName]]) {

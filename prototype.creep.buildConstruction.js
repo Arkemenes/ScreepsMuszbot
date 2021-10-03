@@ -16,7 +16,9 @@
 
         if (!target) {
             let targets = this.pos.findInRange(FIND_STRUCTURES, 5, {
-                filter: (s) => s.hits < Math.min(1000, 0.2 * s.hitsMax) && s.hits < s.hitsMax
+                filter: (s) => s.hits < Math.min(1000, 0.2 * s.hitsMax) && s.hits < s.hitsMax &&
+                               s.structureType != STRUCTURE_WALL
+
             });
 
             let repairTarget = _.sortBy(targets, s => s.hits)[0];
@@ -33,6 +35,9 @@
         }
 
 
+        if (!target) {
+            target = this.pos.findClosestByPath(FIND_CONSTRUCTION_SITES, {filter: (c) => c.structureType == STRUCTURE_SPAWN});
+        }
 
         if (!target) {
             target = this.pos.findClosestByPath(FIND_CONSTRUCTION_SITES, {filter: (c) => c.structureType == STRUCTURE_CONTAINER});
@@ -68,6 +73,11 @@
             else if ((target.structureType == STRUCTURE_RAMPART || target.structureType == STRUCTURE_WALL)) {
                 this.memory.action = 'repairStructure';
                 this.memory.target = target;
+            }
+            else if (this.energy) {
+                this.memory.action = 'buildConstruction';
+                this.memory.target = target;
+                return true;
             }
             else {
                 this.memory.action = undefined;

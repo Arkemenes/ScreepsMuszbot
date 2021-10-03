@@ -6,6 +6,10 @@ module.exports = {
             Memory.rooms = {};
         }
 
+        if (Game.cpu.bucket < 100) {
+            return;
+        }
+
 
         for (let roomName in Game.rooms) {
             let room = Game.rooms[roomName];
