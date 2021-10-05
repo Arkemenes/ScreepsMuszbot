@@ -34,7 +34,8 @@ Creep.prototype.getEnergy =
 
                     if (!target && this.room.energyAvailable < this.room.energyCapacityAvailable) {
                         target = this.pos.findClosestByPath(FIND_STRUCTURES, {
-                            filter: s => (s.structureType == STRUCTURE_STORAGE || s.structureType == STRUCTURE_CONTAINER) &&
+                            filter: s => (s.structureType == STRUCTURE_STORAGE || s.structureType == STRUCTURE_CONTAINER ||
+                                         (s.structureType == STRUCTURE_LINK && !s.isCollector())) &&
                                 s.store.energy > 0
                         });
 
@@ -109,7 +110,7 @@ Creep.prototype.getEnergy =
 
         if (!target) {
             if (Memory.rooms[this.room.name].numberOfMiners < Memory.rooms[this.room.name].sourceNumber) {
-                target = this.pos.findClosestByPath(FIND_SOURCES_ACTIVE);
+                target = this.pos.findClosestByPath(FIND_SOURCES_ACTIVE, {filter: (s) => !s.pos.findInRange(FIND_MY_CREEPS, 1, {filter: (c) => c.memory.role == 'miner'})[0]});
             }
         }
 
@@ -122,8 +123,9 @@ Creep.prototype.getEnergy =
                 this.smartMove(target);
                 return true;
             } else if (this.store.getFreeCapacity() &&
-                (target.structureType == STRUCTURE_CONTAINER && !this.pos.findInRange(FIND_STRUCTURES,2,{filter: (s) => s.structureType == STRUCTURE_LINK && s.isCollector()}))&&
-                Memory.rooms[this.room.name].numberOfMiners == Memory.rooms[this.room.name].sourceNumber) {
+                ((target.structureType == STRUCTURE_CONTAINER && !this.pos.findInRange(FIND_STRUCTURES,2,{filter: (s) => s.structureType == STRUCTURE_LINK && s.isCollector()})) &&
+                (Memory.rooms[this.room.name].numberOfMiners == Memory.rooms[this.room.name].sourceNumber) ||
+                (target.structureType == undefined && Memory.rooms[this.room.name].numberOfMiners < Memory.rooms[this.room.name].sourceNumber))) {
                 this.memory.action = 'getEnergy';
                 this.memory.target = target;
                 return true;

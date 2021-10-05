@@ -14,7 +14,7 @@ Spawn.prototype.spawnCreepsIfNecessary =
         switch (this.room.controller.level) {
             case 1:
                 targetNumbers['harvester'] = Math.ceil(4 / (3 - Memory.rooms[this.room.name].sourceNumber));
-                targetNumbers['builder'] = (Game.rooms[this.room.name].find(FIND_CONSTRUCTION_SITES)[0]) ? Math.ceil(1 / (3 - Memory.rooms[this.room.name].sourceNumber)) : 0;
+                targetNumbers['builder'] = (Game.rooms[this.room.name].find(FIND_CONSTRUCTION_SITES)[0]) ? Math.ceil(2 / (3 - Memory.rooms[this.room.name].sourceNumber)) : 0;
                 targetNumbers['upgrader'] = Math.ceil(2 / (3 - Memory.rooms[this.room.name].sourceNumber));
                 targetNumbers['repairer'] = Math.ceil(0 / (3 - Memory.rooms[this.room.name].sourceNumber));
                 targetNumbers['wall_repairer'] = Math.ceil(0 / (3 - Memory.rooms[this.room.name].sourceNumber));
@@ -24,7 +24,7 @@ Spawn.prototype.spawnCreepsIfNecessary =
                 break;
             case 2:
                 targetNumbers['harvester'] = Math.ceil(4 / (3 - Memory.rooms[this.room.name].sourceNumber));
-                targetNumbers['builder'] = (Game.rooms[this.room.name].find(FIND_CONSTRUCTION_SITES)[0]) ? Math.ceil(1 / (3 - Memory.rooms[this.room.name].sourceNumber)) : 0;
+                targetNumbers['builder'] = (Game.rooms[this.room.name].find(FIND_CONSTRUCTION_SITES)[0]) ? Math.ceil(2 / (3 - Memory.rooms[this.room.name].sourceNumber)) : 0;
                 targetNumbers['upgrader'] = Math.ceil(1 / (3 - Memory.rooms[this.room.name].sourceNumber));
                 targetNumbers['repairer'] = Math.ceil(0 / (3 - Memory.rooms[this.room.name].sourceNumber));
                 targetNumbers['wall_repairer'] = Math.ceil(0 / (3 - Memory.rooms[this.room.name].sourceNumber));
@@ -34,17 +34,17 @@ Spawn.prototype.spawnCreepsIfNecessary =
                 break;
             case 3:
                 targetNumbers['harvester'] = Math.ceil(2 / (3 - Memory.rooms[this.room.name].sourceNumber));
-                targetNumbers['builder'] = (Game.rooms[this.room.name].find(FIND_CONSTRUCTION_SITES)[0]) ? Math.ceil(1 / (3 - Memory.rooms[this.room.name].sourceNumber)) : 0;
+                targetNumbers['builder'] = (Game.rooms[this.room.name].find(FIND_CONSTRUCTION_SITES)[0]) ? Math.ceil(2 / (3 - Memory.rooms[this.room.name].sourceNumber)) : 0;
                 targetNumbers['upgrader'] = Math.ceil(2 / (3 - Memory.rooms[this.room.name].sourceNumber));
                 targetNumbers['repairer'] = Math.ceil(0 / (3 - Memory.rooms[this.room.name].sourceNumber));
                 targetNumbers['wall_repairer'] = Math.ceil(0 / (3 - Memory.rooms[this.room.name].sourceNumber));
-                targetNumbers['scout'] = Math.ceil(1 / (3 - Memory.rooms[this.room.name].sourceNumber));
+                targetNumbers['scout'] = Math.ceil(0 / (3 - Memory.rooms[this.room.name].sourceNumber));
                 targetNumbers['transporter'] = Math.ceil(0 / (3 - Memory.rooms[this.room.name].sourceNumber));
                 targetNumbers['defenders'] = 1;
                 break;
             case 4:
                 targetNumbers['harvester'] = Math.ceil(2 / (3 - Memory.rooms[this.room.name].sourceNumber));
-                targetNumbers['builder'] = (Game.rooms[this.room.name].find(FIND_CONSTRUCTION_SITES)[0]) ? Math.ceil(1 / (3 - Memory.rooms[this.room.name].sourceNumber)) : 0;
+                targetNumbers['builder'] = (Game.rooms[this.room.name].find(FIND_CONSTRUCTION_SITES)[0]) ? Math.ceil(2 / (3 - Memory.rooms[this.room.name].sourceNumber)) : 0;
                 targetNumbers['upgrader'] = Math.ceil(1 / (3 - Memory.rooms[this.room.name].sourceNumber));
                 targetNumbers['repairer'] = Math.ceil(0 / (3 - Memory.rooms[this.room.name].sourceNumber));
                 targetNumbers['wall_repairer'] = Math.ceil(0 / (3 - Memory.rooms[this.room.name].sourceNumber));
@@ -54,44 +54,44 @@ Spawn.prototype.spawnCreepsIfNecessary =
                 break;
             case 5:
                 targetNumbers['harvester'] = Math.ceil(1 / (3 - Memory.rooms[this.room.name].sourceNumber));
-                targetNumbers['builder'] = (Game.rooms[this.room.name].find(FIND_CONSTRUCTION_SITES)[0]) ? Math.ceil(1 / (3 - Memory.rooms[this.room.name].sourceNumber)) : 0;
+                targetNumbers['builder'] = (Game.rooms[this.room.name].find(FIND_CONSTRUCTION_SITES)[0]) ? Math.ceil(2 / (3 - Memory.rooms[this.room.name].sourceNumber)) : 0;
                 targetNumbers['upgrader'] = Math.ceil(1 / (3 - Memory.rooms[this.room.name].sourceNumber));
                 targetNumbers['repairer'] = Math.ceil(0 / (3 - Memory.rooms[this.room.name].sourceNumber));
                 targetNumbers['wall_repairer'] = Math.ceil(0 / (3 - Memory.rooms[this.room.name].sourceNumber));
-                targetNumbers['scout'] = Math.ceil(1 / (3 - Memory.rooms[this.room.name].sourceNumber));
+                targetNumbers['scout'] = Math.ceil(0 / (3 - Memory.rooms[this.room.name].sourceNumber));
                 targetNumbers['transporter'] = Math.ceil(1 / (3 - Memory.rooms[this.room.name].sourceNumber));
                 targetNumbers['defenders'] = 1;
                 break;
 
             case 6:
-                targetNumbers['harvester'] = Math.ceil(2 / (3 - Memory.rooms[this.room.name].sourceNumber));
-                targetNumbers['builder'] = (Game.rooms[this.room.name].find(FIND_CONSTRUCTION_SITES)[0]) ? Math.ceil(1 / (3 - Memory.rooms[this.room.name].sourceNumber)) : 0;
-                targetNumbers['upgrader'] = Math.ceil(2 / (3 - Memory.rooms[this.room.name].sourceNumber));
+                targetNumbers['harvester'] = Math.ceil(1 / (3 - Memory.rooms[this.room.name].sourceNumber));
+                targetNumbers['builder'] = (Game.rooms[this.room.name].find(FIND_CONSTRUCTION_SITES)[0]) ? Math.ceil(3 / (3 - Memory.rooms[this.room.name].sourceNumber)) : 0;
+                targetNumbers['upgrader'] = Math.ceil(1 / (3 - Memory.rooms[this.room.name].sourceNumber));
                 targetNumbers['repairer'] = Math.ceil(0 / (3 - Memory.rooms[this.room.name].sourceNumber));
                 targetNumbers['wall_repairer'] = Math.ceil(0 / (3 - Memory.rooms[this.room.name].sourceNumber));
                 targetNumbers['scout'] = Math.ceil(1 / (3 - Memory.rooms[this.room.name].sourceNumber));
-                targetNumbers['transporter'] = Math.ceil(1 / (3 - Memory.rooms[this.room.name].sourceNumber));
+                targetNumbers['transporter'] = Math.ceil(0 / (3 - Memory.rooms[this.room.name].sourceNumber));
                 targetNumbers['defenders'] = 1;
                 break;
 
             case 7:
                 targetNumbers['harvester'] = Math.ceil(1 / (3 - Memory.rooms[this.room.name].sourceNumber));
-                targetNumbers['builder'] = (Game.rooms[this.room.name].find(FIND_CONSTRUCTION_SITES)[0]) ? Math.ceil(1 / (3 - Memory.rooms[this.room.name].sourceNumber)) : 0;
+                targetNumbers['builder'] = (Game.rooms[this.room.name].find(FIND_CONSTRUCTION_SITES)[0]) ? Math.ceil(2 / (3 - Memory.rooms[this.room.name].sourceNumber)) : 0;
                 targetNumbers['upgrader'] = Math.ceil(1 / (3 - Memory.rooms[this.room.name].sourceNumber));
                 targetNumbers['repairer'] = Math.ceil(0 / (3 - Memory.rooms[this.room.name].sourceNumber));
                 targetNumbers['wall_repairer'] = Math.ceil(0 / (3 - Memory.rooms[this.room.name].sourceNumber));
-                targetNumbers['scout'] = Math.ceil(1 / (3 - Memory.rooms[this.room.name].sourceNumber));
-                targetNumbers['transporter'] = Math.ceil(2 / (3 - Memory.rooms[this.room.name].sourceNumber));
+                targetNumbers['scout'] = Math.ceil(0 / (3 - Memory.rooms[this.room.name].sourceNumber));
+                targetNumbers['transporter'] = Math.ceil(0 / (3 - Memory.rooms[this.room.name].sourceNumber));
                 targetNumbers['defenders'] = 1;
                 break;
 
             case 8:
                 targetNumbers['harvester'] = Math.ceil(1 / (3 - Memory.rooms[this.room.name].sourceNumber));
-                targetNumbers['builder'] = (Game.rooms[this.room.name].find(FIND_CONSTRUCTION_SITES)[0]) ? Math.ceil(1 / (3 - Memory.rooms[this.room.name].sourceNumber)) : 0;
+                targetNumbers['builder'] = (Game.rooms[this.room.name].find(FIND_CONSTRUCTION_SITES)[0]) ? Math.ceil(2 / (3 - Memory.rooms[this.room.name].sourceNumber)) : 0;
                 targetNumbers['upgrader'] = Math.ceil(0 / (3 - Memory.rooms[this.room.name].sourceNumber));
                 targetNumbers['repairer'] = Math.ceil(0 / (3 - Memory.rooms[this.room.name].sourceNumber));
                 targetNumbers['wall_repairer'] = Math.ceil(0 / (3 - Memory.rooms[this.room.name].sourceNumber));
-                targetNumbers['transporter'] = Math.ceil(2 / (3 - Memory.rooms[this.room.name].sourceNumber));
+                targetNumbers['transporter'] = Math.ceil(0 / (3 - Memory.rooms[this.room.name].sourceNumber));
                 targetNumbers['scout'] = Math.ceil(0 / (3 - Memory.rooms[this.room.name].sourceNumber));
                 targetNumbers['defenders'] = 1;
                 break;
@@ -240,6 +240,10 @@ Spawn.prototype.spawnCreepsIfNecessary =
 
                 let exit = Memory.rooms[this.room.name].exits[exitId];
 
+                if (Game.rooms[exit] && Game.rooms[exit].controller && Game.rooms[exit].controller.level > this.room.controller.level) {
+                    continue;
+                }
+
                 if (Memory.rooms[exit] && Memory.rooms[exit].numberOfDefenders < Math.min(Math.max(Memory.rooms[exit].enemies, Memory.rooms[exit].enemyStructures),5)) {
                     if (this.generateCreep('defender', energy, exit) == 0) {
                         Memory.rooms[exit].numberOfDefenders++;
@@ -267,7 +271,7 @@ Spawn.prototype.spawnCreepsIfNecessary =
 
                     // If the room is mine and has less miners than containers, create a remote one
                     else if (Memory.rooms[exit].numberOfMiners < Memory.rooms[exit].numberOfContainers &&
-                        (!Memory.rooms[exit].my || Game.rooms['exit'].controller.level < this.room.controller.level)) {
+                        (!Memory.rooms[exit].my)) {
                         if (Memory.rooms[exit].my) {
                             var body = undefined;
                         }
@@ -364,7 +368,7 @@ Spawn.prototype.spawnCreepsIfNecessary =
         // if there is nothing more to build and has left energy on containers, build another upgrader
         if (!this.spawning &&
             this.room.energyAvailable > 0.9 * this.room.energyCapacityAvailable &&
-            _.sum(this.room.find(FIND_STRUCTURES, { filter: (s) => s.structureType == STRUCTURE_STORAGE }), (s) => s.store.energy > 1000 * Memory.rooms[this.room.name].sourceNumber)) {
+            _.sum(this.room.find(FIND_STRUCTURES, { filter: (s) => s.structureType == STRUCTURE_STORAGE }), (s) => s.store.energy > 900000)) {
 
             if (this.generateCreep('upgrader', energy) == 0) {
                 Memory.rooms[this.room.name].numberOfUpgraders++;

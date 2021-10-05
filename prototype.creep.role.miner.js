@@ -32,7 +32,7 @@ Creep.prototype.runRoleMiner =
             filter: s => s.structureType == STRUCTURE_CONTAINER
         })[0];
 
-        if (nearContainer && nearContainer.store && nearContainer.store.energy && this.store.getFreeCapacity() && nearLink) {
+        if ((!nearContainer || (nearContainer && nearContainer.store && nearContainer.store.energy)) && this.store.getFreeCapacity() && nearLink) {
             this.withdraw(nearContainer, RESOURCE_ENERGY)
         }
 
@@ -75,6 +75,20 @@ Creep.prototype.runRoleMiner =
                     this.memory.action = 'moveTo'
                     this.memory.target = target
                 }
+                else {
+                    this.memory.action = 'harvest';
+                    let target = this.pos.findInRange(FIND_SOURCES, 1)[0];
+    
+                    if (!target) {
+                        target = this.pos.findInRange(FIND_MINERALS, 1)[0];
+                    }
+    
+                    this.memory.target = target;
+    
+    
+                    this.harvest(target)
+                }
+
 
 
             }

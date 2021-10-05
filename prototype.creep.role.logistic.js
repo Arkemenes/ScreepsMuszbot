@@ -19,16 +19,13 @@ Creep.prototype.runRoleLogistic =
         })[0];
 
 
-        if ((this.store.getUsedCapacity() > 50 && nearTower)) {
+        if ((this.store.getUsedCapacity() > 0 && nearTower)) {
             this.transfer(nearTower, RESOURCE_ENERGY);
         }
-        else if (this.store.getUsedCapacity() > 50 && nearSpawn) {
+        else if (this.store.getUsedCapacity() > 0 && nearSpawn) {
             this.transfer(nearSpawn, RESOURCE_ENERGY);
         }
-        else if (this.store.getUsedCapacity() > 50 && nearLink && nearLink.store.energy.valueOf() <= 100) {
-            this.transfer(nearLink, RESOURCE_ENERGY, Math.min(100 - nearLink.store.energy.valueOf(), this.store.getUsedCapacity()));
-        }
-        else if (this.store.getUsedCapacity() > 50 && this.room.storage && this.room.storage.store.getFreeCapacity()) {
+        else if (this.store.getUsedCapacity() > 0 && this.room.storage && this.room.storage.store.getFreeCapacity()) {
             this.transfer(this.room.storage, RESOURCE_ENERGY);
         }
         else {
@@ -37,7 +34,7 @@ Creep.prototype.runRoleLogistic =
                 this.withdraw(nearLink, RESOURCE_ENERGY);
             }
             else if (this.room.storage.store.getUsedCapacity() > 2000 &&
-                ((nearLink && nearLink.store.energy.valueOf() < 100) || nearTower || nearSpawn)) {
+                (nearTower || nearSpawn)) {
                 this.withdraw(this.room.storage, RESOURCE_ENERGY);
             }
 

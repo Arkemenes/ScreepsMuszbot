@@ -12,7 +12,7 @@ Creep.prototype.runRoleHarvester =
             })[0]) {
             this.getEnergy();
         } 
-        else if (this.store.energy.valueOf()) {
+        else if (this.store.energy.valueOf() > 20) {
             if (!this.depositEnergy()) {
                 if (!this.buildConstruction()) {
                     if (!this.upgrade()) {
