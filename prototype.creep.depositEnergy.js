@@ -23,7 +23,8 @@
                 if (!target) {
                     target = this.pos.findClosestByPath(FIND_MY_STRUCTURES, {
                     filter: (s) => ((s.structureType == STRUCTURE_TOWER)
-                        && s.energy < s.energyCapacity)
+                        && !Memory.rooms[this.room.name].numberOfLogistics
+                        && s.energy <= s.energyCapacity * 0.95)
                     });
                 }
 
@@ -63,7 +64,8 @@
                 if (!target && !this.room.find(FIND_STRUCTURES, {filter: (s) => s.structureType == STRUCTURE_LINK})[0]) {
                     target = this.pos.findClosestByPath(FIND_MY_STRUCTURES, {
                         filter: (s) => (s.structureType == STRUCTURE_TOWER
-                            && s.energy < s.energyCapacity)
+                            && !Memory.rooms[this.room.name].numberOfLogistics
+                            && s.energy <= s.energyCapacity * 0.95)
                     });
                 }
                 if (!target) {

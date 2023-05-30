@@ -72,14 +72,11 @@ Creep.prototype.getEnergy =
 
                 } else {
 
-                    if (this.room.find(FIND_STRUCTURES, {
-                        filter: s => s.structureType == STRUCTURE_STORAGE
-                    })[0] &&
-                        Memory.rooms[this.room.name].numberOfContainers >= Memory.rooms[this.room.name].sourceNumber) {
+                    if (Memory.rooms[this.room.name].numberOfContainers >= Memory.rooms[this.room.name].sourceNumber &&
+                        this.room.storage) {
                         target = this.pos.findClosestByPath(FIND_STRUCTURES, {
                             filter: s => (s.structureType == STRUCTURE_STORAGE ||
-                                s.structureType == STRUCTURE_CONTAINER ||
-                                (s.structureType == STRUCTURE_LINK && !s.isCollector())) &&
+                                s.structureType == STRUCTURE_CONTAINER) &&
                                 s.store.energy > 10
                         });
                     } else {
@@ -91,8 +88,7 @@ Creep.prototype.getEnergy =
 
                     if (!target) {
                         target = this.pos.findClosestByPath(FIND_STRUCTURES, {
-                            filter: s => (s.structureType == STRUCTURE_STORAGE ||
-                                (s.structureType == STRUCTURE_LINK && !s.isCollector())) &&
+                            filter: s => (s.structureType == STRUCTURE_STORAGE) &&
                                 s.store.energy > 0
                         });
                     }
@@ -109,7 +105,7 @@ Creep.prototype.getEnergy =
         }
 
         if (!target) {
-            if (Memory.rooms[this.room.name].numberOfMiners < Memory.rooms[this.room.name].sourceNumber) {
+            if (Memory.rooms[this.room.name].numberOfMiners < Memory.rooms[this.room.name].sourceNumber && this.memory.role != 'transporter') {
                 target = this.pos.findClosestByPath(FIND_SOURCES_ACTIVE, {filter: (s) => !s.pos.findInRange(FIND_MY_CREEPS, 1, {filter: (c) => c.memory.role == 'miner'})[0]});
             }
         }

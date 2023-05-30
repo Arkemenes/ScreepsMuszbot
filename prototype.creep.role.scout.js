@@ -7,7 +7,7 @@ Creep.prototype.runRoleScout =
             this.say('Hello!')
         }
 
-        if (this.room.controller && (this.room.controller.sign) && !Memory.rooms[this.room.name].enemies && this.room.name != 'E18N59') {
+        if (this.room.controller && (this.room.controller.sign) && !Memory.rooms[this.room.name].enemies) {
             if (this.signController(this.room.controller, "") == ERR_NOT_IN_RANGE) {
                 if (this.moveTo(this.room.controller) == 0) {
                     return true;

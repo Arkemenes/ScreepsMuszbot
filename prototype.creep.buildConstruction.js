@@ -6,7 +6,8 @@
         if (this.room.name != this.memory.targetRoom && Game.rooms[this.memory.targetRoom] && Game.rooms[this.memory.targetRoom].find(FIND_CONSTRUCTION_SITES)[0]) {
 
             let exitDir = Game.map.findExit(this.room.name, this.memory.targetRoom);
-            let Exit = this.pos.findClosestByPath(exitDir);
+            let Exits = this.room.find(exitDir);
+            Exit = _.sortBy(targets, s => s.progress).reverse()[0];
             this.memory.action = undefined;
             this.memory.target = undefined;
             this.moveTo(Exit);
@@ -17,7 +18,7 @@
         if (!target) {
             let targets = this.pos.findInRange(FIND_STRUCTURES, 5, {
                 filter: (s) => s.hits < Math.min(1000, 0.2 * s.hitsMax) && s.hits < s.hitsMax &&
-                               s.structureType != STRUCTURE_WALL
+                               s.structureType != STRUCTURE_WALL 
 
             });
 
@@ -34,26 +35,69 @@
             
         }
 
+        let possibleTargets = this.room.find(FIND_CONSTRUCTION_SITES, {filter: (c) => c.my});
 
+        if (!possibleTargets){
+            this.memory.action = undefined;
+            this.memory.target = undefined;
+            return false;
+        }
+
+        
         if (!target) {
-            target = this.pos.findClosestByPath(FIND_CONSTRUCTION_SITES, {filter: (c) => c.structureType == STRUCTURE_SPAWN});
+            targets = _.filter(possibleTargets, (c) => c.structureType == STRUCTURE_SPAWN);
+            target = this.pos.findClosestByPath(targets);
         }
 
         if (!target) {
-            target = this.pos.findClosestByPath(FIND_CONSTRUCTION_SITES, {filter: (c) => c.structureType == STRUCTURE_CONTAINER});
+            targets = _.filter(possibleTargets, (c) => c.structureType == STRUCTURE_SPAWN);
+            target = this.pos.findClosestByPath(targets);
         }
 
         if (!target) {
-            target = this.pos.findClosestByPath(FIND_CONSTRUCTION_SITES, {filter: (c) => c.structureType == STRUCTURE_TOWER});
+            targets = _.filter(possibleTargets, (c) => c.structureType == STRUCTURE_CONTAINER);
+            target = this.pos.findClosestByPath(targets);
+        }
+
+        if (!target && Memory.rooms[this.room.name].numberOfTowers == 0) {
+            targets = _.filter(possibleTargets, (c) => c.structureType == STRUCTURE_TOWER);
+            target = _.sortBy(targets, s => s.progress).reverse()[0];
+        }
+
+        if (!target && Memory.rooms[this.room.name].numberOfTowers) {
+            targets = _.filter(possibleTargets, (c) => c.structureType == STRUCTURE_WALL || c.structureType == STRUCTURE_RAMPART);
+            target = this.pos.findClosestByPath(targets);
         }
 
         if (!target) {
-            target = this.pos.findClosestByPath(FIND_CONSTRUCTION_SITES, {filter: (c) => c.structureType == STRUCTURE_LINK});
+            targets = _.filter(possibleTargets, (c) => c.structureType == STRUCTURE_EXTENSION);
+            target = this.pos.findClosestByPath(targets);
         }
 
         if (!target) {
-            target = this.pos.findClosestByPath(FIND_CONSTRUCTION_SITES);
+            targets = _.filter(possibleTargets, (c) => c.structureType == STRUCTURE_TOWER);
+            target = _.sortBy(targets, s => s.progress).reverse()[0];
         }
+
+        if (!target) {
+            targets = _.filter(possibleTargets, (c) => c.structureType == STRUCTURE_LINK);
+            target = this.pos.findClosestByPath(targets);
+        }
+
+        if (!target) {
+            targets = _.filter(possibleTargets, (c) => c.structureType == STRUCTURE_STORAGE);
+            target = _.sortBy(targets, s => s.progress).reverse()[0];
+        }
+
+        if (!target) {
+            targets = _.filter(possibleTargets, (c) => c.structureType == STRUCTURE_LAB);
+            target = this.pos.findClosestByPath(targets);
+        }
+
+        if (!target) {
+            target = this.pos.findClosestByPath(possibleTargets);
+        }
+
 
 
         if (target) {

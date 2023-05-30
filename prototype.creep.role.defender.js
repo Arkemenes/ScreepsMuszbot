@@ -9,9 +9,10 @@ Creep.prototype.runRoleDefender =
             this.memory.targetRoom = this.memory.home;
         } 
         else{
+            this.memory.targetRoom = this.memory.home;
             for (let exitID in Memory.rooms[this.room.name].exits) {
                 let exit = Memory.rooms[this.room.name].exits[exitID];
-                if (Memory.rooms[exit] && (Memory.rooms[exit].enemies || Memory.rooms[exit].enemyStructures)) {
+                if (Memory.rooms[exit] && Memory.rooms[exit].wanted && (Memory.rooms[exit].enemies || Memory.rooms[exit].enemyStructures)) {
                     this.memory.targetRoom = exit;
                     break;
                 }

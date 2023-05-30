@@ -19,10 +19,21 @@ module.exports.loop = function () {
 
         let cpu = Game.cpu.getUsed();
         let new_cpu = cpu;
+        
 
         getIntel();
 
         architect.createBuildingSites();
+
+        for (let roomName in Game.rooms) {
+            let room = Game.rooms[roomName];
+            let hostiles = room.find(FIND_HOSTILE_CREEPS, {filter : (c) => c.body.length >= 33 && _.some(c.body, b => [ATTACK, RANGED_ATTACK].includes(b.type))});
+            let damagedWalls = room.find(FIND_STRUCTURES, {filter: (s) => s.hits < 200 && (s.structureType == STRUCTURE_WALL || s.structureType == STRUCTURE_RAMPART)});
+            if (hostiles.length > 0 && damagedWalls.length > 0) {
+                room.controller.activateSafeMode();
+            }
+            
+        }
 
 
         // if there is no available spawn, it's possible to visualize using:

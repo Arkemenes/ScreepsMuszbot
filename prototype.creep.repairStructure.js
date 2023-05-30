@@ -23,7 +23,8 @@
 
                 let targets = this.pos.findInRange(FIND_STRUCTURES, 5, {
                     filter: (s) => s.structureType != STRUCTURE_CONTROLLER && 
-                    (s.structureType != STRUCTURE_RAMPART && s.structureType != STRUCTURE_WALL && s.hits < s.hitsMax) 
+                    s.structureType != STRUCTURE_WALL &&
+                    (s.structureType != STRUCTURE_RAMPART && s.hits < s.hitsMax) 
                     || (((this.room.controller.level == 8 && 0.5 * s.hits < s.hitsMax) || s.hits < 0.05 * s.hitsMax)
                     && s.structureType == STRUCTURE_RAMPART)
                 });
@@ -33,8 +34,10 @@
 
                 if (!target) {
                     let targets = this.room.find(FIND_STRUCTURES, {
-                        filter: (s) => s.structureType != STRUCTURE_CONTROLLER && (s.structureType != STRUCTURE_RAMPART 
-                            && s.structureType != STRUCTURE_WALL  && s.hits < s.hitsMax) || (((this.room.controller.level == 8 && 0.5 * s.hits < s.hitsMax) || s.hits < 0.05 * s.hitsMax)
+                        filter: (s) => s.structureType != STRUCTURE_CONTROLLER && 
+                        s.structureType != STRUCTURE_WALL &&
+                        (s.structureType != STRUCTURE_RAMPART 
+                            && s.hits < s.hitsMax) || (((this.room.controller.level == 8 && 0.5 * s.hits < s.hitsMax) || s.hits < 0.05 * s.hitsMax)
                         && s.structureType == STRUCTURE_RAMPART)
                     });
         
@@ -44,14 +47,18 @@
             }
             else {
                 let targets = this.pos.findInRange(FIND_STRUCTURES, 5, {
-                    filter: (s) => s.structureType != STRUCTURE_CONTROLLER && (s.structureType != STRUCTURE_RAMPART && s.structureType != STRUCTURE_WALL && s.hits < s.hitsMax) || (((this.room.controller.level == 8 && s.hits < s.hitsMax) || s.hits < 0.05 * s.hitsMax)
+                    filter: (s) => s.structureType != STRUCTURE_CONTROLLER && 
+                    s.structureType != STRUCTURE_WALL && 
+                    (s.structureType != STRUCTURE_RAMPART && s.hits < s.hitsMax) || (((this.room.controller.level == 8 && s.hits < s.hitsMax) || s.hits < 0.05 * s.hitsMax)
                     && s.structureType == STRUCTURE_RAMPART)
                 });
                 target = _.sortBy(targets, s => s.hits/s.hitsMax)[0];
     
                 if (!target) {
                     let targets = this.room.find(FIND_STRUCTURES, {
-                        filter: (s) => s.structureType != STRUCTURE_CONTROLLER && (s.structureType != STRUCTURE_RAMPART && s.structureType != STRUCTURE_WALL && s.hits < s.hitsMax) || (((this.room.controller.level == 8 && s.hits < s.hitsMax) || s.hits < 0.05 * s.hitsMax)
+                        filter: (s) => s.structureType != STRUCTURE_CONTROLLER && 
+                        s.structureType != STRUCTURE_WALL &&
+                        (s.structureType != STRUCTURE_RAMPART && s.hits < s.hitsMax) || (((this.room.controller.level == 8 && s.hits < s.hitsMax) || s.hits < 0.05 * s.hitsMax)
                         && s.structureType == STRUCTURE_RAMPART)
                     });
                     target = _.sortBy(targets, s => s.hits/s.hitsMax)[0];
