@@ -1,3 +1,3 @@
-let files = {
-    creep: require("./prototype.creep"),
-};
+require("./prototype.roomObject");
+require("./prototype.room");
+require("./prototype.creep");
