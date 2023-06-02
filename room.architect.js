@@ -1,4 +1,4 @@
-layoutKey = {
+let layoutKey = {
     A: STRUCTURE_SPAWN,
     N: STRUCTURE_NUKER,
     K: STRUCTURE_LINK,
@@ -18,59 +18,68 @@ layoutKey = {
 _.merge(layoutKey, _.invert(layoutKey));
 
 const coreStamp = [
-    " ....  ",
-    ".EFMN. ",
-    ".E P.O.",
-    ".ESAEE.",
-    ".E C E.",
-    ".EELEE.",
-    " ..... ",
+    " ...   ",
+    ".EEK.. ",
+    ".E AEE.",
+    ".EES E.",
+    " ..EEE.",
+    "   ... ",
 ];
+const spawnStamp = [
+    " ...   ",
+    ".EEK.. ",
+    ".E AEE.",
+    ".EEC E.",
+    " ..EEE.",
+    "   ... ",
+];
+const anchorStamp = ["  .  ", " .N. ", ".OPF.", " .M. ", "  .  "];
+const containerStamp = ["  .  ", " .E. ", ".EEE.", " .E. ", "  .  "];
+const labStamp = ["  ..  ", " .LL. ", ".LL.L.", ".L.LL.", " .LL. ", "  ..  "];
+const microStamp = [" . ", ".E.", " . "];
 // {
 //     structures: ["EFMN.", "E P.O", "ESAEE", "E C E", "EELEE"],
 //     rcl: ["111  ", "1 111", "111 1", " 1111"],
 // };
-const spawnStamp = [
-    " ...   ",
-    ".EEL.. ",
-    ".E AEE.",
-    ".EEC E.",
-    "   EEE.",
-    "   ... ",
-]; // x3
-const containerStamp = ["  .  ", " .E. ", ".EEE.", " .E. ", "  .  "];
-const labStamp = [" LL.", "LL.L", "L.LL", ".LL "];
 
 const roomDimensions = 50;
 
 function planCity(room) {
     const roomName = room.name;
 
+    if (Memory.rooms[room.name] == undefined) {
+        Memory.rooms[room.name] = {};
+    }
+
+    // if (Memory.rooms[room.name].planStep == 8) {
+    //     visualizeStructures(Memory.rooms[roomName].buildings);
+    //     return;
+    // }
+
+    const exits = getAllExitCoordinates(roomName);
+    const floodFillMatrix = room.floodFill(exits);
+
     if (Memory.rooms[room.name].planStep == undefined) {
-        Memory.rooms[roomName].buildings = getContainerLocations(roomName);
+        Memory.rooms[roomName].buildings = [];
+        Memory.rooms[roomName].buildings = Memory.rooms[
+            roomName
+        ].buildings.concat(getContainerLocations(roomName));
         Memory.rooms[roomName].planStep = 1;
     } else if (Memory.rooms[room.name].planStep == 1) {
-        exits = getAllExitCoordinates(roomName);
-        let floodFillMatrix = room.floodFill(exits);
-
+        Memory.rooms[roomName].buildings = Memory.rooms[
+            roomName
+        ].buildings.concat(
+            findStampLocation(roomName, anchorStamp, floodFillMatrix)
+        );
+        Memory.rooms[roomName].planStep = 2;
+    } else if (Memory.rooms[room.name].planStep == 2) {
         Memory.rooms[roomName].buildings = Memory.rooms[
             roomName
         ].buildings.concat(
             findStampLocation(roomName, coreStamp, floodFillMatrix)
         );
-        Memory.rooms[roomName].planStep = 2;
-    } else if (Memory.rooms[room.name].planStep == 2) {
-        exits = getAllExitCoordinates(roomName);
-        let floodFillMatrix = room.floodFill(exits);
-        Memory.rooms[roomName].buildings = Memory.rooms[
-            roomName
-        ].buildings.concat(
-            findStampLocation(roomName, spawnStamp, floodFillMatrix)
-        );
         Memory.rooms[roomName].planStep = 3;
     } else if (Memory.rooms[room.name].planStep == 3) {
-        exits = getAllExitCoordinates(roomName);
-        let floodFillMatrix = room.floodFill(exits);
         Memory.rooms[roomName].buildings = Memory.rooms[
             roomName
         ].buildings.concat(
@@ -78,41 +87,33 @@ function planCity(room) {
         );
         Memory.rooms[roomName].planStep = 4;
     } else if (Memory.rooms[room.name].planStep == 4) {
-        exits = getAllExitCoordinates(roomName);
-        let floodFillMatrix = room.floodFill(exits);
+        Memory.rooms[roomName].buildings = Memory.rooms[
+            roomName
+        ].buildings.concat(
+            findStampLocation(roomName, spawnStamp, floodFillMatrix)
+        );
+        Memory.rooms[roomName].planStep = 5;
+    } else if (Memory.rooms[room.name].planStep == 5) {
         Memory.rooms[roomName].buildings = Memory.rooms[
             roomName
         ].buildings.concat(
             findStampLocation(roomName, labStamp, floodFillMatrix)
         );
-        Memory.rooms[roomName].planStep = 5;
-    } else if (Memory.rooms[room.name].planStep == 5) {
-        exits = getAllExitCoordinates(roomName);
-        let floodFillMatrix = room.floodFill(exits);
-        Memory.rooms[roomName].buildings = Memory.rooms[
-            roomName
-        ].buildings.concat(
-            findStampLocation(roomName, containerStamp, floodFillMatrix)
-        );
         Memory.rooms[roomName].planStep = 6;
     } else if (Memory.rooms[room.name].planStep == 6) {
-        exits = getAllExitCoordinates(roomName);
-        let floodFillMatrix = room.floodFill(exits);
         Memory.rooms[roomName].buildings = Memory.rooms[
             roomName
         ].buildings.concat(
-            findStampLocation(roomName, containerStamp, floodFillMatrix)
+            findStampLocation(roomName, microStamp, floodFillMatrix)
         );
-        Memory.rooms[roomName].planStep = 7;
-    } else if (Memory.rooms[room.name].planStep == 7) {
-        exits = getAllExitCoordinates(roomName);
-        let floodFillMatrix = room.floodFill(exits);
-        Memory.rooms[roomName].buildings = Memory.rooms[
-            roomName
-        ].buildings.concat(
-            findStampLocation(roomName, containerStamp, floodFillMatrix)
-        );
-        Memory.rooms[roomName].planStep = 8;
+
+        const countExtensions = Memory.rooms[roomName].buildings.filter(
+            (building) => building.structureType === STRUCTURE_EXTENSION
+        ).length;
+
+        if (countExtensions == 60) {
+            Memory.rooms[roomName].planStep = 7;
+        }
     }
 
     visualizeStructures(Memory.rooms[roomName].buildings);
@@ -126,7 +127,7 @@ function planCity(room) {
 }
 
 function getContainerLocations(roomName) {
-    sources = Game.rooms[roomName].find(FIND_SOURCES);
+    let sources = Game.rooms[roomName].find(FIND_SOURCES);
 
     const locations = [];
     for (let sourceName in sources) {
@@ -176,49 +177,71 @@ function findStampLocation(roomName, stamp, floodFillMatrix) {
         return [];
     }
 
-    const usedPositions = Memory.rooms[room.name].buildings.some(
-        ({ x, y }) => x === 1
-    );
-
-    // console.log(usedPositions);
-
     const terrainMatrix = Memory.rooms[room.name].terrainMatrix;
     const stampHeight = stamp.length;
     const stampWidth = stamp[0].length;
 
-    let bestLocation = undefined;
     let bestVal = -1;
+    let bestAdjacenRoads = -1;
     let buildings = [];
-    let tmp_buildings = [];
 
     for (let coordX = 1; coordX < 50 - stampWidth; coordX++) {
         for (let coordY = 1; coordY < 50 - stampHeight; coordY++) {
             let isValid = true;
 
-            value = 0;
-            tmp_buildings = [];
+            let value = 0;
+            let adjacentRoads = 0;
+            let tmp_buildings = [];
 
             for (let stampY = 0; stampY < stampHeight; stampY++) {
                 for (let stampX = 0; stampX < stampWidth; stampX++) {
                     if (
-                        Memory.rooms[room.name].buildings.some(
-                            ({ x, y }) =>
-                                x === coordX + stampX && y === coordY + stampY
-                        )
-                    ) {
-                        isValid = false;
-                        break;
-                    } else if (
                         stamp[stampY][stampX] !== " " &&
                         terrainMatrix[coordX + stampX][coordY + stampY] ===
                             TERRAIN_MASK_WALL
                     ) {
                         isValid = false;
                         break;
+                    } else if (
+                        Memory.rooms[room.name].buildings.some(
+                            ({ x, y, structureType }) =>
+                                x === coordX + stampX &&
+                                y === coordY + stampY &&
+                                stamp[stampY][stampX] != " " &&
+                                !(
+                                    structureType == STRUCTURE_ROAD &&
+                                    stamp[stampY][stampX] == "."
+                                )
+                        )
+                    ) {
+                        isValid = false;
+                        break;
                     }
+
                     value += floodFillMatrix.get(coordX, coordY);
 
-                    if (stamp[stampY][stampX] !== " ") {
+                    if (
+                        stamp[stampY][stampX] == "." &&
+                        Memory.rooms[roomName].buildings.some(
+                            (building) =>
+                                building.x === coordX + stampX &&
+                                building.y === coordY + stampY &&
+                                building.structureType === STRUCTURE_ROAD
+                        )
+                    ) {
+                        adjacentRoads += 1;
+                    }
+
+                    if (
+                        stamp[stampY][stampX] !== " " &&
+                        !Memory.rooms[room.name].buildings.some(
+                            ({ x, y, structureType }) =>
+                                x === coordX + stampX &&
+                                y === coordY + stampY &&
+                                structureType ==
+                                    layoutKey[stamp[stampY][stampX]]
+                        )
+                    ) {
                         tmp_buildings.push({
                             x: coordX + stampX,
                             y: coordY + stampY,
@@ -233,11 +256,18 @@ function findStampLocation(roomName, stamp, floodFillMatrix) {
                 }
             }
 
-            if (isValid && value > bestVal) {
-                x = coordX;
-                y = coordY;
-                bestLocation = { x, y };
+            if (isValid && adjacentRoads > 0) {
+                console.log("valid", adjacentRoads);
+            }
+            if (
+                isValid &&
+                (adjacentRoads > bestAdjacenRoads ||
+                    (value > bestVal && adjacentRoads == bestAdjacenRoads))
+            ) {
+                let x = coordX;
+                let y = coordY;
                 bestVal = value;
+                bestAdjacenRoads = adjacentRoads;
                 buildings = tmp_buildings;
             }
         }
@@ -245,67 +275,6 @@ function findStampLocation(roomName, stamp, floodFillMatrix) {
 
     return buildings;
 }
-
-function visualizeStamp(roomName, stamp, location) {
-    const room = Game.rooms[roomName];
-
-    if (!room) {
-        console.log(`Room ${roomName} not found.`);
-        return;
-    }
-
-    const stampHeight = stamp.length;
-    const stampWidth = stamp[0].length;
-
-    const roomVisual = new RoomVisual(roomName); // Create RoomVisual instance outside the loop
-
-    const { x, y } = location;
-
-    for (let stampY = 0; stampY < stampHeight; stampY++) {
-        for (let stampX = 0; stampX < stampWidth; stampX++) {
-            const stampChar = stamp[stampY][stampX];
-
-            if (stampChar === " ") {
-                // Draw an outline for empty spaces
-                roomVisual.rect(x + stampX, y + stampY, 1, 1, {
-                    fill: "transparent",
-                    stroke: "#00FF00",
-                });
-            } else if (stampChar === "C") {
-                // Draw a colored square for the center location
-                roomVisual.rect(x + stampX, y + stampY, 1, 1, {
-                    fill: "#FF0000",
-                    stroke: "#000000",
-                });
-            } else {
-                // Draw a colored square for structure locations
-                roomVisual.rect(x + stampX, y + stampY, 1, 1, {
-                    fill: "#EEEEEE",
-                    stroke: "#000000",
-                });
-            }
-        }
-    }
-}
-
-findPositionsInsideRect = function (rect) {
-    const positions = [];
-
-    for (let x = rect.x1; x <= rect.x2; x++) {
-        for (let y = rect.y1; y <= rect.y2; y++) {
-            // Iterate if the pos doesn't map onto a room
-
-            if (x < 0 || x >= roomDimensions || y < 0 || y >= roomDimensions)
-                continue;
-
-            // Otherwise ass the x and y to positions
-
-            positions.push({ x, y });
-        }
-    }
-
-    return positions;
-};
 
 function getAllExitCoordinates(roomName) {
     const exits = [];

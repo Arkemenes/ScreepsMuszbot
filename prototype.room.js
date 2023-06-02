@@ -199,7 +199,7 @@ Room.prototype.diagonalDistanceTransform = function (
     return distanceCM;
 };
 
-findPositionsInsideRect = function (rect) {
+function findPositionsInsideRect(rect) {
     const positions = [];
 
     for (let x = rect.x1; x <= rect.x2; x++) {
@@ -216,7 +216,7 @@ findPositionsInsideRect = function (rect) {
     }
 
     return positions;
-};
+}
 
 Room.prototype.floodFill = function (seeds) {
     const room = this;
@@ -261,6 +261,17 @@ Room.prototype.floodFill = function (seeds) {
                 // Iterate if the terrain is a wall
 
                 if (terrain.get(pos.x, pos.y) == TERRAIN_MASK_WALL) continue;
+
+                if (
+                    Memory.rooms[room.name].buildings &&
+                    Memory.rooms[room.name].buildings.some(
+                        ({ x, y, structureType }) =>
+                            x === pos.x &&
+                            y === pos.y &&
+                            structureType != STRUCTURE_ROAD
+                    )
+                )
+                    continue;
 
                 // Otherwise so long as the pos isn't a wall record its depth in the flood cost matrix
 
