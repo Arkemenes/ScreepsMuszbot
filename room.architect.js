@@ -172,7 +172,7 @@ function planCity(room) {
             };
             addBuildings(roomName, stamp, floodFillMatrix);
 
-            if (countExtensions >= 200) {
+            if (countExtensions >= 60) {
                 Memory.rooms[roomName].planStep++;
             }
             break;
@@ -302,16 +302,26 @@ function findStampLocation(roomName, stamp, floodFillMatrix) {
                 for (let stampX = 0; stampX < stampWidth; stampX++) {
                     const stampStructure = stamp["structures"][stampY][stampX];
 
-                    // Check if stamp overlaps with a wall
                     if (
                         stampStructure !== " " &&
                         stampStructure !== "?" &&
-                        terrainMatrix[coordX + stampX][coordY + stampY] ===
-                            TERRAIN_MASK_WALL
+                        floodFillMatrix.get(coordX + stampX, coordY + stampY) <
+                            3
                     ) {
                         isValid = false;
                         break;
                     }
+
+                    // // Check if stamp overlaps with a wall
+                    // if (
+                    //     stampStructure !== " " &&
+                    //     stampStructure !== "?" &&
+                    //     terrainMatrix[coordX + stampX][coordY + stampY] ===
+                    //         TERRAIN_MASK_WALL
+                    // ) {
+                    //     isValid = false;
+                    //     break;
+                    // }
 
                     // Check if stamp overlaps with existing buildings
                     const existingBuilding = Memory.rooms[
