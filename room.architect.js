@@ -71,6 +71,14 @@ function planCity(room) {
                     " 224332",
                     "   222 ",
                 ],
+                ramparts: [
+                    "       ",
+                    "   5   ",
+                    "   5   ",
+                    "   5   ",
+                    "       ",
+                    "       ",
+                ],
             };
             addBuildings(roomName, stamp, floodFillMatrix);
             Memory.rooms[roomName].planStep++;
@@ -93,6 +101,14 @@ function planCity(room) {
                     "4444 44",
                     " 445444",
                     "   444 ",
+                ],
+                ramparts: [
+                    "       ",
+                    "   7   ",
+                    "   7   ",
+                    "   5   ",
+                    "       ",
+                    "       ",
                 ],
             };
 
@@ -118,6 +134,14 @@ function planCity(room) {
                     " 888888",
                     "   888 ",
                 ],
+                ramparts: [
+                    "       ",
+                    "   8   ",
+                    "   8   ",
+                    "   8   ",
+                    "       ",
+                    "       ",
+                ],
             };
 
             addBuildings(roomName, stamp, floodFillMatrix);
@@ -142,6 +166,14 @@ function planCity(room) {
                     " 6688 ",
                     "  88  ",
                 ],
+                ramparts: [
+                    "      ",
+                    "  87  ",
+                    " 87 6 ",
+                    " 7 68 ",
+                    "  68  ",
+                    "      ",
+                ],
             };
             addBuildings(roomName, stamp, floodFillMatrix);
             Memory.rooms[roomName].planStep++;
@@ -151,6 +183,7 @@ function planCity(room) {
             stamp = {
                 structures: ["  ?  ", " .N. ", "?OPF?", " .M. ", "  ?  "],
                 rcl: ["  6  ", " 686 ", "68876", " 666 ", "  6  "],
+                ramparts: ["     ", "  8  ", " 887 ", "  6  ", "     "],
             };
             addBuildings(roomName, stamp, floodFillMatrix);
             Memory.rooms[roomName].planStep++;
@@ -169,6 +202,7 @@ function planCity(room) {
                 rcl: [" x ", "xxx", " x "].map((str) =>
                     str.replace(/x/g, planRCL)
                 ),
+                ramparts: ["   ", "   ", "   "],
             };
             addBuildings(roomName, stamp, floodFillMatrix);
 
@@ -184,7 +218,6 @@ function planCity(room) {
             );
             const ramparts = [];
             for (const tile of cutTiles) {
-                console.log(JSON.stringify(tile));
                 ramparts.push({
                     x: tile.x,
                     y: tile.y,
@@ -380,6 +413,15 @@ function findStampLocation(roomName, stamp, floodFillMatrix) {
                             structureType: layoutKey[stampStructure],
                             minimalRCL: stamp["rcl"][stampY][stampX],
                         });
+
+                        if (stamp["ramparts"][stampY][stampX] != " ") {
+                            tmpBuildings.push({
+                                x: coordX + stampX,
+                                y: coordY + stampY,
+                                structureType: STRUCTURE_RAMPART,
+                                minimalRCL: stamp["ramparts"][stampY][stampX],
+                            });
+                        }
                     }
                 }
 
