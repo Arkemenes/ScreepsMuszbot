@@ -211,7 +211,6 @@ function planCity(room) {
             }
             break;
         case 7:
-            // console.log(JSON.stringify(Memory.rooms[roomName].mincutBoundries));
             const cutTiles = mincut.GetCutTiles(
                 roomName,
                 Memory.rooms[roomName].mincutBoundries
@@ -222,7 +221,7 @@ function planCity(room) {
                     x: tile.x,
                     y: tile.y,
                     structureType: STRUCTURE_RAMPART,
-                    minimalRCL: 0,
+                    minimalRCL: 3,
                 });
             }
             Memory.rooms[roomName].buildings =
@@ -344,17 +343,6 @@ function findStampLocation(roomName, stamp, floodFillMatrix) {
                         isValid = false;
                         break;
                     }
-
-                    // // Check if stamp overlaps with a wall
-                    // if (
-                    //     stampStructure !== " " &&
-                    //     stampStructure !== "?" &&
-                    //     terrainMatrix[coordX + stampX][coordY + stampY] ===
-                    //         TERRAIN_MASK_WALL
-                    // ) {
-                    //     isValid = false;
-                    //     break;
-                    // }
 
                     // Check if stamp overlaps with existing buildings
                     const existingBuilding = Memory.rooms[
