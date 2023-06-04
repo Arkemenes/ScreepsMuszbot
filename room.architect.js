@@ -261,8 +261,6 @@ function planCity(room) {
             Memory.rooms[roomName].planStep++;
             break;
         case 9:
-            // TODO: build towers
-
             const structures = Memory.rooms[roomName].buildings.filter(
                 (building) =>
                     building.structureType !== STRUCTURE_ROAD &&
@@ -518,11 +516,105 @@ function getContainerLocations(roomName) {
             }
         }
     }
-    // TODO: add container for extractor
+    // Container for extractor
+    const minerals = Game.rooms[roomName].find(FIND_MINERALS);
 
-    // TODO: add links for containers
+    for (const mineral of minerals) {
+        let locationFound = false;
+        for (let i = -1; i <= 1; i++) {
+            for (let j = -1; j <= 1; j++) {
+                const coordX = mineral.pos.x + i;
+                const coordY = mineral.pos.y + j;
 
-    return locations;
+                // Check if a suitable location has already been found for the current mineral
+                if (locationFound) {
+                    break;
+                }
+                // Check if the terrain is not a wall and no other structure exists at the location
+                else if (
+                    Memory.rooms[roomName].terrainMatrix[coordX][coordY] !==
+                        TERRAIN_MASK_WALL &&
+                    !Game.rooms[roomName].find(FIND_STRUCTURES, {
+                        filter: (s) =>
+                            s.pos &&
+                            s.pos.x === coordX &&
+                            s.pos.y === coordY &&
+                            s.structureType !== STRUCTURE_CONTAINER &&
+                            s.structureType !== STRUCTURE_ROAD,
+                    })[0] &&
+                    (i !== 0 || j !== 0)
+                ) {
+                    // Add the location to the list
+                    locations.push({
+                        x: coordX,
+                        y: coordY,
+                        structureType: STRUCTURE_CONTAINER,
+                        minimalRCL: 6,
+                    });
+                    locationFound = true;
+                }
+            }
+        }
+    }
+
+    // Links for containers
+    const linkLocations = [];
+
+    for (const container of locations) {
+        let locationFound = false;
+        // Check each adjacent position within range 1
+        for (let dx = -1; dx <= 1; dx++) {
+            for (let dy = -1; dy <= 1; dy++) {
+                if (dx === 0 && dy === 0) continue; // Skip the original position
+
+                if (locationFound) {
+                    break;
+                }
+
+                const posX = container.x + dx;
+                const posY = container.y + dy;
+
+                console.log(Memory.rooms[roomName].terrainMatrix[posX][posY]);
+
+                // Check if the position has a wall
+                if (
+                    Memory.rooms[roomName].terrainMatrix[posX][posY] ==
+                    TERRAIN_MASK_WALL
+                ) {
+                    continue; // Skip if there is a wall
+                }
+
+                // Check if the position is within the room bounds
+                if (posX >= 0 && posX < 50 && posY >= 0 && posY < 50) {
+                    const rcl =
+                        linkLocations.length == 0
+                            ? 5
+                            : linkLocations.length == 1
+                            ? 6
+                            : 8;
+                    linkLocations.push({
+                        x: posX,
+                        y: posY,
+                        structureType: STRUCTURE_LINK,
+                        minimalRCL: rcl,
+                    }); // Return the link spot
+                    locationFound = true;
+                }
+            }
+        }
+    }
+
+    for (const mineral of minerals) {
+        // Add extractor for mineral
+        locations.push({
+            x: mineral.pos.x,
+            y: mineral.pos.y,
+            structureType: STRUCTURE_EXTRACTOR,
+            minimalRCL: 6,
+        });
+    }
+
+    return locations.concat(linkLocations);
 }
 
 function addBuildings(roomName, stamp, floodFillMatrix) {
