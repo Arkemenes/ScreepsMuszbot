@@ -23,10 +23,6 @@ _.merge(layoutKey, _.invert(layoutKey));
 function planCity(room) {
     const roomName = room.name;
 
-    if (Memory.rooms[roomName].buildings && roomName == "E7S5") {
-        visualizeStructures(Memory.rooms[roomName].buildings);
-    }
-
     if (Memory.rooms[room.name] == undefined) {
         Memory.rooms[room.name] = {};
     }
@@ -389,6 +385,10 @@ function planCity(room) {
 
             Memory.rooms[roomName].planStep++;
             break;
+    }
+
+    if (Memory.rooms[roomName].buildings) {
+        visualizeStructures(Memory.rooms[roomName].buildings, roomName);
     }
 }
 
@@ -847,8 +847,8 @@ function getAllExitCoordinates(roomName) {
     return exits;
 }
 
-function visualizeStructures(structures) {
-    const roomVisual = new RoomVisual();
+function visualizeStructures(structures, roomName) {
+    const roomVisual = new RoomVisual(roomName);
 
     for (const structure of structures) {
         const { x, y, structureType } = structure;
