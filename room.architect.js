@@ -280,7 +280,6 @@ function planCity(room) {
                 blockRamparts,
                 (visualize = true)
             );
-
             const towerPos = findFirstTowerLocation(
                 floodFillMatrixBlocked,
                 blockRamparts
@@ -297,6 +296,61 @@ function planCity(room) {
                 structureType: STRUCTURE_RAMPART,
                 minimalRCL: 4,
             });
+            const secondTowerPos = findNextTowerLocation(
+                floodFillMatrixBlocked,
+                blockRamparts,
+                roomName
+            );
+            Memory.rooms[roomName].buildings.push({
+                x: secondTowerPos.x,
+                y: secondTowerPos.y,
+                structureType: STRUCTURE_TOWER,
+                minimalRCL: 5,
+            });
+            Memory.rooms[roomName].buildings.push({
+                x: secondTowerPos.x,
+                y: secondTowerPos.y,
+                structureType: STRUCTURE_RAMPART,
+                minimalRCL: 5,
+            });
+
+            const thirdTowerPos = findNextTowerLocation(
+                floodFillMatrixBlocked,
+                blockRamparts,
+                roomName
+            );
+            Memory.rooms[roomName].buildings.push({
+                x: thirdTowerPos.x,
+                y: thirdTowerPos.y,
+                structureType: STRUCTURE_TOWER,
+                minimalRCL: 7,
+            });
+            Memory.rooms[roomName].buildings.push({
+                x: thirdTowerPos.x,
+                y: thirdTowerPos.y,
+                structureType: STRUCTURE_RAMPART,
+                minimalRCL: 7,
+            });
+
+            for (let ix = 0; ix < 3; ix++) {
+                const newTowerPos = findNextTowerLocation(
+                    floodFillMatrixBlocked,
+                    blockRamparts,
+                    roomName
+                );
+                Memory.rooms[roomName].buildings.push({
+                    x: newTowerPos.x,
+                    y: newTowerPos.y,
+                    structureType: STRUCTURE_TOWER,
+                    minimalRCL: 8,
+                });
+                Memory.rooms[roomName].buildings.push({
+                    x: newTowerPos.x,
+                    y: newTowerPos.y,
+                    structureType: STRUCTURE_RAMPART,
+                    minimalRCL: 8,
+                });
+            }
 
             Memory.rooms[roomName].planStep++;
             break;
@@ -305,13 +359,21 @@ function planCity(room) {
     visualizeStructures(Memory.rooms[roomName].buildings);
 }
 
-function findFirstTowerLocation(floodFillMatrix, structures) {
+function findFirstTowerLocation(
+    floodFillMatrix,
+    structures,
+    rampartDistance = 1
+) {
     // Define the adjacent positions
     const adjacentOffsets = [
-        { dx: 0, dy: -1 }, // Top
-        { dx: 0, dy: 1 }, // Bottom
-        { dx: -1, dy: 0 }, // Left
-        { dx: 1, dy: 0 }, // Right
+        { dx: 0, dy: -1 * rampartDistance }, // Top
+        { dx: 0, dy: 1 * rampartDistance }, // Bottom
+        { dx: -1 * rampartDistance, dy: 0 }, // Left
+        { dx: 1 * rampartDistance, dy: 0 }, // Right,
+        { dx: -1 * rampartDistance, dy: -1 * rampartDistance }, // Top Left
+        { dx: 1 * rampartDistance, dy: 1 * rampartDistance }, // Bottom Right
+        { dx: -1 * rampartDistance, dy: 1 * rampartDistance }, // Bottom Left
+        { dx: 1 * rampartDistance, dy: -1 * rampartDistance }, // Top Right
     ];
 
     // Find the minimum value in the floodFillMatrix that is adjacent to any structure
@@ -331,9 +393,86 @@ function findFirstTowerLocation(floodFillMatrix, structures) {
             ) {
                 minVal = floodFillMatrix.get(adjacentX, adjacentY);
                 targetPosition = { x: adjacentX, y: adjacentY };
+            } else {
             }
         });
     });
+
+    if (targetPosition == null) {
+        targetPosition = findFirstTowerLocation(
+            floodFillMatrix,
+            structures,
+            rampartDistance + 1
+        );
+    }
+
+    return targetPosition;
+}
+
+function findNextTowerLocation(
+    floodFillMatrix,
+    structures,
+    roomName,
+    rampartDistance = 1
+) {
+    // Define the adjacent positions
+    const adjacentOffsets = [
+        { dx: 0, dy: -1 * rampartDistance }, // Top
+        { dx: 0, dy: 1 * rampartDistance }, // Bottom
+        { dx: -1 * rampartDistance, dy: 0 }, // Left
+        { dx: 1 * rampartDistance, dy: 0 }, // Right,
+        { dx: -1 * rampartDistance, dy: -1 * rampartDistance }, // Top Left
+        { dx: 1 * rampartDistance, dy: 1 * rampartDistance }, // Bottom Right
+        { dx: -1 * rampartDistance, dy: 1 * rampartDistance }, // Bottom Left
+        { dx: 1 * rampartDistance, dy: -1 * rampartDistance }, // Top Right
+    ];
+
+    // Find the minimum value in the floodFillMatrix that is adjacent to any structure
+    let maxVal = -Infinity;
+    let targetPosition = null;
+
+    structures.forEach((structure) => {
+        const { x, y } = structure;
+
+        adjacentOffsets.forEach((offset) => {
+            const adjacentX = x + offset.dx;
+            const adjacentY = y + offset.dy;
+
+            const currentTowers = Memory.rooms[roomName].buildings.filter(
+                (building) => building.structureType === STRUCTURE_TOWER
+            );
+
+            const totalDistance = currentTowers.reduce((sum, tower) => {
+                const distance = Math.sqrt(
+                    (tower.x - adjacentX) ** 2 + (tower.y - adjacentY) ** 2
+                );
+                return sum + distance;
+            }, 0);
+
+            const averageDistance = totalDistance / currentTowers.length;
+
+            if (
+                floodFillMatrix.get(adjacentX, adjacentY) > 0 &&
+                averageDistance > maxVal &&
+                !Memory.rooms[roomName].buildings.find(
+                    (building) =>
+                        building.x === adjacentX && building.y === adjacentY
+                )
+            ) {
+                maxVal = averageDistance;
+                targetPosition = { x: adjacentX, y: adjacentY };
+            }
+        });
+    });
+
+    if (targetPosition == null) {
+        targetPosition = findNextTowerLocation(
+            floodFillMatrix,
+            structures,
+            roomName,
+            rampartDistance + 1
+        );
+    }
 
     return targetPosition;
 }

@@ -258,12 +258,6 @@ Room.prototype.floodFill = function (seeds, blocks = [], visualize = false) {
             // If the depth isn't 0
 
             if (depth != 0) {
-                if (
-                    blocks.some((block) => block.x == pos.x && block.y == pos.y)
-                ) {
-                    console.log("d");
-                }
-
                 // Iterate if the terrain is a wall
                 if (
                     terrain.get(pos.x, pos.y) == TERRAIN_MASK_WALL ||
