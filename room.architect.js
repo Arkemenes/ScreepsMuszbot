@@ -258,6 +258,8 @@ function planCity(room) {
             Memory.rooms[roomName].buildings =
                 Memory.rooms[roomName].buildings.concat(pathsToAdjacentRooms);
 
+            // TODO: add road to upgrader
+
             Memory.rooms[roomName].planStep++;
             break;
         case 9:
@@ -265,7 +267,9 @@ function planCity(room) {
                 (building) =>
                     building.structureType !== STRUCTURE_ROAD &&
                     building.structureType !== STRUCTURE_RAMPART &&
-                    building.structureType !== STRUCTURE_CONTAINER
+                    building.structureType !== STRUCTURE_CONTAINER &&
+                    building.structureType !== STRUCTURE_LINK &&
+                    building.structureType !== STRUCTURE_EXTRACTOR
             );
             const blockRamparts = Memory.rooms[roomName].buildings.filter(
                 (building) =>
@@ -573,8 +577,6 @@ function getContainerLocations(roomName) {
 
                 const posX = container.x + dx;
                 const posY = container.y + dy;
-
-                console.log(Memory.rooms[roomName].terrainMatrix[posX][posY]);
 
                 // Check if the position has a wall
                 if (
