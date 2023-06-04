@@ -46,8 +46,10 @@ function planCity(room) {
 
     switch (planStep) {
         case undefined:
+            Memory.rooms[roomName].buildings = [];
             Memory.rooms[roomName].mincutBoundries = [];
-            Memory.rooms[roomName].buildings = getContainerLocations(roomName);
+            const containersAndLinks = getContainerLocations(roomName);
+            addBuildings(roomName, containersAndLinks);
             Memory.rooms[roomName].planStep = 1;
             break;
         case 1:
@@ -80,7 +82,7 @@ function planCity(room) {
                     "       ",
                 ],
             };
-            addBuildings(roomName, stamp, floodFillMatrix);
+            addStamp(roomName, stamp, floodFillMatrix);
             Memory.rooms[roomName].planStep++;
             break;
         case 2:
@@ -112,7 +114,7 @@ function planCity(room) {
                 ],
             };
 
-            addBuildings(roomName, stamp, floodFillMatrix);
+            addStamp(roomName, stamp, floodFillMatrix);
             Memory.rooms[roomName].planStep++;
             break;
         case 3:
@@ -144,7 +146,7 @@ function planCity(room) {
                 ],
             };
 
-            addBuildings(roomName, stamp, floodFillMatrix);
+            addStamp(roomName, stamp, floodFillMatrix);
             Memory.rooms[roomName].planStep++;
             break;
         case 4:
@@ -175,7 +177,7 @@ function planCity(room) {
                     "      ",
                 ],
             };
-            addBuildings(roomName, stamp, floodFillMatrix);
+            addStamp(roomName, stamp, floodFillMatrix);
             Memory.rooms[roomName].planStep++;
             break;
         case 5:
@@ -185,7 +187,7 @@ function planCity(room) {
                 rcl: ["  6  ", " 686 ", "68876", " 666 ", "  6  "],
                 ramparts: ["     ", "  8  ", " 887 ", "  6  ", "     "],
             };
-            addBuildings(roomName, stamp, floodFillMatrix);
+            addStamp(roomName, stamp, floodFillMatrix);
             Memory.rooms[roomName].planStep++;
             break;
 
@@ -204,7 +206,7 @@ function planCity(room) {
                 ),
                 ramparts: ["   ", "   ", "   "],
             };
-            addBuildings(roomName, stamp, floodFillMatrix);
+            addStamp(roomName, stamp, floodFillMatrix);
 
             if (countExtensions >= 60) {
                 Memory.rooms[roomName].planStep++;
@@ -286,53 +288,73 @@ function planCity(room) {
                 floodFillMatrixBlocked,
                 blockRamparts
             );
-            Memory.rooms[roomName].buildings.push({
-                x: towerPos.x,
-                y: towerPos.y,
-                structureType: STRUCTURE_TOWER,
-                minimalRCL: 3,
-            });
-            Memory.rooms[roomName].buildings.push({
-                x: towerPos.x,
-                y: towerPos.y,
-                structureType: STRUCTURE_RAMPART,
-                minimalRCL: 4,
-            });
+            addBuildings(
+                roomName,
+                [
+                    {
+                        x: towerPos.x,
+                        y: towerPos.y,
+                        structureType: STRUCTURE_TOWER,
+                        minimalRCL: 3,
+                    },
+                    {
+                        x: towerPos.x,
+                        y: towerPos.y,
+                        structureType: STRUCTURE_RAMPART,
+                        minimalRCL: 4,
+                    },
+                ],
+                false
+            );
+
             const secondTowerPos = findNextTowerLocation(
                 floodFillMatrixBlocked,
                 blockRamparts,
                 roomName
             );
-            Memory.rooms[roomName].buildings.push({
-                x: secondTowerPos.x,
-                y: secondTowerPos.y,
-                structureType: STRUCTURE_TOWER,
-                minimalRCL: 5,
-            });
-            Memory.rooms[roomName].buildings.push({
-                x: secondTowerPos.x,
-                y: secondTowerPos.y,
-                structureType: STRUCTURE_RAMPART,
-                minimalRCL: 5,
-            });
+            addBuildings(
+                roomName,
+                [
+                    {
+                        x: secondTowerPos.x,
+                        y: secondTowerPos.y,
+                        structureType: STRUCTURE_TOWER,
+                        minimalRCL: 5,
+                    },
+                    {
+                        x: secondTowerPos.x,
+                        y: secondTowerPos.y,
+                        structureType: STRUCTURE_RAMPART,
+                        minimalRCL: 5,
+                    },
+                ],
+                false
+            );
 
             const thirdTowerPos = findNextTowerLocation(
                 floodFillMatrixBlocked,
                 blockRamparts,
                 roomName
             );
-            Memory.rooms[roomName].buildings.push({
-                x: thirdTowerPos.x,
-                y: thirdTowerPos.y,
-                structureType: STRUCTURE_TOWER,
-                minimalRCL: 7,
-            });
-            Memory.rooms[roomName].buildings.push({
-                x: thirdTowerPos.x,
-                y: thirdTowerPos.y,
-                structureType: STRUCTURE_RAMPART,
-                minimalRCL: 7,
-            });
+
+            addBuildings(
+                roomName,
+                [
+                    {
+                        x: thirdTowerPos.x,
+                        y: thirdTowerPos.y,
+                        structureType: STRUCTURE_TOWER,
+                        minimalRCL: 7,
+                    },
+                    {
+                        x: thirdTowerPos.x,
+                        y: thirdTowerPos.y,
+                        structureType: STRUCTURE_RAMPART,
+                        minimalRCL: 7,
+                    },
+                ],
+                false
+            );
 
             for (let ix = 0; ix < 3; ix++) {
                 const newTowerPos = findNextTowerLocation(
@@ -340,18 +362,24 @@ function planCity(room) {
                     blockRamparts,
                     roomName
                 );
-                Memory.rooms[roomName].buildings.push({
-                    x: newTowerPos.x,
-                    y: newTowerPos.y,
-                    structureType: STRUCTURE_TOWER,
-                    minimalRCL: 8,
-                });
-                Memory.rooms[roomName].buildings.push({
-                    x: newTowerPos.x,
-                    y: newTowerPos.y,
-                    structureType: STRUCTURE_RAMPART,
-                    minimalRCL: 8,
-                });
+                addBuildings(
+                    roomName,
+                    [
+                        {
+                            x: newTowerPos.x,
+                            y: newTowerPos.y,
+                            structureType: STRUCTURE_TOWER,
+                            minimalRCL: 8,
+                        },
+                        {
+                            x: newTowerPos.x,
+                            y: newTowerPos.y,
+                            structureType: STRUCTURE_RAMPART,
+                            minimalRCL: 8,
+                        },
+                    ],
+                    false
+                );
             }
 
             Memory.rooms[roomName].planStep++;
@@ -619,22 +647,28 @@ function getContainerLocations(roomName) {
     return locations.concat(linkLocations);
 }
 
-function addBuildings(roomName, stamp, floodFillMatrix) {
+function addStamp(roomName, stamp, floodFillMatrix) {
     // Find the locations using the stamp and flood fill matrix
     const newBuildings = findStampLocation(roomName, stamp, floodFillMatrix);
 
+    addBuildings(roomName, newBuildings, floodFillMatrix);
+}
+
+function addBuildings(roomName, newBuildings, shouldProtect = true) {
     // Concatenate the new buildings with the existing ones in Memory
     Memory.rooms[roomName].buildings =
         Memory.rooms[roomName].buildings.concat(newBuildings);
 
     // Add mincut boundries (for rampart positioning)
-    for (const b of newBuildings) {
-        Memory.rooms[roomName].mincutBoundries.push({
-            x1: b.x,
-            y1: b.y,
-            x2: b.x + 1,
-            y2: b.y + 1,
-        });
+    if (shouldProtect) {
+        for (const b of newBuildings) {
+            Memory.rooms[roomName].mincutBoundries.push({
+                x1: b.x,
+                y1: b.y,
+                x2: b.x + 1,
+                y2: b.y + 1,
+            });
+        }
     }
 }
 
