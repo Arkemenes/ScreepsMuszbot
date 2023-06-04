@@ -229,7 +229,46 @@ function planCity(room) {
             Memory.rooms[roomName].planStep++;
             break;
         case 8:
+            const containers = Memory.rooms[roomName].buildings.filter(
+                (building) => building.structureType === STRUCTURE_CONTAINER
+            );
+            const anchorSpawm = Memory.rooms[roomName].buildings.filter(
+                (building) => building.structureType === STRUCTURE_SPAWN
+            )[0];
+            const roadPos = { x: anchorSpawm.x + 1, y: anchorSpawm.y - 1 };
+            let newRoads = [];
+            for (container of containers) {
+                newRoads = getShortestPath(
+                    roomName,
+                    roadPos.x,
+                    roadPos.y,
+                    container.x,
+                    container.y
+                );
+                Memory.rooms[roomName].buildings =
+                    Memory.rooms[roomName].buildings.concat(newRoads);
+            }
+
+            const pathsToAdjacentRooms = getShortestPathToAdjacentRooms(
+                roomName,
+                roadPos.x,
+                roadPos.y
+            );
+
+            Memory.rooms[roomName].buildings =
+                Memory.rooms[roomName].buildings.concat(pathsToAdjacentRooms);
+
+            Memory.rooms[roomName].planStep++;
+            break;
+        case 9:
             // TODO: build towers
+
+            // const floodFillMatrix = room.floodFill(
+            //     structures,
+            //     blockRamparts,
+            //     (visualize = true)
+            // );
+            // Memory.rooms[roomName].planStep++;
             break;
     }
 
@@ -479,6 +518,99 @@ function visualizeStructures(structures) {
             opacity: 0.8,
         });
     }
+}
+
+function getShortestPathToAdjacentRooms(roomName, x, y) {
+    const exits = Game.map.describeExits(roomName);
+    let adjacentPaths = [];
+
+    for (const direction in exits) {
+        const adjacentRoomName = exits[direction];
+        const exit = new RoomPosition(x, y, roomName).findClosestByPath(
+            parseInt(direction)
+        );
+
+        if (exit !== null) {
+            const path = getShortestPath(roomName, x, y, exit.x, exit.y);
+            adjacentPaths = adjacentPaths.concat(path);
+        }
+    }
+
+    return adjacentPaths;
+}
+
+function getShortestPath(roomName, x1, y1, x2, y2) {
+    const room = Game.rooms[roomName];
+    const buildings = Memory.rooms[roomName].buildings;
+
+    if (buildings === undefined) {
+        return [];
+    }
+
+    const matrix = new PathFinder.CostMatrix();
+    buildings.forEach((building) => {
+        if (
+            building.structureType !== STRUCTURE_ROAD &&
+            building.structureType !== STRUCTURE_RAMPART
+        ) {
+            matrix.set(building.x, building.y, 255); // Impassable terrain
+        }
+    });
+
+    const origin = new RoomPosition(x1, y1, roomName);
+    const target = new RoomPosition(x2, y2, roomName);
+
+    const path = PathFinder.search(
+        origin,
+        { pos: target, range: 1 },
+        {
+            roomCallback: (roomName) => {
+                if (roomName === room.name) {
+                    return matrix;
+                }
+                return false; // Ignore paths to adjacent rooms
+            },
+        }
+    );
+
+    const filteredPath = path.path.filter((step) => {
+        return (
+            step.roomName === roomName &&
+            !buildings.some(
+                (building) =>
+                    building.structureType === STRUCTURE_ROAD &&
+                    building.x === step.x &&
+                    building.y === step.y
+            )
+        );
+    });
+
+    // Visualize the path
+    const visual = new RoomVisual(roomName);
+    filteredPath.forEach((step, index) => {
+        visual.circle(step.x, step.y, {
+            radius: 0.3,
+            fill: "#ffffff",
+            opacity: 0.5,
+        });
+        if (index > 0) {
+            const prevStep = filteredPath[index - 1];
+            visual.line(prevStep.x, prevStep.y, step.x, step.y, {
+                width: 0.1,
+                color: "#ffffff",
+            });
+        }
+    });
+
+    // Convert path to list of road elements
+    const roadElements = filteredPath.map((step) => ({
+        x: step.x,
+        y: step.y,
+        structureType: STRUCTURE_ROAD,
+        minimalRCL: 3,
+    }));
+
+    return roadElements;
 }
 
 module.exports = planCity;

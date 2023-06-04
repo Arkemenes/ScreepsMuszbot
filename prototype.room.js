@@ -218,7 +218,7 @@ function findPositionsInsideRect(rect) {
     return positions;
 }
 
-Room.prototype.floodFill = function (seeds) {
+Room.prototype.floodFill = function (seeds, blocks = [], visualize = false) {
     const room = this;
 
     // Construct a cost matrix for the flood
@@ -258,9 +258,18 @@ Room.prototype.floodFill = function (seeds) {
             // If the depth isn't 0
 
             if (depth != 0) {
-                // Iterate if the terrain is a wall
+                if (
+                    blocks.some((block) => block.x == pos.x && block.y == pos.y)
+                ) {
+                    console.log("d");
+                }
 
-                if (terrain.get(pos.x, pos.y) == TERRAIN_MASK_WALL) continue;
+                // Iterate if the terrain is a wall
+                if (
+                    terrain.get(pos.x, pos.y) == TERRAIN_MASK_WALL ||
+                    blocks.some((block) => block.x == pos.x && block.y == pos.y)
+                )
+                    continue;
 
                 if (
                     Memory.rooms[room.name].buildings &&
@@ -279,11 +288,18 @@ Room.prototype.floodFill = function (seeds) {
 
                 // If visuals are enabled, show the depth on the pos
 
-                if (Memory.roomVisuals)
+                if (visualize) {
                     room.visual.rect(pos.x - 0.5, pos.y - 0.5, 1, 1, {
                         fill: "hsl(" + 200 + depth * 2 + ", 100%, 60%)",
                         opacity: 0.4,
                     });
+                    room.visual.text(depth, pos.x, pos.y, {
+                        color: "white",
+                        font: 0.5,
+                        align: "center",
+                        opacity: 0.8,
+                    });
+                }
             }
 
             // Construct a rect and get the positions in a range of 1
