@@ -263,16 +263,79 @@ function planCity(room) {
         case 9:
             // TODO: build towers
 
-            // const floodFillMatrix = room.floodFill(
-            //     structures,
-            //     blockRamparts,
-            //     (visualize = true)
-            // );
-            // Memory.rooms[roomName].planStep++;
+            const structures = Memory.rooms[roomName].buildings.filter(
+                (building) =>
+                    building.structureType !== STRUCTURE_ROAD &&
+                    building.structureType !== STRUCTURE_RAMPART &&
+                    building.structureType !== STRUCTURE_CONTAINER
+            );
+            const blockRamparts = Memory.rooms[roomName].buildings.filter(
+                (building) =>
+                    building.structureType == STRUCTURE_RAMPART &&
+                    building.minimalRCL == 3
+            );
+
+            const floodFillMatrixBlocked = room.floodFill(
+                structures,
+                blockRamparts,
+                (visualize = true)
+            );
+
+            const towerPos = findFirstTowerLocation(
+                floodFillMatrixBlocked,
+                blockRamparts
+            );
+            Memory.rooms[roomName].buildings.push({
+                x: towerPos.x,
+                y: towerPos.y,
+                structureType: STRUCTURE_TOWER,
+                minimalRCL: 3,
+            });
+            Memory.rooms[roomName].buildings.push({
+                x: towerPos.x,
+                y: towerPos.y,
+                structureType: STRUCTURE_RAMPART,
+                minimalRCL: 4,
+            });
+
+            Memory.rooms[roomName].planStep++;
             break;
     }
 
     visualizeStructures(Memory.rooms[roomName].buildings);
+}
+
+function findFirstTowerLocation(floodFillMatrix, structures) {
+    // Define the adjacent positions
+    const adjacentOffsets = [
+        { dx: 0, dy: -1 }, // Top
+        { dx: 0, dy: 1 }, // Bottom
+        { dx: -1, dy: 0 }, // Left
+        { dx: 1, dy: 0 }, // Right
+    ];
+
+    // Find the minimum value in the floodFillMatrix that is adjacent to any structure
+    let minVal = Infinity;
+    let targetPosition = null;
+
+    structures.forEach((structure) => {
+        const { x, y } = structure;
+
+        adjacentOffsets.forEach((offset) => {
+            const adjacentX = x + offset.dx;
+            const adjacentY = y + offset.dy;
+
+            if (
+                floodFillMatrix.get(adjacentX, adjacentY) < minVal &&
+                floodFillMatrix.get(adjacentX, adjacentY) > 0
+            ) {
+                minVal = floodFillMatrix.get(adjacentX, adjacentY);
+                targetPosition = { x: adjacentX, y: adjacentY };
+            }
+        });
+    });
+
+    return targetPosition;
 }
 
 function getContainerLocations(roomName) {
