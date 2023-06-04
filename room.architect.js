@@ -23,6 +23,10 @@ _.merge(layoutKey, _.invert(layoutKey));
 function planCity(room) {
     const roomName = room.name;
 
+    if (Memory.rooms[roomName].buildings && roomName == "E7S5") {
+        visualizeStructures(Memory.rooms[roomName].buildings);
+    }
+
     if (Memory.rooms[room.name] == undefined) {
         Memory.rooms[room.name] = {};
     }
@@ -58,12 +62,12 @@ function planCity(room) {
             // Plan first spawn stamp
             stamp = {
                 structures: [
-                    " ???   ",
-                    "?EEK.? ",
-                    "?E AEE?",
-                    "?EEC E?",
-                    " ??EEE?",
-                    "   ??? ",
+                    " ...   ",
+                    ".EEK.. ",
+                    ".E AEE.",
+                    ".EEC E.",
+                    " ..EEE.",
+                    "   ... ",
                 ],
                 rcl: [
                     " 222   ",
@@ -89,12 +93,12 @@ function planCity(room) {
             // Plan the second spawn stamp (having storage)
             stamp = {
                 structures: [
-                    " ???   ",
-                    "?EEK.? ",
-                    "?E AEE?",
-                    "?EES E?",
-                    " ??EEE?",
-                    "   ??? ",
+                    " ...   ",
+                    ".EEK.. ",
+                    ".E AEE.",
+                    ".EES E.",
+                    " ..EEE.",
+                    "   ... ",
                 ],
                 rcl: [
                     " 444   ",
@@ -121,12 +125,12 @@ function planCity(room) {
             // Plan the third spawn stamp
             stamp = {
                 structures: [
-                    " ???   ",
-                    "?EEK?? ",
-                    "?E AEE?",
-                    "?EEC E?",
-                    " ??EEE?",
-                    "   ??? ",
+                    " ...   ",
+                    ".EEK.. ",
+                    ".E AEE.",
+                    ".EEC E.",
+                    " ..EEE.",
+                    "   ... ",
                 ],
                 rcl: [
                     " 888   ",
@@ -154,10 +158,10 @@ function planCity(room) {
             stamp = {
                 structures: [
                     "  ??  ",
-                    " ?LL? ",
+                    " ?LL. ",
                     "?LL.L?",
                     "?L.LL?",
-                    " ?LL? ",
+                    " .LL? ",
                     "  ??  ",
                 ],
                 rcl: [
@@ -213,24 +217,6 @@ function planCity(room) {
             }
             break;
         case 7:
-            const cutTiles = mincut.GetCutTiles(
-                roomName,
-                Memory.rooms[roomName].mincutBoundries
-            );
-            const ramparts = [];
-            for (const tile of cutTiles) {
-                ramparts.push({
-                    x: tile.x,
-                    y: tile.y,
-                    structureType: STRUCTURE_RAMPART,
-                    minimalRCL: 3,
-                });
-            }
-            Memory.rooms[roomName].buildings =
-                Memory.rooms[roomName].buildings.concat(ramparts);
-            Memory.rooms[roomName].planStep++;
-            break;
-        case 8:
             const containers = Memory.rooms[roomName].buildings.filter(
                 (building) => building.structureType === STRUCTURE_CONTAINER
             );
@@ -264,6 +250,24 @@ function planCity(room) {
 
             Memory.rooms[roomName].planStep++;
             break;
+        case 8:
+            const cutTiles = mincut.GetCutTiles(
+                roomName,
+                Memory.rooms[roomName].mincutBoundries
+            );
+            const ramparts = [];
+            for (const tile of cutTiles) {
+                ramparts.push({
+                    x: tile.x,
+                    y: tile.y,
+                    structureType: STRUCTURE_RAMPART,
+                    minimalRCL: 3,
+                });
+            }
+            Memory.rooms[roomName].buildings =
+                Memory.rooms[roomName].buildings.concat(ramparts);
+            Memory.rooms[roomName].planStep++;
+            break;
         case 9:
             const structures = Memory.rooms[roomName].buildings.filter(
                 (building) =>
@@ -286,7 +290,8 @@ function planCity(room) {
             );
             const towerPos = findFirstTowerLocation(
                 floodFillMatrixBlocked,
-                blockRamparts
+                blockRamparts,
+                roomName
             );
             addBuildings(
                 roomName,
@@ -385,13 +390,12 @@ function planCity(room) {
             Memory.rooms[roomName].planStep++;
             break;
     }
-
-    visualizeStructures(Memory.rooms[roomName].buildings);
 }
 
 function findFirstTowerLocation(
     floodFillMatrix,
     structures,
+    roomName,
     rampartDistance = 1
 ) {
     // Define the adjacent positions
@@ -419,7 +423,11 @@ function findFirstTowerLocation(
 
             if (
                 floodFillMatrix.get(adjacentX, adjacentY) < minVal &&
-                floodFillMatrix.get(adjacentX, adjacentY) > 0
+                floodFillMatrix.get(adjacentX, adjacentY) > 0 &&
+                !Memory.rooms[roomName].buildings.find(
+                    (building) =>
+                        building.x === adjacentX && building.y === adjacentY
+                )
             ) {
                 minVal = floodFillMatrix.get(adjacentX, adjacentY);
                 targetPosition = { x: adjacentX, y: adjacentY };
@@ -432,6 +440,7 @@ function findFirstTowerLocation(
         targetPosition = findFirstTowerLocation(
             floodFillMatrix,
             structures,
+            roomName,
             rampartDistance + 1
         );
     }
