@@ -390,8 +390,23 @@ function planCity(room) {
             break;
     }
 
-    if (Memory.rooms[roomName].buildings) {
-        visualizeStructures(Memory.rooms[roomName].buildings, roomName);
+    // if (Memory.rooms[roomName].buildings) {
+    //     visualizeStructures(Memory.rooms[roomName].buildings, roomName);
+    // }
+
+    createConstructionSites(room);
+}
+
+function createConstructionSites(room) {
+    const rcl = room.controller.level;
+    for (const building of Memory.rooms[room.name].buildings) {
+        const buildingPos = new RoomPosition(building.x, building.y, room.name);
+        if (
+            rcl > building.minimalRCL &&
+            buildingPos.createConstructionSite(building.structureType) == OK
+        ) {
+            break;
+        }
     }
 }
 
@@ -592,7 +607,7 @@ function getContainerLocations(roomName, floodFillMatrix) {
                         x: coordX,
                         y: coordY,
                         structureType: STRUCTURE_CONTAINER,
-                        minimalRCL: 0,
+                        minimalRCL: 6,
                     };
                     maxVal = floodFillMatrix.get(coordX, coordY);
                 }

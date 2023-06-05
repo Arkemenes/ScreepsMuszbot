@@ -1,10 +1,12 @@
 var harvester = {
     /** @param {Creep} creep **/
     run: function (creep) {
-        if (creep.store.getFreeCapacity() > 0) {
-            var sources = creep.room.find(FIND_SOURCES);
-            if (creep.harvest(sources[0]) == ERR_NOT_IN_RANGE) {
-                creep.moveTo(sources[0]);
+        if (creep.store[RESOURCE_ENERGY] == 0) {
+            var resource = creep.pos.findClosestByPath(FIND_DROPPED_RESOURCES, {
+                filter: (r) => r.energy > 20,
+            });
+            if (creep.pickup(resource) == ERR_NOT_IN_RANGE) {
+                creep.moveTo(resource);
             }
         } else {
             // here is the sayHello() prototype
