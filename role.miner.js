@@ -59,7 +59,14 @@ var miner = {
     // returns an object with the data to spawn a new creep
     spawnData: function (room) {
         let name = "Miner" + Game.time;
-        let body = [MOVE, WORK, WORK];
+        var extensions = room.find(FIND_MY_STRUCTURES, {
+            filter: { structureType: STRUCTURE_EXTENSION },
+        });
+
+        let body = [MOVE, WORK, WORK, WORK, WORK, WORK];
+        if (extensions.length < 5) {
+            body = [MOVE, WORK, WORK];
+        }
 
         let target = undefined; // the id of the source to harvest from. undefined means that there is no source to harvest from.
         for (const source of room.find(FIND_SOURCES)) {
