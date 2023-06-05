@@ -390,9 +390,9 @@ function planCity(room) {
             break;
     }
 
-    // if (Memory.rooms[roomName].buildings) {
-    //     visualizeStructures(Memory.rooms[roomName].buildings, roomName);
-    // }
+    if (Memory.rooms[roomName].buildings) {
+        visualizeStructures(Memory.rooms[roomName].buildings, roomName);
+    }
 
     createConstructionSites(room);
 }
@@ -402,7 +402,7 @@ function createConstructionSites(room) {
     for (const building of Memory.rooms[room.name].buildings) {
         const buildingPos = new RoomPosition(building.x, building.y, room.name);
         if (
-            rcl > building.minimalRCL &&
+            rcl >= building.minimalRCL &&
             buildingPos.createConstructionSite(building.structureType) == OK
         ) {
             break;
@@ -873,15 +873,21 @@ function getAllExitCoordinates(roomName) {
     return exits;
 }
 
-function visualizeStructures(structures, roomName) {
+function visualizeStructures(structures, roomName, showRCL = false) {
     const roomVisual = new RoomVisual(roomName);
 
     for (const structure of structures) {
-        const { x, y, structureType } = structure;
+        const { x, y, structureType, minimalRCL } = structure;
 
         roomVisual.structure(x, y, structureType, {
             opacity: 0.8,
         });
+
+        if (showRCL) {
+            roomVisual.text(minimalRCL, x, y, {
+                opacity: 0.4,
+            });
+        }
     }
 }
 
