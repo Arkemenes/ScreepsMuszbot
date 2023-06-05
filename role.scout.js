@@ -41,7 +41,6 @@ var scout = {
                 ) {
                     // If the room doesn't exist in Memory or doesn't have lastVisit value
                     targetRoom = roomName;
-                    console.log("kkkkk", roomName);
                     break;
                 }
 
