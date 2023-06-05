@@ -880,7 +880,7 @@ function visualizeStructures(structures, roomName, showRCL = false) {
         const { x, y, structureType, minimalRCL } = structure;
 
         roomVisual.structure(x, y, structureType, {
-            opacity: 0.8,
+            opacity: 0.1,
         });
 
         if (showRCL) {
