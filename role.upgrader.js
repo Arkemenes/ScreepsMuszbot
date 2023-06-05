@@ -11,7 +11,7 @@ var roleUpgrader = {
                     creep.moveTo(resource);
                 }
             } else {
-                target = this.pos.findClosestByPath(FIND_STRUCTURES, {
+                target = creep.pos.findClosestByPath(FIND_STRUCTURES, {
                     filter: (s) =>
                         (s.structureType == STRUCTURE_STORAGE ||
                             s.structureType == STRUCTURE_CONTAINER ||
@@ -44,7 +44,7 @@ var roleUpgrader = {
                 creep.memory.role == "upgrader" && creep.room.name == room.name
         );
 
-        if (upgraders.length < 2) {
+        if (upgraders.length < 5) {
             return true;
         }
     },

@@ -11,7 +11,7 @@ var builder = {
                     creep.moveTo(resource);
                 }
             } else {
-                target = this.pos.findClosestByPath(FIND_STRUCTURES, {
+                target = creep.pos.findClosestByPath(FIND_STRUCTURES, {
                     filter: (s) =>
                         (s.structureType == STRUCTURE_STORAGE ||
                             s.structureType == STRUCTURE_CONTAINER ||
