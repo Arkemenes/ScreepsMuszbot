@@ -29,20 +29,29 @@ var scout = {
             creep.memory.targetRoom == creep.room.name ||
             !creep.memory.target
         ) {
-            let targetRooms = Object.values(
+            let minLastVisit = Infinity;
+            let targetRoom = null;
+
+            for (const roomName of Object.values(
                 Memory.rooms[creep.room.name].exits
-            );
+            )) {
+                if (
+                    !Memory.rooms[roomName] ||
+                    !Memory.rooms[roomName].lastVisit
+                ) {
+                    // If the room doesn't exist in Memory or doesn't have lastVisit value
+                    targetRoom = roomName;
+                    console.log("kkkkk", roomName);
+                    break;
+                }
 
-            const targetRoom = targetRooms.sort((value1, value2) => {
-                const lastVisit1 = Memory.rooms[value1]
-                    ? Memory.rooms[value1].lastVisit
-                    : 0;
-                const lastVisit2 = Memory.rooms[value2]
-                    ? Memory.rooms[value2].lastVisit
-                    : 0;
+                const lastVisit = Memory.rooms[roomName].lastVisit;
+                if (lastVisit < minLastVisit) {
+                    minLastVisit = lastVisit;
+                    targetRoom = roomName;
+                }
+            }
 
-                return lastVisit2 - lastVisit1;
-            })[0];
             creep.memory.targetRoom = targetRoom;
             const exitDirection = Game.map.findExit(creep.room, targetRoom);
             const exitTile = creep.pos.findClosestByRange(exitDirection);
@@ -52,19 +61,8 @@ var scout = {
                 return true;
             }
 
-            // creep.say(JSON.stringify(targetRooms));
-            // console.log(JSON.stringify(targetRooms));
-
-            // for (let targetRoomName of targetRooms) {
-            //     const targetRoom = targetRooms[targetRoomName];
-            //     creep.memory.targetRoom = targetRoom;
-
-            //     let exitDir = Game.map.findExit(
-            //         creep.room.name,
-            //         creep.memory.targetRoom
-            //     );
-
-            // }
+            creep.memory.target = undefined;
+            creep.memory.targetRoom = undefined;
         }
     },
     // checks if the room needs to spawn a creep
@@ -75,7 +73,7 @@ var scout = {
                 creep.memory.role == "scout" && creep.memory.room == room.name
         );
 
-        if (scouts.length < 0) {
+        if (scouts.length < 1) {
             return true;
         }
     },
