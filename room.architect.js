@@ -48,8 +48,11 @@ function planCity(room) {
         case undefined:
             Memory.rooms[roomName].buildings = [];
             Memory.rooms[roomName].mincutBoundries = [];
-            const containersAndLinks = getContainerLocations(roomName);
-            addBuildings(roomName, containersAndLinks);
+            const containersAndLinks = getContainerLocations(
+                roomName,
+                floodFillMatrix
+            );
+            addBuildings(roomName, containersAndLinks, false);
             Memory.rooms[roomName].planStep = 1;
             break;
         case 1:
@@ -516,23 +519,22 @@ function findNextTowerLocation(
     return targetPosition;
 }
 
-function getContainerLocations(roomName) {
+function getContainerLocations(roomName, floodFillMatrix) {
     const sources = Game.rooms[roomName].find(FIND_SOURCES);
 
     const locations = [];
+
     for (const source of sources) {
-        let locationFound = false;
+        let location = undefined;
+        let maxVal = -Infinity;
         for (let i = -1; i <= 1; i++) {
             for (let j = -1; j <= 1; j++) {
                 const coordX = source.pos.x + i;
                 const coordY = source.pos.y + j;
 
-                // Check if a suitable location has already been found for the current source
-                if (locationFound) {
-                    break;
-                }
                 // Check if the terrain is not a wall and no other structure exists at the location
-                else if (
+                if (
+                    floodFillMatrix.get(coordX, coordY) > maxVal &&
                     Memory.rooms[roomName].terrainMatrix[coordX][coordY] !==
                         TERRAIN_MASK_WALL &&
                     !Game.rooms[roomName].find(FIND_STRUCTURES, {
@@ -546,33 +548,33 @@ function getContainerLocations(roomName) {
                     (i !== 0 || j !== 0)
                 ) {
                     // Add the location to the list
-                    locations.push({
+                    location = {
                         x: coordX,
                         y: coordY,
                         structureType: STRUCTURE_CONTAINER,
                         minimalRCL: 0,
-                    });
-                    locationFound = true;
+                    };
+                    maxVal = floodFillMatrix.get(coordX, coordY);
                 }
             }
+        }
+        if (location) {
+            locations.push(location);
         }
     }
     // Container for extractor
     const minerals = Game.rooms[roomName].find(FIND_MINERALS);
 
     for (const mineral of minerals) {
-        let locationFound = false;
+        let location = undefined;
+        let maxVal = -Infinity;
         for (let i = -1; i <= 1; i++) {
             for (let j = -1; j <= 1; j++) {
                 const coordX = mineral.pos.x + i;
                 const coordY = mineral.pos.y + j;
-
-                // Check if a suitable location has already been found for the current mineral
-                if (locationFound) {
-                    break;
-                }
                 // Check if the terrain is not a wall and no other structure exists at the location
-                else if (
+                if (
+                    floodFillMatrix.get(coordX, coordY) > maxVal &&
                     Memory.rooms[roomName].terrainMatrix[coordX][coordY] !==
                         TERRAIN_MASK_WALL &&
                     !Game.rooms[roomName].find(FIND_STRUCTURES, {
@@ -586,15 +588,18 @@ function getContainerLocations(roomName) {
                     (i !== 0 || j !== 0)
                 ) {
                     // Add the location to the list
-                    locations.push({
+                    location = {
                         x: coordX,
                         y: coordY,
                         structureType: STRUCTURE_CONTAINER,
-                        minimalRCL: 6,
-                    });
-                    locationFound = true;
+                        minimalRCL: 0,
+                    };
+                    maxVal = floodFillMatrix.get(coordX, coordY);
                 }
             }
+        }
+        if (location) {
+            locations.push(location);
         }
     }
 
@@ -624,7 +629,13 @@ function getContainerLocations(roomName) {
                 }
 
                 // Check if the position is within the room bounds
-                if (posX >= 0 && posX < 50 && posY >= 0 && posY < 50) {
+                if (
+                    floodFillMatrix.get(posX, posY) > 3 &&
+                    posX >= 0 &&
+                    posX < 50 &&
+                    posY >= 0 &&
+                    posY < 50
+                ) {
                     const rcl =
                         linkLocations.length == 0
                             ? 5
@@ -672,8 +683,8 @@ function addBuildings(roomName, newBuildings, shouldProtect = true) {
     if (shouldProtect) {
         for (const b of newBuildings) {
             Memory.rooms[roomName].mincutBoundries.push({
-                x1: b.x,
-                y1: b.y,
+                x1: b.x - 1,
+                y1: b.y - 1,
                 x2: b.x + 1,
                 y2: b.y + 1,
             });
