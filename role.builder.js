@@ -1,14 +1,42 @@
 var builder = {
     /** @param {Creep} creep **/
     run: function (creep) {
+        // Get Energy
         if (creep.store[RESOURCE_ENERGY] == 0) {
             var resource = creep.pos.findClosestByPath(FIND_DROPPED_RESOURCES, {
-                filter: (r) => r.energy > 20,
+                filter: (r) => r.energy >= 50,
             });
-            if (creep.pickup(resource) == ERR_NOT_IN_RANGE) {
-                creep.moveTo(resource);
+            if (resource) {
+                if (creep.pickup(resource) == ERR_NOT_IN_RANGE) {
+                    creep.moveTo(resource);
+                }
+            } else {
+                target = this.pos.findClosestByPath(FIND_STRUCTURES, {
+                    filter: (s) =>
+                        (s.structureType == STRUCTURE_STORAGE ||
+                            s.structureType == STRUCTURE_CONTAINER ||
+                            (s.structureType == STRUCTURE_LINK &&
+                                !s.isCollector())) &&
+                        s.store.energy >= 50,
+                });
+                if (
+                    creep.withdraw(target, RESOURCE_ENERGY) == ERR_NOT_IN_RANGE
+                ) {
+                    creep.moveTo(resource);
+                }
             }
-        } else {
+        }
+        // Spend Energy
+        else {
+            if (!creep.memory.target) {
+                let target = creep.pos.findClosestByPath(
+                    FIND_CONSTRUCTION_SITES
+                );
+                if (target) {
+                    creep.memory.target = target.id;
+                }
+            }
+
             if (creep.memory.target) {
                 const status = creep.build(
                     Game.getObjectById(creep.memory.target)
@@ -17,17 +45,9 @@ var builder = {
                     creep.moveTo(Game.getObjectById(creep.memory.target));
                 } else if (status != OK) {
                     creep.memory.target = null;
-                }
-            }
-
-            if (!creep.memory.target) {
-                creep.memory.target = creep.pos.findClosestByPath(
-                    FIND_CONSTRUCTION_SITES
-                );
-                if (creep.memory.target) {
-                    creep.memory.target = creep.memory.target.id;
-                } else {
                     creep.say("💤");
+                } else {
+                    creep.say("~Pew!~");
                 }
             }
         }
