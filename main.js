@@ -15,7 +15,7 @@ module.exports.loop = function () {
                 (r) => r.controller && r.controller.level > 0 && r.controller.my
             );
             // get intel for each room
-            _.forEach(Game.myRooms, (r) => roomLogic.getIntel(r));
+            _.forEach(Game.rooms, (r) => roomLogic.getIntel(r));
             // get intel for each room
             _.forEach(Game.myRooms, (r) => roomLogic.planCity(r));
             // run spwan logic for each room in our empire
