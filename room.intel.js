@@ -31,14 +31,8 @@ function getIntel(room) {
             // ).reverse();
 
             for (let exit in Memory.rooms[roomName].exits) {
-                console.log(Memory.rooms[roomName].exits[exit]);
                 if (!Memory.rooms[Memory.rooms[roomName].exits[exit]]) {
                     Memory.rooms[Memory.rooms[roomName].exits[exit]] = {};
-                    console.log(
-                        Memory.rooms[roomName].exits[
-                            Memory.rooms[roomName].exits
-                        ]
-                    );
                 }
             }
         }
