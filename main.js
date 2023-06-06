@@ -4,7 +4,7 @@ let prototypes = require("prototypes");
 let utils = require("utils");
 
 // // This line monkey patches the global prototypes.
-// utils.profiler.enable();
+utils.profiler.enable();
 
 module.exports.loop = function () {
     utils.profiler.wrap(function () {
