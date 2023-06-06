@@ -27,22 +27,17 @@ function planCity(room) {
         Memory.rooms[room.name] = {};
     }
 
+    if (Memory.rooms[room.name].planned) {
+        createConstructionSites(room);
+        return;
+    }
+
     const exits = getAllExitCoordinates(roomName);
     const floodFillMatrix = room.floodFill(exits);
 
     const planStep = Memory.rooms[room.name].planStep;
 
     let stamp = { structures: [], rcl: [] };
-
-    if (Memory.rooms[room.name].mincutBoundries) {
-        for (
-            let i = 0;
-            i < Memory.rooms[room.name].mincutBoundries.length;
-            i++
-        ) {
-            const boundary = Memory.rooms[room.name].mincutBoundries[i];
-        }
-    }
 
     switch (planStep) {
         case undefined:
@@ -56,8 +51,6 @@ function planCity(room) {
             Memory.rooms[roomName].planStep = 1;
             break;
         case 1:
-            // TODO: Include logic if there is already a spawn
-
             // Plan first spawn stamp
             stamp = {
                 structures: [
@@ -85,7 +78,22 @@ function planCity(room) {
                     "       ",
                 ],
             };
-            addStamp(roomName, stamp, floodFillMatrix);
+            const spawn = room.find(FIND_MY_STRUCTURES, {
+                filter: { structureType: STRUCTURE_SPAWN },
+            })[0];
+
+            if (spawn) {
+                addStamp(
+                    roomName,
+                    stamp,
+                    floodFillMatrix,
+                    spawn.pos.x,
+                    spawn.pos.y
+                );
+            } else {
+                addStamp(roomName, stamp, floodFillMatrix);
+            }
+
             Memory.rooms[roomName].planStep++;
             break;
         case 2:
@@ -387,14 +395,13 @@ function planCity(room) {
             }
 
             Memory.rooms[roomName].planStep++;
+            Memory.rooms[room.name].planned = true;
             break;
     }
 
     if (Memory.rooms[roomName].buildings) {
         visualizeStructures(Memory.rooms[roomName].buildings, roomName);
     }
-
-    createConstructionSites(room);
 }
 
 function createConstructionSites(room) {
@@ -682,9 +689,21 @@ function getContainerLocations(roomName, floodFillMatrix) {
     return locations.concat(linkLocations);
 }
 
-function addStamp(roomName, stamp, floodFillMatrix) {
+function addStamp(
+    roomName,
+    stamp,
+    floodFillMatrix,
+    spawnX = null,
+    spawnY = null
+) {
     // Find the locations using the stamp and flood fill matrix
-    const newBuildings = findStampLocation(roomName, stamp, floodFillMatrix);
+    const newBuildings = findStampLocation(
+        roomName,
+        stamp,
+        floodFillMatrix,
+        spawnX,
+        spawnY
+    );
 
     addBuildings(roomName, newBuildings, floodFillMatrix);
 }
@@ -707,7 +726,13 @@ function addBuildings(roomName, newBuildings, shouldProtect = true) {
     }
 }
 
-function findStampLocation(roomName, stamp, floodFillMatrix) {
+function findStampLocation(
+    roomName,
+    stamp,
+    floodFillMatrix,
+    spawnX = null,
+    spawnY = null
+) {
     const room = Game.rooms[roomName];
 
     // Check if the room exists
@@ -737,6 +762,17 @@ function findStampLocation(roomName, stamp, floodFillMatrix) {
             for (let stampY = 0; stampY < stampHeight; stampY++) {
                 for (let stampX = 0; stampX < stampWidth; stampX++) {
                     const stampStructure = stamp["structures"][stampY][stampX];
+
+                    if (
+                        stampStructure === "A" &&
+                        spawnX &&
+                        spawnY &&
+                        (spawnX !== coordX + stampX ||
+                            spawnY !== coordY + stampY)
+                    ) {
+                        isValid = false;
+                        break;
+                    }
 
                     if (
                         stampStructure !== " " &&
