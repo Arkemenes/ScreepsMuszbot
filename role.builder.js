@@ -11,43 +11,74 @@ var builder = {
                     creep.moveTo(resource);
                 }
             } else {
-                target = creep.pos.findClosestByPath(FIND_STRUCTURES, {
-                    filter: (s) =>
-                        (s.structureType == STRUCTURE_STORAGE ||
-                            s.structureType == STRUCTURE_CONTAINER ||
-                            (s.structureType == STRUCTURE_LINK &&
-                                !s.isCollector())) &&
-                        s.store.energy >= 50,
-                });
+                creep.memory.target = creep.pos.findClosestByPath(
+                    FIND_STRUCTURES,
+                    {
+                        filter: (s) =>
+                            (s.structureType == STRUCTURE_STORAGE ||
+                                s.structureType == STRUCTURE_CONTAINER) &&
+                            s.store.energy >= 50,
+                    }
+                );
+                creep.say(creep.memory.target);
                 if (
-                    creep.withdraw(target, RESOURCE_ENERGY) == ERR_NOT_IN_RANGE
+                    creep.withdraw(creep.memory.target, RESOURCE_ENERGY) ==
+                    ERR_NOT_IN_RANGE
                 ) {
-                    creep.moveTo(resource);
+                    creep.moveTo(creep.memory.target);
                 }
             }
         }
         // Spend Energy
         else {
             if (!creep.memory.target) {
-                let target = creep.pos.findClosestByPath(
-                    FIND_CONSTRUCTION_SITES
-                );
+                let repairTargets = creep.room.find(FIND_STRUCTURES, {
+                    filter: (s) =>
+                        s.structureType != STRUCTURE_CONTROLLER &&
+                        s.structureType != STRUCTURE_WALL &&
+                        s.hits < s.hitsMax &&
+                        (s.structureType != STRUCTURE_RAMPART ||
+                            s.hits < 0.05 * s.hitsMax),
+                });
+
+                if (repairTargets.length) {
+                    repairTargets = _.sortBy(
+                        repairTargets,
+                        (s) => s.hits / s.hitsMax
+                    );
+                    var target = repairTargets[0];
+                } else {
+                    var target = creep.pos.findClosestByPath(
+                        FIND_MY_CONSTRUCTION_SITES
+                    );
+                }
+
                 if (target) {
                     creep.memory.target = target.id;
                 }
             }
 
             if (creep.memory.target) {
-                const status = creep.build(
-                    Game.getObjectById(creep.memory.target)
-                );
-                if (status == ERR_NOT_IN_RANGE) {
-                    creep.moveTo(Game.getObjectById(creep.memory.target));
-                } else if (status != OK) {
-                    creep.memory.target = null;
-                    creep.say("💤");
-                } else {
-                    creep.say("~Pew!~");
+                const targetObj = Game.getObjectById(creep.memory.target);
+
+                if (targetObj) {
+                    if (targetObj.progressTotal) {
+                        var status = creep.build(
+                            Game.getObjectById(creep.memory.target)
+                        );
+                    } else {
+                        var status = creep.repair(
+                            Game.getObjectById(creep.memory.target)
+                        );
+                    }
+
+                    if (status == ERR_NOT_IN_RANGE) {
+                        creep.moveTo(Game.getObjectById(creep.memory.target));
+                    } else if (status != OK) {
+                        creep.memory.target = null;
+                    } else {
+                        creep.say("~Pew!~");
+                    }
                 }
             }
         }

@@ -11,18 +11,20 @@ var harvester = {
                     creep.moveTo(resource);
                 }
             } else {
-                target = creep.pos.findClosestByPath(FIND_STRUCTURES, {
-                    filter: (s) =>
-                        (s.structureType == STRUCTURE_STORAGE ||
-                            s.structureType == STRUCTURE_CONTAINER ||
-                            (s.structureType == STRUCTURE_LINK &&
-                                !s.isCollector())) &&
-                        s.store.energy >= 50,
-                });
+                creep.memory.target = creep.pos.findClosestByPath(
+                    FIND_STRUCTURES,
+                    {
+                        filter: (s) =>
+                            (s.structureType == STRUCTURE_STORAGE ||
+                                s.structureType == STRUCTURE_CONTAINER) &&
+                            s.store.energy >= 50,
+                    }
+                );
                 if (
-                    creep.withdraw(target, RESOURCE_ENERGY) == ERR_NOT_IN_RANGE
+                    creep.withdraw(creep.memory.target, RESOURCE_ENERGY) ==
+                    ERR_NOT_IN_RANGE
                 ) {
-                    creep.moveTo(resource);
+                    creep.moveTo(creep.memory.target);
                 }
             }
         }

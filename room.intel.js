@@ -172,8 +172,11 @@ function getIntel(room) {
         }
     }
 
-    // Get terrain info only if it's not in memory
-    if (Memory.rooms[room.name].terrainMatrix == undefined) {
+    // Get terrain info only if it's not in memory and if it's mine
+    if (
+        Memory.rooms[room.name].terrainMatrix == undefined &&
+        Memory.rooms[room.name].my
+    ) {
         console.log("Calculationg terrain matrix for room", room.name);
         const terrain = new Room.Terrain(room.name);
         const terrainMatrix = [];

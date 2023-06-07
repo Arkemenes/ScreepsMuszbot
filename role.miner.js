@@ -3,7 +3,7 @@ var miner = {
     run: function (creep) {
         if (!creep.memory.target) {
             let sources = creep.room.find(FIND_SOURCES);
-            for (const source of creep.room.find(FIND_SOURCES)) {
+            for (const source of sources) {
                 var miners = _.filter(
                     Game.creeps,
                     (creep) =>
@@ -15,14 +15,13 @@ var miner = {
                 var workCount = 0;
 
                 for (var i = 0; i < miners.length; i++) {
-                    var creep = miners[i];
-                    workCount += creep.body.filter(
+                    workCount += miners[i].body.filter(
                         (part) => part.type == WORK
                     ).length;
                 }
 
-                if (workCount < 4) {
-                    target = source.id;
+                if (workCount < 2) {
+                    creep.memory.target = source.id;
                     break;
                 }
             }
@@ -50,7 +49,7 @@ var miner = {
             workCount += creep.body.filter((part) => part.type == WORK).length;
         }
 
-        let wantedMinersWorkParts = 4 * room.find(FIND_SOURCES).length;
+        let wantedMinersWorkParts = 2 * room.find(FIND_SOURCES).length;
 
         if (workCount < wantedMinersWorkParts) {
             return true;
@@ -63,31 +62,40 @@ var miner = {
             filter: { structureType: STRUCTURE_EXTENSION },
         });
 
+        var miners = _.filter(
+            Game.creeps,
+            (creep) =>
+                creep.memory.role == "miner" && creep.room.name == room.name
+        );
+
         let body = [MOVE, WORK, WORK, WORK, WORK, WORK];
-        if (extensions.length < 5) {
+        if (
+            extensions.length < 5 ||
+            (miners.length == 0) & (room.energyAvailable == 300)
+        ) {
             body = [MOVE, WORK, WORK];
         }
 
         let target = undefined; // the id of the source to harvest from. undefined means that there is no source to harvest from.
-        for (const source of room.find(FIND_SOURCES)) {
+        let sources = room.find(FIND_SOURCES);
+        for (const source of sources) {
             var miners = _.filter(
                 Game.creeps,
                 (creep) =>
                     creep.memory.target == source.id &&
                     creep.memory.role == "miner" &&
-                    creep.room.name == room.name
+                    creep.room.name == creep.room.name
             );
 
             var workCount = 0;
 
             for (var i = 0; i < miners.length; i++) {
-                var creep = miners[i];
-                workCount += creep.body.filter(
+                workCount += miners[i].body.filter(
                     (part) => part.type == WORK
                 ).length;
             }
 
-            if (workCount < 4) {
+            if (workCount < 2) {
                 target = source.id;
                 break;
             }

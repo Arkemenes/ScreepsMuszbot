@@ -1,7 +1,6 @@
 var scout = {
     /** @param {Creep} creep **/
     run: function (creep) {
-        creep.say(creep.memory.targetRoom);
         if (!Memory.rooms[creep.room.name]) {
             Memory.rooms[creep.room.name] = {};
         }

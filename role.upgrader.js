@@ -1,39 +1,56 @@
 var roleUpgrader = {
     /** @param {Creep} creep **/
     run: function (creep) {
+        if (creep.invokeState()) {
+            return;
+        }
+
         // Get Energy
         if (creep.store[RESOURCE_ENERGY] == 0) {
-            var resource = creep.pos.findClosestByPath(FIND_DROPPED_RESOURCES, {
+            let resource = creep.pos.findClosestByPath(FIND_DROPPED_RESOURCES, {
                 filter: (r) => r.energy >= 50,
             });
             if (resource) {
-                if (creep.pickup(resource) == ERR_NOT_IN_RANGE) {
-                    creep.moveTo(resource);
+                creep.pushState("GetEnergy", resource.id);
+
+                if (!creep.invokeState()) {
+                    creep.say("zzz");
                 }
-            } else {
-                target = creep.pos.findClosestByPath(FIND_STRUCTURES, {
-                    filter: (s) =>
-                        (s.structureType == STRUCTURE_STORAGE ||
-                            s.structureType == STRUCTURE_CONTAINER ||
-                            (s.structureType == STRUCTURE_LINK &&
-                                !s.isCollector())) &&
-                        s.store.energy >= 50,
-                });
-                if (
-                    creep.withdraw(target, RESOURCE_ENERGY) == ERR_NOT_IN_RANGE
-                ) {
-                    creep.moveTo(resource);
-                }
+                return;
             }
+
+            let structure = creep.pos.findClosestByPath(FIND_STRUCTURES, {
+                filter: (s) =>
+                    (s.structureType == STRUCTURE_STORAGE ||
+                        s.structureType == STRUCTURE_CONTAINER) &&
+                    s.store.energy >= 50,
+            });
+
+            if (structure) {
+                creep.pushState("GetEnergy", structure.id);
+
+                if (!creep.invokeState()) {
+                    creep.say("zzz");
+                }
+                return;
+            }
+
+            // creep.say("zzz");
+            return;
         }
         // Spend Energy
         else {
-            if (
-                creep.upgradeController(creep.room.controller) ==
-                ERR_NOT_IN_RANGE
-            ) {
-                creep.moveTo(creep.room.controller);
+            let controller = creep.room.controller;
+
+            creep.pushState("Upgrade", controller.id);
+
+            if (!creep.invokeState()) {
+                creep.say("zzz");
+                return;
             }
+
+            creep.say("zzz");
+            return;
         }
     },
     // checks if the room needs to spawn a creep
