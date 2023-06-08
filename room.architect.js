@@ -27,7 +27,16 @@ function planCity(room) {
         Memory.rooms[room.name] = {};
     }
 
-    if (Memory.rooms[room.name].planned) {
+    if (Memory.rooms[roomName].buildings) {
+        visualizeStructures(Memory.rooms[roomName].buildings, roomName);
+    }
+
+    if (
+        Memory.rooms[room.name].planned &&
+        !_.find(Game.constructionSites, (c) => {
+            return c.room.name == room.name;
+        })
+    ) {
         createConstructionSites(room);
         return;
     }
@@ -397,10 +406,6 @@ function planCity(room) {
             Memory.rooms[roomName].planStep++;
             Memory.rooms[room.name].planned = true;
             break;
-    }
-
-    if (Memory.rooms[roomName].buildings) {
-        visualizeStructures(Memory.rooms[roomName].buildings, roomName);
     }
 }
 
