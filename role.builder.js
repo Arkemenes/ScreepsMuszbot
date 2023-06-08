@@ -1,86 +1,123 @@
 var builder = {
     /** @param {Creep} creep **/
     run: function (creep) {
+        if (creep.invokeState()) {
+            return;
+        }
+
         // Get Energy
         if (creep.store[RESOURCE_ENERGY] == 0) {
-            var resource = creep.pos.findClosestByPath(FIND_DROPPED_RESOURCES, {
+            let resource = creep.pos.findClosestByPath(FIND_DROPPED_RESOURCES, {
                 filter: (r) => r.energy >= 50,
             });
             if (resource) {
-                if (creep.pickup(resource) == ERR_NOT_IN_RANGE) {
-                    creep.moveTo(resource);
+                creep.pushState("GetEnergy", resource.id);
+
+                if (!creep.invokeState()) {
+                    creep.say("zzz");
                 }
-            } else {
-                creep.memory.target = creep.pos.findClosestByPath(
-                    FIND_STRUCTURES,
-                    {
-                        filter: (s) =>
-                            (s.structureType == STRUCTURE_STORAGE ||
-                                s.structureType == STRUCTURE_CONTAINER) &&
-                            s.store.energy >= 50,
-                    }
-                );
-                creep.say(creep.memory.target);
-                if (
-                    creep.withdraw(creep.memory.target, RESOURCE_ENERGY) ==
-                    ERR_NOT_IN_RANGE
-                ) {
-                    creep.moveTo(creep.memory.target);
-                }
+                return;
             }
+
+            let structure = creep.pos.findClosestByPath(FIND_STRUCTURES, {
+                filter: (s) =>
+                    (s.structureType == STRUCTURE_STORAGE ||
+                        s.structureType == STRUCTURE_CONTAINER) &&
+                    s.store.energy >= 50,
+            });
+
+            if (structure) {
+                creep.pushState("GetEnergy", structure.id);
+
+                if (!creep.invokeState()) {
+                    creep.say("zzz");
+                }
+                return;
+            }
+
+            // creep.say("zzz");
+            return;
         }
         // Spend Energy
         else {
-            if (!creep.memory.target) {
-                let repairTargets = creep.room.find(FIND_STRUCTURES, {
-                    filter: (s) =>
-                        s.structureType != STRUCTURE_CONTROLLER &&
-                        s.structureType != STRUCTURE_WALL &&
-                        s.hits < s.hitsMax &&
-                        (s.structureType != STRUCTURE_RAMPART ||
-                            s.hits < 0.05 * s.hitsMax),
-                });
+            let repairTargets = creep.room.find(FIND_STRUCTURES, {
+                filter: (s) =>
+                    s.structureType != STRUCTURE_CONTROLLER &&
+                    s.structureType != STRUCTURE_WALL &&
+                    s.hits < s.hitsMax &&
+                    (s.structureType != STRUCTURE_RAMPART ||
+                        s.hits < 0.05 * s.hitsMax),
+            });
 
-                if (repairTargets.length) {
-                    repairTargets = _.sortBy(
-                        repairTargets,
-                        (s) => s.hits / s.hitsMax
-                    );
-                    var target = repairTargets[0];
-                } else {
-                    var target = creep.pos.findClosestByPath(
-                        FIND_MY_CONSTRUCTION_SITES
-                    );
-                }
+            if (repairTargets.length) {
+                repairTargets = _.sortBy(
+                    repairTargets,
+                    (s) => s.hits / s.hitsMax
+                );
 
-                if (target) {
-                    creep.memory.target = target.id;
+                var repairTarget = repairTargets[0];
+
+                if (repairTargets[0].hits / repairTargets[0].hitsMax < 0.3) {
+                    creep.pushState("Build", repairTarget.id);
+                    console.log("o");
+                    if (!creep.invokeState()) {
+                        creep.say("zzz");
+                    }
+                    return;
                 }
             }
 
-            if (creep.memory.target) {
-                const targetObj = Game.getObjectById(creep.memory.target);
+            var targetConstructionSite = creep.pos.findClosestByPath(
+                FIND_MY_CONSTRUCTION_SITES
+            );
 
-                if (targetObj) {
-                    if (targetObj.progressTotal) {
-                        var status = creep.build(
-                            Game.getObjectById(creep.memory.target)
-                        );
-                    } else {
-                        var status = creep.repair(
-                            Game.getObjectById(creep.memory.target)
-                        );
-                    }
-
-                    if (status == ERR_NOT_IN_RANGE) {
-                        creep.moveTo(Game.getObjectById(creep.memory.target));
-                    } else if (status != OK) {
-                        creep.memory.target = null;
-                    } else {
-                        creep.say("~Pew!~");
-                    }
+            if (targetConstructionSite) {
+                creep.pushState("Build", targetConstructionSite.id);
+                console.log("g");
+                if (!creep.invokeState()) {
+                    creep.say("zzz");
                 }
+                return;
             }
+
+            if (repairTarget) {
+                console.log("p");
+                creep.pushState("Build", repairTarget.id);
+                if (!creep.invokeState()) {
+                    creep.say("zzz");
+                }
+                return;
+            }
+
+            let damagedRamparts = creep.room.find(FIND_STRUCTURES, {
+                filter: (s) =>
+                    s.hits < s.hitsMax && s.structureType == STRUCTURE_RAMPART,
+            });
+
+            if (damagedRamparts.length) {
+                damagedRamparts = _.sortBy(
+                    damagedRamparts,
+                    (s) => s.hits / s.hitsMax
+                );
+
+                creep.pushState("Build", damagedRamparts[0].id);
+                if (!creep.invokeState()) {
+                    creep.say("zzz");
+                }
+                return;
+            }
+
+            let controller = creep.room.controller;
+
+            creep.pushState("Upgrade", controller.id);
+
+            if (!creep.invokeState()) {
+                creep.say("zzz");
+                return;
+            }
+
+            creep.say("zzz");
+            return;
         }
     },
     // checks if the room needs to spawn a creep
@@ -95,7 +132,7 @@ var builder = {
             (cs) => cs.room.name == room.name
         ).length;
 
-        const wantedBuilders = Math.ceil(constructionSites / 5);
+        const wantedBuilders = 2; // Math.ceil(constructionSites / 5);
 
         if (builders.length < wantedBuilders) {
             return true;

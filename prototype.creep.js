@@ -67,3 +67,42 @@ Creep.prototype.runUpgrade = function (scope) {
         this.popState();
     }
 };
+
+/** Example state - goto room */
+Creep.prototype.runBuild = function (scope) {
+    let target = Game.getObjectById(scope);
+
+    // Determine the action based on the target's type
+    if (target instanceof ConstructionSite) {
+        let status = this.build(target);
+
+        if (status == OK) {
+            // this.say("~Pew!~");
+        } else if (status == ERR_NOT_IN_RANGE) {
+            this.moveTo(target);
+        }
+        if (!this.store.getUsedCapacity) {
+            this.popState();
+        }
+
+        return true;
+    } else if (target instanceof Structure) {
+        let status = this.repair(target);
+
+        if (status == OK) {
+            // this.say("~Pew!~");
+        } else if (status == ERR_NOT_IN_RANGE) {
+            this.moveTo(target);
+        }
+
+        if (target.hits == target.maxHits) {
+            this.popState();
+        }
+
+        if (!this.store.getUsedCapacity()) {
+            this.popState();
+        }
+
+        return true;
+    }
+};
