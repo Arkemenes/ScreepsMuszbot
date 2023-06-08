@@ -25,7 +25,7 @@ Creep.prototype.runGetEnergy = function (scope) {
     }
 
     // Determine the action based on the target's type
-    if (target instanceof Structure || Ruin) {
+    if (target instanceof Structure || target instanceof Ruin) {
         // For structures, check if it has energy and withdraw it
         if (target.store && target.store[RESOURCE_ENERGY] > 0) {
             if (this.withdraw(target, RESOURCE_ENERGY) != OK) {
