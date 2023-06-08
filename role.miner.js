@@ -42,6 +42,12 @@ var miner = {
                 creep.memory.role == "miner" && creep.room.name == room.name
         );
 
+        var harvesters = _.filter(
+            Game.creeps,
+            (creep) =>
+                creep.memory.role == "harvester" && creep.room.name == room.name
+        );
+
         var workCount = 0;
 
         for (var i = 0; i < miners.length; i++) {
@@ -50,6 +56,10 @@ var miner = {
         }
 
         let wantedMinersWorkParts = 2 * room.find(FIND_SOURCES).length;
+
+        if (miners.length && !harvesters.length) {
+            return false;
+        }
 
         if (workCount < wantedMinersWorkParts) {
             return true;
@@ -71,7 +81,7 @@ var miner = {
         let body = [MOVE, WORK, WORK, WORK, WORK, WORK];
         if (
             extensions.length < 5 ||
-            (miners.length == 0) & (room.energyAvailable == 300)
+            (miners.length == 0 && room.energyAvailable < 550)
         ) {
             body = [MOVE, WORK, WORK];
         }
