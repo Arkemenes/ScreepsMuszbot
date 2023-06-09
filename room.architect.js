@@ -38,6 +38,9 @@ function planCity(room) {
         })
     ) {
         createConstructionSites(room);
+    }
+
+    if (Memory.rooms[room.name].planned) {
         return;
     }
 
