@@ -80,7 +80,11 @@ Creep.prototype.runBuild = function (scope) {
             // this.say("~Pew!~");
         } else if (status == ERR_NOT_IN_RANGE) {
             this.moveTo(target);
+        } else {
+            this.popState();
+            return false;
         }
+
         if (!this.store.getUsedCapacity) {
             this.popState();
         }
@@ -93,6 +97,9 @@ Creep.prototype.runBuild = function (scope) {
             // this.say("~Pew!~");
         } else if (status == ERR_NOT_IN_RANGE) {
             this.moveTo(target);
+        } else {
+            this.popState();
+            return false;
         }
 
         if (target.hits == target.maxHits) {
@@ -104,5 +111,8 @@ Creep.prototype.runBuild = function (scope) {
         }
 
         return true;
+    } else {
+        this.popState();
+        return false;
     }
 };
