@@ -102,7 +102,7 @@ Creep.prototype.runBuild = function (scope) {
             return false;
         }
 
-        if (target.hits == target.maxHits) {
+        if (target.hits == target.hitsMax) {
             this.popState();
         }
 
