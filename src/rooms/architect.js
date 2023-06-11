@@ -447,7 +447,12 @@ function createConstructionSites(room) {
     const rcl = room.controller.level;
     const building = Memory.rooms[room.name].buildings[index];
     const buildingPos = new RoomPosition(building.x, building.y, room.name);
-    if (rcl >= building.minimalRCL) {
+    if (
+        rcl >= building.minimalRCL &&
+        !buildingPos.findInRange(FIND_STRUCTURES, 0, {
+            filter: (s) => s.structureType == building.structureType,
+        })[0]
+    ) {
         buildingPos.createConstructionSite(building.structureType);
     }
 
