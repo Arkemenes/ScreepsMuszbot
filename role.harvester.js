@@ -47,12 +47,14 @@ var harvester = {
                     });
                 }
 
-                if (!target) {
-                    target = creep.pos.findClosestByPath(FIND_MY_STRUCTURES, {
-                        filter: (s) =>
-                            s.structureType == STRUCTURE_STORAGE &&
-                            s.energy < s.energyCapacity,
-                    });
+                if (
+                    !target &&
+                    creep.room.storage &&
+                    (!creep.room.storage.store[RESOURCE_ENERGY] ||
+                        creep.room.storage.store[RESOURCE_ENERGY] <
+                            creep.room.storage.storeCapacity)
+                ) {
+                    target = creep.room.storage;
                 }
                 if (!target) {
                     target = creep.pos.findClosestByPath(FIND_MY_STRUCTURES, {
