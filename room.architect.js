@@ -216,11 +216,33 @@ function planCity(room) {
 
         case 6:
             // Plan the exensions position
-            const countExtensions = Memory.rooms[roomName].buildings.filter(
+            var countExtensions = Memory.rooms[roomName].buildings.filter(
                 (building) => building.structureType === STRUCTURE_EXTENSION
             ).length;
 
-            const planRCL = Math.ceil(countExtensions / 10) + 2;
+            var planRCL = Math.ceil((countExtensions + 4) / 10) + 2;
+
+            stamp = {
+                structures: ["  ?  ", " .E. ", "?EEE?", " .E. ", "  ?  "],
+                rcl: ["  x  ", " xxx ", "xxxxx", " xxx ", "  x  "].map((str) =>
+                    str.replace(/x/g, planRCL)
+                ),
+                ramparts: ["    ", "    ", "    ", "    ", "    "],
+            };
+            addStamp(roomName, stamp, floodFillMatrix);
+
+            if (countExtensions >= 56) {
+                Memory.rooms[roomName].planStep++;
+            }
+            break;
+
+        case 7:
+            // Plan the exensions position
+            var countExtensions = Memory.rooms[roomName].buildings.filter(
+                (building) => building.structureType === STRUCTURE_EXTENSION
+            ).length;
+
+            var planRCL = Math.ceil(countExtensions / 10) + 2;
 
             stamp = {
                 structures: [" ? ", "?E?", " ? "],
@@ -235,7 +257,8 @@ function planCity(room) {
                 Memory.rooms[roomName].planStep++;
             }
             break;
-        case 7:
+        case 8:
+            // Plan Roads
             const containers = Memory.rooms[roomName].buildings.filter(
                 (building) => building.structureType === STRUCTURE_CONTAINER
             );
@@ -269,7 +292,7 @@ function planCity(room) {
 
             Memory.rooms[roomName].planStep++;
             break;
-        case 8:
+        case 9:
             const cutTiles = mincut.GetCutTiles(
                 roomName,
                 Memory.rooms[roomName].mincutBoundries
@@ -287,7 +310,7 @@ function planCity(room) {
                 Memory.rooms[roomName].buildings.concat(ramparts);
             Memory.rooms[roomName].planStep++;
             break;
-        case 9:
+        case 10:
             const structures = Memory.rooms[roomName].buildings.filter(
                 (building) =>
                     building.structureType !== STRUCTURE_ROAD &&
