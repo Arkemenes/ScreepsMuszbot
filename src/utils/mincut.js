@@ -1,5 +1,3 @@
-// require('util.min_cut').test('W5N9');
-
 /**
  * Posted 10 may 2018 by @saruss
  *

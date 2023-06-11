@@ -1,4 +1,4 @@
-let creepLogic = require("./roles");
+let creepLogic = require("../roles");
 let creepTypes = _.keys(creepLogic);
 
 function spawnCreeps(room) {

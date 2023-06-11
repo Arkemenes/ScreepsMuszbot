@@ -93,7 +93,7 @@ var harvester = {
                 creep.memory.role == "harvester" && creep.room.name == room.name
         );
 
-        if (harvesters.length < 2) {
+        if (harvesters.length < 4) {
             return true;
         }
     },

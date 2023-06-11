@@ -129,7 +129,7 @@ var builder = {
             (cs) => cs.room.name == room.name
         ).length;
 
-        const wantedBuilders = 4; // Math.ceil(constructionSites / 5);
+        const wantedBuilders = 2; // Math.ceil(constructionSites / 5);
 
         if (builders.length < wantedBuilders) {
             return true;
@@ -137,7 +137,7 @@ var builder = {
     },
     // returns an object with the data to spawn a new creep
     spawnData: function (room) {
-        let name = "builder" + Game.time;
+        let name = "Builder" + Game.time;
         let body = [WORK, CARRY, MOVE];
         let memory = { role: "builder" };
 

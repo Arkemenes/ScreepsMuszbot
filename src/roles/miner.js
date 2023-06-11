@@ -57,11 +57,11 @@ var miner = {
 
         let wantedMinersWorkParts = 2 * room.find(FIND_SOURCES).length;
 
-        if (miners.length && !harvesters.length) {
-            return false;
-        }
+        // if (miners.length && !harvesters.length) {
+        //     return false;
+        // }
 
-        if (workCount < wantedMinersWorkParts) {
+        if (miners.length < 2) {
             return true;
         }
     },

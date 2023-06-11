@@ -1,7 +1,8 @@
-let creepLogic = require("roles");
-let roomLogic = require("rooms");
-let prototypes = require("prototypes");
-let utils = require("utils");
+let creepLogic = require("./roles");
+let structureLogic = require("./structures");
+let roomLogic = require("./rooms");
+let prototypes = require("./prototypes");
+let utils = require("./utils");
 
 // // This line monkey patches the global prototypes.
 utils.profiler.enable();
@@ -32,6 +33,21 @@ module.exports.loop = function () {
             for (var name in Memory.creeps) {
                 if (!Game.creeps[name]) {
                     delete Memory.creeps[name];
+                }
+            }
+            // run each creep role see /structures/index.js
+            for (var name in Game.structures) {
+                var structure = Game.structures[name];
+                let structureType = structure.structureType;
+
+                if (structureLogic[structureType]) {
+                    structureLogic[structureType].run(structure);
+                }
+            }
+            // free up memory if creep no longer exists
+            for (var name in Memory.structures) {
+                if (!Game.structures[name]) {
+                    delete Memory.structures[name];
                 }
             }
             utils.stats();

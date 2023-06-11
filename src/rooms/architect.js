@@ -1,4 +1,4 @@
-const mincut = require("./util.mincut");
+const mincut = require("../utils/mincut");
 
 let layoutKey = {
     A: STRUCTURE_SPAWN,
