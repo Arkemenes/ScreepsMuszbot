@@ -61,7 +61,7 @@ var roleUpgrader = {
                 creep.memory.role == "upgrader" && creep.room.name == room.name
         );
 
-        if (upgraders.length < 5) {
+        if (upgraders.length < 3) {
             return true;
         }
     },

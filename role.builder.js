@@ -46,7 +46,7 @@ var builder = {
                     s.structureType != STRUCTURE_WALL &&
                     s.hits < s.hitsMax &&
                     (s.structureType != STRUCTURE_RAMPART ||
-                        s.hits < 0.05 * s.hitsMax),
+                        s.hits < 0.01 * s.hitsMax),
             });
 
             if (repairTargets.length) {
@@ -59,7 +59,6 @@ var builder = {
 
                 if (repairTargets[0].hits / repairTargets[0].hitsMax < 0.3) {
                     creep.pushState("Build", repairTarget.id);
-                    console.log("o");
                     if (!creep.invokeState()) {
                         creep.say("zzz");
                     }
@@ -73,7 +72,6 @@ var builder = {
 
             if (targetConstructionSite) {
                 creep.pushState("Build", targetConstructionSite.id);
-                console.log("g");
                 if (!creep.invokeState()) {
                     creep.say("zzz");
                 }
@@ -81,7 +79,6 @@ var builder = {
             }
 
             if (repairTarget) {
-                console.log("p");
                 creep.pushState("Build", repairTarget.id);
                 if (!creep.invokeState()) {
                     creep.say("zzz");
@@ -132,7 +129,7 @@ var builder = {
             (cs) => cs.room.name == room.name
         ).length;
 
-        const wantedBuilders = 2; // Math.ceil(constructionSites / 5);
+        const wantedBuilders = 4; // Math.ceil(constructionSites / 5);
 
         if (builders.length < wantedBuilders) {
             return true;
