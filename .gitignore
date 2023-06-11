@@ -1,6 +1,6 @@
 # .gitignore 
 node_modules 
 
-Gruntfile
+Gruntfile.js
 package-lock.json
 dist/main.js
