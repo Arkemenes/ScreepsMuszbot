@@ -436,16 +436,22 @@ function planCity(room) {
 }
 
 function createConstructionSites(room) {
-    const rcl = room.controller.level;
-    for (const building of Memory.rooms[room.name].buildings) {
-        const buildingPos = new RoomPosition(building.x, building.y, room.name);
-        if (
-            rcl >= building.minimalRCL &&
-            buildingPos.createConstructionSite(building.structureType) == OK
-        ) {
-            break;
-        }
+    let index = Memory.rooms[room.name].constructionIndex;
+    if (
+        index == undefined ||
+        index >= Memory.rooms[room.name].buildings.length
+    ) {
+        index = 0;
     }
+
+    const rcl = room.controller.level;
+    const building = Memory.rooms[room.name].buildings[index];
+    const buildingPos = new RoomPosition(building.x, building.y, room.name);
+    if (rcl >= building.minimalRCL) {
+        buildingPos.createConstructionSite(building.structureType);
+    }
+
+    Memory.rooms[room.name].constructionIndex++;
 }
 
 function findFirstTowerLocation(
