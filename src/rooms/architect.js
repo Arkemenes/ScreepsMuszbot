@@ -456,7 +456,7 @@ function createConstructionSites(room) {
         buildingPos.createConstructionSite(building.structureType);
     }
 
-    Memory.rooms[room.name].constructionIndex++;
+    Memory.rooms[room.name].constructionIndex = index + 1;
 }
 
 function findFirstTowerLocation(
