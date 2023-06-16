@@ -126,7 +126,7 @@ var builder = {
         );
         var constructionSites = _.filter(
             Game.constructionSites,
-            (cs) => cs.room.name == room.name
+            (cs) => cs.room && cs.room.name == room.name
         ).length;
 
         const wantedBuilders = 2; // Math.ceil(constructionSites / 5);

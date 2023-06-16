@@ -34,13 +34,17 @@ function planCity(room) {
     if (
         Memory.rooms[room.name].planned &&
         !_.find(Game.constructionSites, (c) => {
-            return c.room.name == room.name;
+            return c.room && c.room.name == room.name;
         })
     ) {
         createConstructionSites(room);
     }
 
     if (Memory.rooms[room.name].planned) {
+        return;
+    }
+
+    if (Game.cpu.bucket < 500) {
         return;
     }
 
@@ -51,6 +55,10 @@ function planCity(room) {
 
     let stamp = { structures: [], rcl: [] };
 
+    if (!Memory.rooms[room.name].terrainMatrix) {
+        return;
+    }
+
     switch (planStep) {
         case undefined:
             Memory.rooms[roomName].buildings = [];
@@ -59,36 +67,15 @@ function planCity(room) {
                 roomName,
                 floodFillMatrix
             );
-            addBuildings(roomName, containersAndLinks, false);
+            addBuildings(roomName, containersAndLinks, true);
             Memory.rooms[roomName].planStep = 1;
             break;
         case 1:
             // Plan first spawn stamp
             stamp = {
-                structures: [
-                    " ...   ",
-                    ".EEK.. ",
-                    ".E AEE.",
-                    ".EEC E.",
-                    " ..EEE.",
-                    "   ... ",
-                ],
-                rcl: [
-                    " 222   ",
-                    "222522 ",
-                    "22 1332",
-                    "2222 32",
-                    " 224332",
-                    "   222 ",
-                ],
-                ramparts: [
-                    "       ",
-                    "   5   ",
-                    "   5   ",
-                    "   5   ",
-                    "       ",
-                    "       ",
-                ],
+                structures: ["  .  ", " .E. ", ".EAE.", " .E. ", "  .  "],
+                rcl: ["  2  ", " 222 ", "22122", " 222 ", "  2  "],
+                ramparts: ["     ", "     ", "     ", "     ", "     "],
             };
             const spawn = room.find(FIND_MY_STRUCTURES, {
                 filter: { structureType: STRUCTURE_SPAWN },
@@ -109,64 +96,23 @@ function planCity(room) {
             Memory.rooms[roomName].planStep++;
             break;
         case 2:
-            // Plan the second spawn stamp (having storage)
+            // Plan the core
             stamp = {
-                structures: [
-                    " ...   ",
-                    ".EEK.. ",
-                    ".E AEE.",
-                    ".EES E.",
-                    " ..EEE.",
-                    "   ... ",
-                ],
-                rcl: [
-                    " 444   ",
-                    "444744 ",
-                    "44 7454",
-                    "4444 44",
-                    " 445444",
-                    "   444 ",
-                ],
-                ramparts: [
-                    "       ",
-                    "   7   ",
-                    "   7   ",
-                    "   5   ",
-                    "       ",
-                    "       ",
-                ],
+                structures: ["  .  ", " .S. ", ".M.F.", " .K. ", "  .  "],
+                rcl: ["  4  ", " 444 ", "46474", " 454 ", "  4  "],
+                ramparts: ["     ", "  5  ", " 7 8 ", "     ", "     "],
             };
 
             addStamp(roomName, stamp, floodFillMatrix);
             Memory.rooms[roomName].planStep++;
             break;
+
         case 3:
-            // Plan the third spawn stamp
+            // Plan the tower stamp
             stamp = {
-                structures: [
-                    " ...   ",
-                    ".EEK.. ",
-                    ".E AEE.",
-                    ".EEC E.",
-                    " ..EEE.",
-                    "   ... ",
-                ],
-                rcl: [
-                    " 888   ",
-                    "878888 ",
-                    "88 8888",
-                    "8888 88",
-                    " 888888",
-                    "   888 ",
-                ],
-                ramparts: [
-                    "       ",
-                    "   8   ",
-                    "   8   ",
-                    "   8   ",
-                    "       ",
-                    "       ",
-                ],
+                structures: ["  .  ", " .E. ", ".ETE.", " .E. ", "  .  "],
+                rcl: ["  2  ", " 222 ", "23332", " 232 ", "  2  "],
+                ramparts: ["     ", "     ", "  4  ", "     ", "     "],
             };
 
             addStamp(roomName, stamp, floodFillMatrix);
@@ -176,73 +122,98 @@ function planCity(room) {
             // Plan the Lab Stamp
             stamp = {
                 structures: [
-                    "  ??  ",
-                    " ?LL. ",
+                    " ?? ? ",
                     "?LL.L?",
+                    "?L.L. ",
+                    " .L.L?",
                     "?L.LL?",
-                    " .LL? ",
-                    "  ??  ",
+                    " ? ?? ",
                 ],
                 rcl: [
-                    "  88  ",
-                    " 8876 ",
-                    "887668",
-                    "876688",
-                    " 6688 ",
-                    "  88  ",
+                    " 66 6 ",
+                    "666686",
+                    "66686 ",
+                    " 68676",
+                    "686776",
+                    " 6 66 ",
                 ],
                 ramparts: [
                     "      ",
-                    "  87  ",
-                    " 87 6 ",
-                    " 7 68 ",
-                    "  68  ",
-                    "      ",
+                    " 88.8 ",
+                    " 8 8  ",
+                    "  8 8 ",
+                    " 8 88 ",
+                    "     ",
                 ],
+                // structures: [" LL.", "LL.L", "L.LL", ".LL "],
+                // rcl: [" 876", "8766", "7668", "668 "],
+                // ramparts: [" 88 ", "88 8", "8 88", " 88 "],
             };
             addStamp(roomName, stamp, floodFillMatrix);
             Memory.rooms[roomName].planStep++;
             break;
+
         case 5:
-            // Plan anchor
+            // Plan the second spawn stamp
             stamp = {
-                structures: ["  ?  ", " .N. ", "?OPF?", " .M. ", "  ?  "],
-                rcl: ["  6  ", " 686 ", "68876", " 666 ", "  6  "],
-                ramparts: ["     ", "  8  ", " 887 ", "  6  ", "     "],
+                structures: ["  .  ", " .E. ", ".EAE.", " .E. ", "  .  "],
+                rcl: ["  3  ", " 333 ", "34743", " 333 ", "  3  "],
+                ramparts: ["     ", "     ", "     ", "     ", "     "],
             };
             addStamp(roomName, stamp, floodFillMatrix);
             Memory.rooms[roomName].planStep++;
             break;
 
         case 6:
+            // Plan the third spawn stamp
+            stamp = {
+                structures: ["  .  ", " .E. ", ".EAE.", " .E. ", "  .  "],
+                rcl: ["  4  ", " 444 ", "44844", " 444 ", "  4  "],
+                ramparts: ["     ", "     ", "     ", "     ", "     "],
+            };
+            addStamp(roomName, stamp, floodFillMatrix);
+            Memory.rooms[roomName].planStep++;
+            break;
+
+        case 7:
+            // Plan the power spawn stamp
+            stamp = {
+                structures: ["  .  ", " .E. ", ".EPE.", " .E. ", "  .  "],
+                rcl: ["  4  ", " 444 ", "44844", " 444 ", "  4  "],
+                ramparts: ["     ", "     ", "     ", "     ", "     "],
+            };
+            addStamp(roomName, stamp, floodFillMatrix);
+            Memory.rooms[roomName].planStep++;
+            break;
+        case 8:
             // Plan the exensions position
             var countExtensions = Memory.rooms[roomName].buildings.filter(
                 (building) => building.structureType === STRUCTURE_EXTENSION
             ).length;
 
-            var planRCL = Math.ceil((countExtensions + 4) / 10) + 2;
+            var planRCL = Math.floor(countExtensions / 10) + 3;
 
             stamp = {
                 structures: ["  ?  ", " .E. ", "?EEE?", " .E. ", "  ?  "],
                 rcl: ["  x  ", " xxx ", "xxxxx", " xxx ", "  x  "].map((str) =>
                     str.replace(/x/g, planRCL)
                 ),
-                ramparts: ["    ", "    ", "    ", "    ", "    "],
+                ramparts: ["     ", "     ", "     ", "     ", "     "],
             };
             addStamp(roomName, stamp, floodFillMatrix);
 
-            if (countExtensions >= 56) {
+            if (countExtensions >= 49) {
                 Memory.rooms[roomName].planStep++;
             }
             break;
 
-        case 7:
+        case 9:
             // Plan the exensions position
             var countExtensions = Memory.rooms[roomName].buildings.filter(
                 (building) => building.structureType === STRUCTURE_EXTENSION
             ).length;
 
-            var planRCL = Math.ceil(countExtensions / 10) + 2;
+            var planRCL = Math.floor(countExtensions / 10) + 3;
 
             stamp = {
                 structures: [" ? ", "?E?", " ? "],
@@ -253,11 +224,11 @@ function planCity(room) {
             };
             addStamp(roomName, stamp, floodFillMatrix);
 
-            if (countExtensions >= 60) {
+            if (countExtensions >= 59) {
                 Memory.rooms[roomName].planStep++;
             }
             break;
-        case 8:
+        case 10:
             // Plan Roads
             const containers = Memory.rooms[roomName].buildings.filter(
                 (building) => building.structureType === STRUCTURE_CONTAINER
@@ -275,8 +246,7 @@ function planCity(room) {
                     container.x,
                     container.y
                 );
-                Memory.rooms[roomName].buildings =
-                    Memory.rooms[roomName].buildings.concat(newRoads);
+                addBuildings(roomName, newRoads, true);
             }
 
             const pathsToAdjacentRooms = getShortestPathToAdjacentRooms(
@@ -292,7 +262,7 @@ function planCity(room) {
 
             Memory.rooms[roomName].planStep++;
             break;
-        case 9:
+        case 11:
             const cutTiles = mincut.GetCutTiles(
                 roomName,
                 Memory.rooms[roomName].mincutBoundries
@@ -310,7 +280,7 @@ function planCity(room) {
                 Memory.rooms[roomName].buildings.concat(ramparts);
             Memory.rooms[roomName].planStep++;
             break;
-        case 10:
+        case 12:
             const structures = Memory.rooms[roomName].buildings.filter(
                 (building) =>
                     building.structureType !== STRUCTURE_ROAD &&
@@ -329,29 +299,6 @@ function planCity(room) {
                 structures,
                 blockRamparts,
                 (visualize = true)
-            );
-            const towerPos = findFirstTowerLocation(
-                floodFillMatrixBlocked,
-                blockRamparts,
-                roomName
-            );
-            addBuildings(
-                roomName,
-                [
-                    {
-                        x: towerPos.x,
-                        y: towerPos.y,
-                        structureType: STRUCTURE_TOWER,
-                        minimalRCL: 3,
-                    },
-                    {
-                        x: towerPos.x,
-                        y: towerPos.y,
-                        structureType: STRUCTURE_RAMPART,
-                        minimalRCL: 4,
-                    },
-                ],
-                false
             );
 
             const secondTowerPos = findNextTowerLocation(
@@ -442,6 +389,10 @@ function createConstructionSites(room) {
         index >= Memory.rooms[room.name].buildings.length
     ) {
         index = 0;
+    }
+
+    if (!room.controller) {
+        return;
     }
 
     const rcl = room.controller.level;
@@ -549,9 +500,9 @@ function findNextTowerLocation(
             );
 
             const totalDistance = currentTowers.reduce((sum, tower) => {
-                const distance = Math.sqrt(
-                    (tower.x - adjacentX) ** 2 + (tower.y - adjacentY) ** 2
-                );
+                const distance =
+                    ((tower.x - adjacentX) ** 2 + (tower.y - adjacentY) ** 2) **
+                    (1 / 16);
                 return sum + distance;
             }, 0);
 
@@ -616,7 +567,7 @@ function getContainerLocations(roomName, floodFillMatrix) {
                         x: coordX,
                         y: coordY,
                         structureType: STRUCTURE_CONTAINER,
-                        minimalRCL: 0,
+                        minimalRCL: 1,
                     };
                     maxVal = floodFillMatrix.get(coordX, coordY);
                 }
@@ -777,6 +728,10 @@ function findStampLocation(
 ) {
     const room = Game.rooms[roomName];
 
+    const storageLocation = _.find(Memory.rooms["W9N3"].buildings, (b) => {
+        return b.structureType == STRUCTURE_STORAGE;
+    });
+
     // Check if the room exists
     if (!room) {
         console.log(`Room ${roomName} not found.`);
@@ -789,6 +744,7 @@ function findStampLocation(
 
     let bestVal = -1;
     let bestAdjacentRoads = -1;
+    let bestStorageDistance = Infinity;
     let buildings = [];
 
     // Iterate over possible coordinates for stamp placement
@@ -797,6 +753,8 @@ function findStampLocation(
             let isValid = true;
 
             let value = 0;
+            let storageDistance = 0;
+
             let adjacentRoads = 0;
             let tmpBuildings = [];
 
@@ -852,6 +810,13 @@ function findStampLocation(
                     // Calculate value based on flood fill matrix
                     value += floodFillMatrix.get(coordX, coordY);
 
+                    if (storageLocation) {
+                        storageDistance +=
+                            ((coordX + stampX - storageLocation.x) ** 2 +
+                                (coordY + stampY - storageLocation.y) ** 2) **
+                            (1 / 16);
+                    }
+
                     // Count adjacent roads
                     if (
                         (stampStructure === "." || stampStructure === "?") &&
@@ -904,9 +869,12 @@ function findStampLocation(
             if (
                 isValid &&
                 (adjacentRoads > bestAdjacentRoads ||
-                    (value > bestVal && adjacentRoads === bestAdjacentRoads))
+                    (value > bestVal && adjacentRoads == bestAdjacentRoads) ||
+                    (storageDistance < bestStorageDistance &&
+                        adjacentRoads === bestAdjacentRoads))
             ) {
                 bestVal = value;
+                bestStorageDistance = storageDistance;
                 bestAdjacentRoads = adjacentRoads;
                 buildings = tmpBuildings;
             }
@@ -958,7 +926,7 @@ function visualizeStructures(structures, roomName, showRCL = false) {
         const { x, y, structureType, minimalRCL } = structure;
 
         roomVisual.structure(x, y, structureType, {
-            opacity: 0.1,
+            opacity: 0.15,
         });
 
         if (showRCL) {
