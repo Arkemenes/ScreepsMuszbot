@@ -1,0 +1,343 @@
+// Which room is worth raiding, and the console surface (raidRoom,
+// raidSquad) to dispatch it. Mirrors rooms/remotes.js's role for remote
+// mining - this module is the single place that decides room-level
+// offensive eligibility (constitution §6); roles/raider.js and the squad
+// roles (defenderStriker/defenderMedic/squadDismantler in squad mode)
+// only execute.
+//
+// Two cases share one gate (refusalReason): O2 (PvE - a neutral room with an
+// invader core or other hostile presence, never checked against
+// targetEnemies) and O4 (a player room, but ONLY one already added to the
+// opt-in utils/hostiles.targetEnemies list, and only when it looks weak
+// enough to raid safely - see isWeakEnemyRoom). ROADMAP 0032 Fase 3/4.
+// O3 (remote harassment, ROADMAP 0036) is shaped differently - the target
+// is a reserved-not-owned remote, not an owned/neutral room - so it gets
+// its own gate (remoteRefusalReason/isEnemyRemote) below.
+
+const config = require("../utils/config");
+const { isTargetEnemy, isAlly } = require("../utils/hostiles");
+const remotes = require("./remotes");
+const defenderStriker = require("../roles/defenderStriker");
+const defenderMedic = require("../roles/defenderMedic");
+const squadDismantler = require("../roles/squadDismantler");
+
+// A targetEnemy's room, scouted, with no tower/hostile seen and a low
+// enough RCL to be worth the risk. Intel can be stale (last observation,
+// not live) - accepted risk, see spec 0032's O4 "Contras".
+function isWeakEnemyRoom(roomName) {
+    const mem = Memory.rooms[roomName];
+    if (!mem || !mem.lastVisit) return false;
+    if (!mem.owner || !isTargetEnemy(mem.owner)) return false;
+    if ((mem.enemies || 0) > 0) return false;
+    if ((mem.numberOfTowers || 0) > 0) return false;
+    if ((mem.controllerLevel || 0) > config.get("raiding.maxTargetRcl", 3)) return false;
+    return true;
+}
+
+// The first known weak targetEnemy room, or null. Cheap - just scans
+// already-known Memory.rooms, no room.find.
+function findWeakTarget() {
+    for (const name in Memory.rooms) {
+        if (isWeakEnemyRoom(name)) return name;
+    }
+    return null;
+}
+
+// Shared by raidRoom() and raidSquad() - same "is this room fair game"
+// rule either way. Returns null when OK, or a reason string when refused.
+function refusalReason(targetRoomName) {
+    const tmem = Memory.rooms[targetRoomName];
+    if (!tmem || !tmem.lastVisit) {
+        return "hasn't been scouted yet - can't raid it";
+    }
+    if (tmem.my) {
+        return "is already mine";
+    }
+    if (tmem.owner) {
+        if (!isTargetEnemy(tmem.owner)) {
+            return `is owned by ${tmem.owner}, not in targetEnemies - refusing`;
+        }
+        if (!isWeakEnemyRoom(targetRoomName)) {
+            return "doesn't look weak enough to raid safely (tower/hostile seen, or RCL too high) - refusing";
+        }
+        return null;
+    }
+    if (!tmem.hasInvaderCore && !(tmem.enemies > 0) && !(tmem.enemyStructures > 0)) {
+        return "has nothing hostile to raid";
+    }
+    return null;
+}
+
+// A targetEnemy's REMOTE - scouted, unowned (someone's base is raidRoom's
+// job, not this one), currently reserved by them, and no hostile seen there
+// (a guarded remote isn't the "clear advantage, low risk" case O3 is for -
+// see spec.md). mem.enemies now correctly reflects a targetEnemy's own
+// guard even outside their owned room, since utils/hostiles.isHostile() was
+// fixed to recognize targetEnemies outside our own rooms too (ROADMAP 0036).
+function isEnemyRemote(roomName) {
+    const mem = Memory.rooms[roomName];
+    if (!mem || !mem.lastVisit) return false;
+    if (mem.my || mem.owner) return false;
+    const reservedBy = mem.reservation && mem.reservation.username;
+    if (!isTargetEnemy(reservedBy)) return false;
+    if ((mem.enemies || 0) > 0) return false;
+    return true;
+}
+
+// O3's own gate - separate from refusalReason() above because the shape of
+// "is this fair game" is different (reserved-not-owned vs. owned/PvE).
+function remoteRefusalReason(targetRoomName) {
+    const tmem = Memory.rooms[targetRoomName];
+    if (!tmem || !tmem.lastVisit) {
+        return "hasn't been scouted yet - can't harass it";
+    }
+    if (tmem.my || tmem.owner) {
+        return "is someone's owned room, not a remote - use raidRoom for that";
+    }
+    const reservedBy = tmem.reservation && tmem.reservation.username;
+    if (!reservedBy) {
+        return "isn't reserved by anyone right now";
+    }
+    if (!isTargetEnemy(reservedBy)) {
+        return `is reserved by ${reservedBy}, not in targetEnemies - refusing`;
+    }
+    if ((tmem.enemies || 0) > 0) {
+        return "has a hostile creep present - doesn't look undefended, refusing";
+    }
+    return null;
+}
+
+// ROADMAP 0045/0046 note: contestRoom (below) is the only place that
+// *wants* an owned/reserved-by-someone-else room - claimRoom/reserveRoom
+// (rooms/remotes.js) refuse that on purpose. Never automatic (no
+// autoRaid-style opt-in) - the player types this deliberately.
+function contestRefusalReason(targetRoomName) {
+    const tmem = Memory.rooms[targetRoomName];
+    if (!tmem || !tmem.lastVisit) {
+        return "hasn't been scouted yet - can't contest it";
+    }
+    if (tmem.my) {
+        return "is already mine";
+    }
+    const holder = tmem.owner || (tmem.reservation && tmem.reservation.username);
+    if (!holder) {
+        return "isn't owned or reserved by anyone - use claimRoom/reserveRoom instead";
+    }
+    if (isAlly(holder)) {
+        return `is owned/reserved by ${holder}, an ally - refusing`;
+    }
+    if (!isTargetEnemy(holder)) {
+        return `is owned/reserved by ${holder}, not in targetEnemies - refusing`;
+    }
+    if (tmem.hasController === false) {
+        return "has no controller to contest (highway/SK/center room)";
+    }
+    const status = Game.map.getRoomStatus && Game.map.getRoomStatus(targetRoomName);
+    if (status && status.status !== "normal") {
+        return `isn't available to contest (status: ${status.status} - novice/respawn ` +
+            "zone protection, or out of bounds)";
+    }
+    return null;
+}
+
+// --- console --------------------------------------------------------
+//   raidRoom("W2N5")            -> mother = nearest owned room
+//   raidRoom("W2N5", "W1N1")    -> explicit mother room
+global.raidRoom = function (targetRoomName, motherRoomName) {
+    const reason = refusalReason(targetRoomName);
+    if (reason) {
+        console.log(`[raiding] ${targetRoomName} ${reason}`);
+        return;
+    }
+
+    if (Memory.raidTarget) {
+        console.log(
+            `[raiding] a raid is already pending: ${Memory.raidTarget.room} ` +
+                `(from ${Memory.raidTarget.from})`
+        );
+        return;
+    }
+
+    const mother = motherRoomName || remotes.nearestOwnedRoom(targetRoomName);
+    if (!mother) {
+        console.log(`[raiding] no owned room found to raid ${targetRoomName} from`);
+        return;
+    }
+
+    Memory.raidTarget = { room: targetRoomName, from: mother };
+    console.log(`[raiding] ${mother} will raid ${targetRoomName}`);
+};
+
+// --- console: harass a targetEnemy's remote (ROADMAP 0036, O3) ----------
+// Denies economy (kills their reserver/miner/hauler), never touches a
+// structure, never enters an owned room - see isEnemyRemote() above.
+//   raidRemote("W2N5")            -> mother = nearest owned room
+//   raidRemote("W2N5", "W1N1")    -> explicit mother room
+global.raidRemote = function (targetRoomName, motherRoomName) {
+    const reason = remoteRefusalReason(targetRoomName);
+    if (reason) {
+        console.log(`[raiding] ${targetRoomName} ${reason}`);
+        return;
+    }
+
+    if (Memory.raidTarget) {
+        console.log(
+            `[raiding] a raid is already pending: ${Memory.raidTarget.room} ` +
+                `(from ${Memory.raidTarget.from})`
+        );
+        return;
+    }
+
+    const mother = motherRoomName || remotes.nearestOwnedRoom(targetRoomName);
+    if (!mother) {
+        console.log(`[raiding] no owned room found to harass ${targetRoomName} from`);
+        return;
+    }
+
+    Memory.raidTarget = { room: targetRoomName, from: mother, mission: "harass" };
+    console.log(`[raiding] ${mother} will harass ${targetRoomName}'s remote`);
+};
+
+// --- console: siege an already-claimed/reserved targetEnemy room -------
+// (ROADMAP 0046, old_1 parity) - a slow, deliberate attackController()
+// grind, never automatic. A creep with a CLAIM part is capped at
+// CREEP_CLAIM_LIFE_TIME (600 ticks) - dying mid-siege is expected, not a
+// dead end (unlike the claim mission, 0035), so roles/reserver.js and
+// rooms/needs.js keep respawning a replacement until the controller goes
+// neutral or the player calls cancelContest().
+//   contestRoom("W2N5")            -> mother = nearest owned room
+//   contestRoom("W2N5", "W1N1")    -> explicit mother room
+global.contestRoom = function (targetRoomName, motherRoomName) {
+    const reason = contestRefusalReason(targetRoomName);
+    if (reason) {
+        console.log(`[raiding] ${targetRoomName} ${reason}`);
+        return;
+    }
+
+    if (Memory.contestTarget) {
+        console.log(
+            `[raiding] a contest is already pending: ${Memory.contestTarget.room} ` +
+                `(from ${Memory.contestTarget.from})`
+        );
+        return;
+    }
+
+    const mother = motherRoomName || remotes.nearestOwnedRoom(targetRoomName);
+    if (!mother) {
+        console.log(`[raiding] no owned room found to contest ${targetRoomName} from`);
+        return;
+    }
+
+    // Same reachability rule as claimRoom() (ROADMAP 0033) - any body with
+    // a CLAIM part is capped at CREEP_CLAIM_LIFE_TIME, not the usual 1500.
+    const hops = remotes.roomDistance(mother, targetRoomName);
+    const estimatedTicks = hops * config.get("claim.ticksPerRoomHop", 50);
+    const margin = config.get("claim.travelMargin", 10);
+    const budget = CREEP_CLAIM_LIFE_TIME - margin;
+    if (estimatedTicks > budget) {
+        console.log(
+            `[raiding] ${targetRoomName} is too far from ${mother} for a CLAIM creep to ` +
+                `survive the trip (~${estimatedTicks} ticks estimated, ${budget} available) - ` +
+                "pick a closer mother room"
+        );
+        return;
+    }
+
+    Memory.contestTarget = { room: targetRoomName, from: mother };
+    console.log(
+        `[raiding] ${mother} will contest ${targetRoomName} - this is a slow siege ` +
+            "(attackController), expect several creep lifetimes; cancelContest() to stop"
+    );
+};
+
+global.cancelContest = function () {
+    if (!Memory.contestTarget) {
+        console.log("[raiding] no contest pending");
+        return;
+    }
+    console.log(`[raiding] contest on ${Memory.contestTarget.room} cancelled`);
+    delete Memory.contestTarget;
+};
+
+// --- console: a real 2x2 lockstep squad (ROADMAP 0032 Fase 4, O5) -------
+//   raidSquad("W2N5", "combat")            -> 2 striker + 2 medic
+//   raidSquad("W2N5", "siege", "W1N1")     -> 2 dismantler + 2 medic
+const SQUAD_RECIPES = {
+    combat: ["defenderStriker", "defenderStriker", "defenderMedic", "defenderMedic"],
+    siege: ["squadDismantler", "squadDismantler", "defenderMedic", "defenderMedic"],
+};
+global.raidSquad = function (targetRoomName, mission, motherRoomName) {
+    mission = mission || "combat";
+    if (!SQUAD_RECIPES[mission]) {
+        console.log(`[raiding] mission must be "combat" or "siege" (got ${mission})`);
+        return;
+    }
+
+    const reason = refusalReason(targetRoomName);
+    if (reason) {
+        console.log(`[raiding] ${targetRoomName} ${reason}`);
+        return;
+    }
+
+    if (Memory.pendingSquad) {
+        console.log(
+            `[raiding] a squad is already assembling for ${Memory.pendingSquad.room} ` +
+                `(from ${Memory.pendingSquad.from})`
+        );
+        return;
+    }
+    if (Memory.squads && Object.keys(Memory.squads).length) {
+        console.log("[raiding] a squad is already active - only one at a time for now");
+        return;
+    }
+
+    const mother = motherRoomName || remotes.nearestOwnedRoom(targetRoomName);
+    if (!mother) {
+        console.log(`[raiding] no owned room found to raid ${targetRoomName} from`);
+        return;
+    }
+
+    Memory.pendingSquad = {
+        mission,
+        room: targetRoomName,
+        from: mother,
+        need: SQUAD_RECIPES[mission].slice(),
+        spawned: [],
+    };
+    console.log(
+        `[raiding] ${mother} assembling a ${mission} squad (${SQUAD_RECIPES[mission].join("+")}) ` +
+            `for ${targetRoomName}`
+    );
+};
+
+const SQUAD_ROLES = {
+    defenderStriker,
+    defenderMedic,
+    squadDismantler,
+};
+
+// The next spawn request to complete Memory.pendingSquad, or null when
+// there's nothing pending for this room (or nothing left to spawn - it's
+// about to be promoted to a real squad by roles/*'s registerPending()).
+function spawnPendingSquad(room) {
+    const pending = Memory.pendingSquad;
+    if (!pending || pending.from !== room.name) return null;
+    const nextIndex = pending.spawned.length;
+    if (nextIndex >= pending.need.length) return null;
+
+    const roleName = pending.need[nextIndex];
+    const roleLogic = SQUAD_ROLES[roleName];
+    if (!roleLogic) return null;
+
+    const data = roleLogic.spawnData(room);
+    data.memory.pendingSquad = pending.room;
+    return data;
+}
+
+module.exports = {
+    isWeakEnemyRoom,
+    findWeakTarget,
+    isEnemyRemote,
+    contestRefusalReason,
+    spawnPendingSquad,
+};

@@ -1,0 +1,189 @@
+// One role, two missions (memory.mission): "reserve" keeps a remote's
+// controller reserved for us (renewable, several can run in parallel - one
+// per remote); "claim" permanently takes ownership of a room
+// (claimController, single instance empire-wide - like the scout). Both are
+// the same body/travel shape, just a different final intent, so they share
+// one role instead of two near-duplicates (ROADMAP 0020).
+
+const census = require("../utils/census");
+const { roomNeeds } = require("../rooms/needs");
+const remotes = require("../rooms/remotes");
+const routing = require("../utils/routing");
+const names = require("../utils/names");
+const { silenceAttackAlerts } = require("../utils/combat");
+
+// CLAIM parts beyond this don't help - extra buffer for "reserve" missions
+// (more CLAIM = more reservation ticks added per trip), wasted on "claim"
+// (claimController only ever consumes one).
+const MAX_RESERVE_CLAIM_PARTS = 3;
+
+function reserveBody(room) {
+    const unitCost = BODYPART_COST[CLAIM] + BODYPART_COST[MOVE];
+    const affordable = Math.floor(room.energyCapacityAvailable / unitCost);
+    const n = Math.max(1, Math.min(MAX_RESERVE_CLAIM_PARTS, affordable || 1));
+    const body = [];
+    for (let i = 0; i < n; i++) body.push(CLAIM);
+    for (let i = 0; i < n; i++) body.push(MOVE);
+    return body;
+}
+
+var reserver = {
+    /** @param {Creep} creep **/
+    run: function (creep) {
+        const mission = creep.memory.mission;
+        // ROADMAP 0052: only "contest" routinely sits next to an armed
+        // owner/defender for a long siege - "reserve"/"claim" target
+        // neutral or already-safe rooms, no need to silence there.
+        if (mission === "contest") silenceAttackAlerts(creep);
+        const targetRoomName = creep.memory.targetRoom;
+        if (!targetRoomName) {
+            creep.suicide();
+            return;
+        }
+
+        // mark that a claim creep is actually out there - see needs.js,
+        // which uses this to notice when one disappears (dies) mid-mission
+        // instead of respawning a replacement forever
+        if (mission === "claim" && Memory.claimTarget) {
+            Memory.claimTarget.creepSeen = true;
+        }
+
+        if (creep.room.name !== targetRoomName) {
+            // never a scout-style exploratory move - always one specific
+            // room, so route through highways and completely avoid any
+            // room with known hostiles (utils/routing).
+            routing.moveToRoom(creep, targetRoomName, {
+                range: 20,
+                reusePath: 30,
+                blockHostiles: true,
+            });
+            return;
+        }
+
+        const controller = creep.room.controller;
+        if (!controller) {
+            // nothing to reserve/claim here - the target was a dead end
+            if (mission === "claim") delete Memory.claimTarget;
+            creep.suicide();
+            return;
+        }
+
+        if (mission === "claim") {
+            const status = creep.claimController(controller);
+            if (status === ERR_NOT_IN_RANGE) {
+                creep.moveTo(controller, { range: 1, reusePath: 20 });
+                return;
+            }
+            // OK, or an unrecoverable error (GCL full, already owned, ...) -
+            // the mission is over either way
+            delete Memory.claimTarget;
+            return;
+        }
+
+        // mission === "contest" (ROADMAP 0046, old_1 parity): a deliberate,
+        // manual siege on a room already claimed/reserved by someone else.
+        // Keep hammering attackController() while it's still theirs; once
+        // the controller goes neutral, finish the job like a claim mission.
+        // Dying mid-siege (CLAIM parts cap a body at 600 ticks total) is
+        // expected, not a dead end - rooms/needs.js just spawns another
+        // while Memory.contestTarget is still set, no abandon-on-death
+        // check like the "claim" mission has (0035).
+        if (mission === "contest") {
+            const stillTheirs = !!(controller.owner || controller.reservation);
+            if (stillTheirs) {
+                const status = creep.attackController(controller);
+                if (status === ERR_NOT_IN_RANGE) {
+                    creep.moveTo(controller, { range: 1, reusePath: 20 });
+                }
+                return;
+            }
+            const status = creep.claimController(controller);
+            if (status === ERR_NOT_IN_RANGE) {
+                creep.moveTo(controller, { range: 1, reusePath: 20 });
+                return;
+            }
+            // OK, or an unrecoverable error - the siege is over either way
+            delete Memory.contestTarget;
+            return;
+        }
+
+        // mission === "reserve"
+        const status = creep.reserveController(controller);
+        if (status === ERR_NOT_IN_RANGE) {
+            creep.moveTo(controller, { range: 1, reusePath: 20 });
+        }
+    },
+
+    // the number of reservers this room should have (both missions combined)
+    // - see rooms/needs.js
+    wanted: function (room) {
+        return roomNeeds(room).reserver;
+    },
+
+    spawn: function (room) {
+        if (room.energyAvailable < BODYPART_COST[CLAIM] + BODYPART_COST[MOVE]) {
+            return false;
+        }
+        return census.count(room.name, "reserver", 0) < this.wanted(room);
+    },
+
+    spawnData: function (room) {
+        // a pending claim assigned to this room always wins - it's a rarer,
+        // higher-value mission and there's only ever one in flight
+        if (
+            Memory.claimTarget &&
+            Memory.claimTarget.from === room.name &&
+            !census
+                .all("reserver")
+                .some((c) => c.memory.mission === "claim")
+        ) {
+            return {
+                name: names.generate("reserver:claim"),
+                body: [CLAIM, MOVE],
+                memory: {
+                    role: "reserver",
+                    mission: "claim",
+                    targetRoom: Memory.claimTarget.room,
+                    home: room.name,
+                },
+            };
+        }
+
+        // a pending contest (ROADMAP 0046) is next in priority - same tier
+        // as claim, just a different final intent. More CLAIM parts than
+        // the fixed claim body on purpose: attackController()'s effect
+        // scales with CLAIM count, so a bigger body sieges faster.
+        if (
+            Memory.contestTarget &&
+            Memory.contestTarget.from === room.name &&
+            !census
+                .all("reserver")
+                .some((c) => c.memory.mission === "contest")
+        ) {
+            return {
+                name: names.generate("reserver:contest"),
+                body: reserveBody(room),
+                memory: {
+                    role: "reserver",
+                    mission: "contest",
+                    targetRoom: Memory.contestTarget.room,
+                    home: room.name,
+                },
+            };
+        }
+
+        const target = remotes.pendingReserves(room)[0];
+        return {
+            name: names.generate("reserver:reserve"),
+            body: reserveBody(room),
+            memory: {
+                role: "reserver",
+                mission: "reserve",
+                targetRoom: target,
+                home: room.name,
+            },
+        };
+    },
+};
+
+module.exports = reserver;

@@ -1,0 +1,318 @@
+// Which neighboring rooms are worth remote-mining, and the console surface
+// (reserveRoom / unreserveRoom / claimRoom) to manage them. This module is
+// the single place that decides room-level eligibility/safety - roles only
+// execute the missions it hands out (constitution §6).
+//
+// A remote only ever gets miners/haulers once it's actually RESERVED by us
+// (not merely listed as a candidate) - reservation is a prerequisite for
+// mining, not a parallel goal.
+
+const config = require("../utils/config");
+// Tunables (defaults + Memory.settings override path) live in utils/config:
+// remotes.reserveHealthyTicks, remotes.maxDistance, remotes.maxPerRoom.
+
+// Any owned room tells us our own username - cached forever, it never
+// changes for the life of the bot account.
+let cachedUsername = null;
+function myUsername() {
+    if (cachedUsername) return cachedUsername;
+    for (const name in Game.rooms) {
+        const room = Game.rooms[name];
+        if (room.controller && room.controller.my && room.controller.owner) {
+            cachedUsername = room.controller.owner.username;
+            break;
+        }
+    }
+    return cachedUsername;
+}
+
+function isMine(roomName) {
+    const mem = Memory.rooms[roomName];
+    return !!(mem && mem.my === true);
+}
+
+function isReservedByMe(roomName) {
+    const mem = Memory.rooms[roomName];
+    const reservation = mem && mem.reservation;
+    return !!(reservation && reservation.username === myUsername());
+}
+
+// True when a hostile has been seen in `roomName` - either right now, or the
+// last time we had visibility there (no fresher intel without a creep/room
+// back in view, so treat stale "yes" conservatively and stale "no" as fine).
+function hasHostiles(roomName) {
+    const mem = Memory.rooms[roomName];
+    return !!(mem && mem.enemies > 0);
+}
+
+// Room-to-room hop count (not path length) - cheap and cached per tick, used
+// only to cap how far a remote is allowed to be.
+let routeTick = -1;
+let routeCache = {};
+function roomDistance(fromRoomName, toRoomName) {
+    if (routeTick !== Game.time) {
+        routeTick = Game.time;
+        routeCache = {};
+    }
+    const key = fromRoomName + ":" + toRoomName;
+    if (routeCache[key] !== undefined) return routeCache[key];
+
+    const route = Game.map.findRoute(fromRoomName, toRoomName);
+    const dist = route === ERR_NO_PATH || !route ? Infinity : route.length;
+    routeCache[key] = dist;
+    return dist;
+}
+
+// The closest owned room to `targetRoomName` - where a reserveRoom/claimRoom
+// request with no explicit mother room defaults to.
+function nearestOwnedRoom(targetRoomName) {
+    let best = null;
+    let bestDist = Infinity;
+    for (const name in Game.rooms) {
+        const room = Game.rooms[name];
+        if (!room.controller || !room.controller.my) continue;
+        const dist = roomDistance(name, targetRoomName);
+        if (dist < bestDist) {
+            bestDist = dist;
+            best = name;
+        }
+    }
+    return best;
+}
+
+// Candidate neighboring rooms for `room` to remote-mine: scouted, not owned
+// by someone else, has at least one source, within the distance cap, and
+// under the per-mother-room count cap (existing remotes are never bumped by
+// the cap - only new candidates are).
+function eligible(room) {
+    const mem = Memory.rooms[room.name];
+    const exits = (mem && mem.exits) || {};
+    const already = (mem && mem.remotes) || [];
+    const results = [];
+
+    for (const direction in exits) {
+        const name = exits[direction];
+        const nmem = Memory.rooms[name];
+        if (!nmem || !nmem.lastVisit) continue; // never scouted
+        if (nmem.my) continue; // already ours - not a "remote"
+        if (nmem.owner && nmem.owner !== myUsername()) continue; // someone else's
+        if (!nmem.sourceNumber) continue; // no sources worth the trip
+        // Source Keeper detection isn't tracked by intel yet - out of scope,
+        // see 0020 spec's "Out of scope".
+        if (roomDistance(room.name, name) > config.get("remotes.maxDistance", 2)) {
+            continue;
+        }
+        if (
+            already.indexOf(name) === -1 &&
+            already.length >= config.get("remotes.maxPerRoom", 2)
+        ) {
+            continue;
+        }
+        results.push(name);
+    }
+    return results;
+}
+
+// The subset of Memory.rooms[room.name].remotes that's actually reserved by
+// us and currently safe - only these count for roomNeeds' remoteMiner /
+// remoteHauler demand. Home under attack pulls everyone back regardless.
+function active(room) {
+    const mem = Memory.rooms[room.name];
+    if (mem && mem.defenseActive) return [];
+
+    const remoteList = (mem && mem.remotes) || [];
+    return remoteList.filter(
+        (name) => !hasHostiles(name) && isReservedByMe(name)
+    );
+}
+
+// Remotes that need a reserver dispatched: listed, safe, and either not
+// reserved by us yet or running low.
+function pendingReserves(room) {
+    const mem = Memory.rooms[room.name];
+    const remoteList = (mem && mem.remotes) || [];
+    return remoteList.filter((name) => {
+        if (hasHostiles(name)) return false;
+        const rmem = Memory.rooms[name];
+        const reservation = rmem && rmem.reservation;
+        if (!reservation || reservation.username !== myUsername()) return true;
+        return (
+            (reservation.ticksToEnd || 0) <
+            config.get("remotes.reserveHealthyTicks", 3000)
+        );
+    });
+}
+
+// costCallback for native Creep.moveTo() / PathFinder.search(): every room
+// that isn't mine or reserved by me is impassable, EXCEPT `allowRoomName`
+// (a creep's own mission target - reserving/claiming it is the whole point,
+// so it can't be reserved-by-me yet). This is what keeps remote traffic
+// confined to owned/reserved territory end to end, not just at the
+// eligibility stage.
+function roomCallback(allowRoomName) {
+    return function (roomName, matrix) {
+        if (roomName === allowRoomName) return matrix;
+        if (isMine(roomName) || isReservedByMe(roomName)) return matrix;
+        return false;
+    };
+}
+
+// --- console -------------------------------------------------------------
+//   reserveRoom("W2N5")            -> mother = nearest owned room
+//   reserveRoom("W2N5", "W1N1")    -> explicit mother room
+//   unreserveRoom("W2N5")          -> drop it, creeps recall next roomNeeds
+//   claimRoom("W2N5")              -> dispatch a claimer (1 at a time, empire-wide)
+global.reserveRoom = function (targetRoomName, motherRoomName) {
+    const tmem = Memory.rooms[targetRoomName];
+    if (!tmem || !tmem.lastVisit) {
+        console.log(
+            `[remotes] ${targetRoomName} hasn't been scouted yet - can't reserve it`
+        );
+        return;
+    }
+    if (tmem.my || (tmem.owner && tmem.owner !== myUsername())) {
+        console.log(`[remotes] ${targetRoomName} is already owned - not eligible`);
+        return;
+    }
+
+    const mother = motherRoomName || nearestOwnedRoom(targetRoomName);
+    if (!mother) {
+        console.log(`[remotes] no owned room found to reserve ${targetRoomName} from`);
+        return;
+    }
+    const mmem = Memory.rooms[mother] || (Memory.rooms[mother] = {});
+    if (!mmem.remotes) mmem.remotes = [];
+    if (mmem.remotes.indexOf(targetRoomName) === -1) {
+        mmem.remotes.push(targetRoomName);
+    }
+    console.log(`[remotes] ${mother} will reserve/mine ${targetRoomName}`);
+};
+
+global.unreserveRoom = function (targetRoomName) {
+    let found = false;
+    for (const name in Memory.rooms) {
+        const mem = Memory.rooms[name];
+        if (!mem || !mem.remotes) continue;
+        const i = mem.remotes.indexOf(targetRoomName);
+        if (i !== -1) {
+            mem.remotes.splice(i, 1);
+            found = true;
+        }
+    }
+    console.log(
+        found
+            ? `[remotes] ${targetRoomName} dropped - creeps recall home`
+            : `[remotes] ${targetRoomName} wasn't listed anywhere`
+    );
+};
+
+global.claimRoom = function (targetRoomName, motherRoomName) {
+    const tmem = Memory.rooms[targetRoomName];
+    if (!tmem || !tmem.lastVisit) {
+        console.log(
+            `[remotes] ${targetRoomName} hasn't been scouted yet - can't claim it`
+        );
+        return;
+    }
+    if (tmem.my) {
+        console.log(`[remotes] ${targetRoomName} is already mine`);
+        return;
+    }
+    if (tmem.owner && tmem.owner !== myUsername()) {
+        console.log(
+            `[remotes] ${targetRoomName} is already owned by ${tmem.owner} - can't claim it`
+        );
+        return;
+    }
+    if (tmem.hasController === false) {
+        console.log(
+            `[remotes] ${targetRoomName} has no controller to claim (highway/Source Keeper/center room)`
+        );
+        return;
+    }
+    const targetStatus = Game.map.getRoomStatus && Game.map.getRoomStatus(targetRoomName);
+    if (targetStatus && targetStatus.status !== "normal") {
+        console.log(
+            `[remotes] ${targetRoomName} isn't available to claim (status: ${targetStatus.status} - ` +
+                `novice/respawn zone protection, or out of bounds)`
+        );
+        return;
+    }
+    if (Memory.claimTarget) {
+        console.log(
+            `[remotes] a claim is already pending: ${Memory.claimTarget.room} ` +
+                `(from ${Memory.claimTarget.from})`
+        );
+        return;
+    }
+
+    const mother = motherRoomName || nearestOwnedRoom(targetRoomName);
+    if (!mother) {
+        console.log(`[remotes] no owned room found to claim ${targetRoomName} from`);
+        return;
+    }
+
+    // A creep with any CLAIM part is capped at CREEP_CLAIM_LIFE_TIME (600
+    // ticks total), not the usual 1500 - no body/boost changes that. If the
+    // trip alone would eat through the budget (with a safety margin), the
+    // claimer is guaranteed to die before ever reaching the controller;
+    // refuse instead of wasting the spawn. Room-hop count is a rough,
+    // cheap stand-in for exact travel time (roomDistance is already
+    // cached per tick) - it doesn't know the safe-routing detours
+    // utils/routing.js's highway/hostile preferences might add, so this
+    // is deliberately conservative-ish, not a precise ETA.
+    const hops = roomDistance(mother, targetRoomName);
+    const estimatedTicks = hops * config.get("claim.ticksPerRoomHop", 50);
+    const margin = config.get("claim.travelMargin", 10);
+    const budget = CREEP_CLAIM_LIFE_TIME - margin;
+    if (estimatedTicks > budget) {
+        console.log(
+            `[remotes] ${targetRoomName} is too far from ${mother} to claim safely ` +
+                `(~${estimatedTicks} ticks estimated travel, ${budget} available after a ` +
+                `${margin}-tick safety margin out of ${CREEP_CLAIM_LIFE_TIME} total CLAIM ` +
+                `lifetime) - pick a closer mother room`
+        );
+        return;
+    }
+
+    const ownedRooms = _.filter(
+        Game.rooms,
+        (r) => r.controller && r.controller.my
+    ).length;
+    if (Game.gcl.level <= ownedRooms) {
+        console.log(
+            `[remotes] warning: GCL ${Game.gcl.level} may not cover another room ` +
+                `(${ownedRooms} owned already) - dispatching anyway, claimController will fail if not`
+        );
+    }
+
+    Memory.claimTarget = { room: targetRoomName, from: mother };
+    console.log(`[remotes] ${mother} will claim ${targetRoomName}`);
+};
+
+// Drops a pending claim order. Mirrors cancelContest() (rooms/raiding.js,
+// ROADMAP 0046): only clears Memory.claimTarget so rooms/needs.js stops
+// spawning a replacement - a claimer already in flight isn't recalled, it
+// finishes its own run() (reach the controller, or hit a dead end and
+// suicide) same as always.
+global.cancelClaim = function () {
+    if (!Memory.claimTarget) {
+        console.log("[remotes] no claim pending");
+        return;
+    }
+    console.log(`[remotes] claim on ${Memory.claimTarget.room} cancelled`);
+    delete Memory.claimTarget;
+};
+
+module.exports = {
+    myUsername,
+    isMine,
+    isReservedByMe,
+    hasHostiles,
+    roomDistance,
+    nearestOwnedRoom,
+    eligible,
+    active,
+    pendingReserves,
+    roomCallback,
+};

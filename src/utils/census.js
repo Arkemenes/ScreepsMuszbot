@@ -1,0 +1,70 @@
+// Single pass over Game.creeps per tick. Every role/intel counter should read
+// from here instead of running its own _.filter(Game.creeps, ...).
+
+let builtTick = -1;
+let byRoomRole = {};
+
+function build() {
+    builtTick = Game.time;
+    byRoomRole = {};
+
+    for (const name in Game.creeps) {
+        const creep = Game.creeps[name];
+        const roomName = creep.room.name;
+        const role = creep.memory.role;
+        if (!role) continue;
+
+        const slot = byRoomRole[roomName] || (byRoomRole[roomName] = {});
+        (slot[role] || (slot[role] = [])).push(creep);
+    }
+}
+
+function ensure() {
+    if (builtTick !== Game.time) build();
+}
+
+// All creeps of `role` whose current room is `roomName`.
+function creepsByRole(roomName, role) {
+    ensure();
+    const slot = byRoomRole[roomName];
+    return (slot && slot[role]) || [];
+}
+
+// Every creep (any role) whose current room is `roomName` - flattens the
+// per-role buckets instead of a fresh room.find/Game.creeps scan.
+function allInRoom(roomName) {
+    ensure();
+    const slot = byRoomRole[roomName];
+    if (!slot) return [];
+    let list = [];
+    for (const role in slot) list = list.concat(slot[role]);
+    return list;
+}
+
+// Count of `role` in `roomName`, ignoring creeps about to die (ttl <= minTtl).
+function count(roomName, role, minTtl = 5) {
+    return _.filter(
+        creepsByRole(roomName, role),
+        (c) => c.ticksToLive === undefined || c.ticksToLive > minTtl
+    ).length;
+}
+
+// Every creep of `role` across the whole empire (roaming creeps move between
+// rooms, so a per-room count under-reports them).
+function all(role) {
+    ensure();
+    let list = [];
+    for (const rn in byRoomRole) {
+        if (byRoomRole[rn][role]) list = list.concat(byRoomRole[rn][role]);
+    }
+    return list;
+}
+
+function total(role, minTtl = 5) {
+    return _.filter(
+        all(role),
+        (c) => c.ticksToLive === undefined || c.ticksToLive > minTtl
+    ).length;
+}
+
+module.exports = { creepsByRole, allInRoom, count, all, total, build };
