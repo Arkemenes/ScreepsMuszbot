@@ -1,5 +1,6 @@
 let modConcat = require("module-concat");
 let { gitDescribeSync } = require("git-describe");
+let path = require("path");
 
 module.exports = function (grunt) {
     grunt.registerTask(
@@ -26,11 +27,32 @@ module.exports = function (grunt) {
                         grunt.fail.fatal(
                             "Error while processing json: " + err.message
                         );
+                        return done();
+                    }
+
+                    grunt.log.write(
+                        stats.files.length + " were combined into " + outputFile
+                    );
+
+                    if (process.env.LOCALAPPDATA) {
+                        let localScriptsDir = path.join(
+                            process.env.LOCALAPPDATA,
+                            "Screeps",
+                            "scripts",
+                            "screeps.com",
+                            "ScreepsMuszbot"
+                        );
+                        grunt.file.mkdir(localScriptsDir);
+                        grunt.file.copy(
+                            path.join(outputDir, outputFile),
+                            path.join(localScriptsDir, outputFile)
+                        );
+                        grunt.log.writeln(
+                            "\nCopied " + outputFile + " to " + localScriptsDir
+                        );
                     } else {
-                        grunt.log.write(
-                            stats.files.length +
-                                " were combined into " +
-                                outputFile
+                        grunt.log.writeln(
+                            "\nLOCALAPPDATA not set; skipped copy to local Screeps client scripts folder"
                         );
                     }
 
