@@ -22,6 +22,8 @@ const constants = {
     FIND_HOSTILE_CREEPS: 103, FIND_MY_CREEPS: 102, FIND_HOSTILE_STRUCTURES: 109,
     FIND_CREEPS: 101, FIND_RUINS: 123, FIND_TOMBSTONES: 118,
     FIND_EXIT_TOP: 1, FIND_EXIT_RIGHT: 3, FIND_EXIT_BOTTOM: 5, FIND_EXIT_LEFT: 7,
+    TOP: 1, TOP_RIGHT: 2, RIGHT: 3, BOTTOM_RIGHT: 4,
+    BOTTOM: 5, BOTTOM_LEFT: 6, LEFT: 7, TOP_LEFT: 8,
     LOOK_CREEPS: "creep", LOOK_SOURCES: "source", LOOK_MINERALS: "mineral",
     LOOK_TERRAIN: "terrain", LOOK_STRUCTURES: "structure",
     LOOK_CONSTRUCTION_SITES: "constructionSite",
@@ -3225,6 +3227,35 @@ assert(Game.creeps.Sc1._signed === "hello world" && !(Memory.signQueue || {}).W1
 delete Game.creeps.Sc1;
 delete Game.creeps.Sc2;
 
+// --- sign queue: travel stall guard (ROADMAP 0060 follow-up) - moveToRoom()
+// now refuses a blacklisted destination outright with zero feedback of its
+// own, and signRoom's travel branch never checked its return value anyway,
+// so without this a signRoom() destination that turns out unreachable would
+// camp here silently for the life of the blacklist -----------------------
+{
+    Memory.settings = Memory.settings || {};
+    Memory.settings.routing = { travelStallLimit: 2 };
+    global.signRoom("W7N7", "stuck");
+    const stuckSignScout = Object.assign(new Creep(), {
+        id: "scSign", name: "ScSign", room, memory: { role: "scout", home: "W1N1" },
+        ticksToLive: 500, pos: new RoomPosition(20, 20, "W1N1"),
+        signController: () => OK, suicide: () => OK, moveTo: () => OK,
+    });
+    Game.creeps.ScSign = stuckSignScout;
+    Game.time++; // census.all() caches by Game.time - bust the stale scan
+    // that still shows the just-deleted Sc1/Sc2 (>1 "scout" would suicide
+    // this new one via the census-based single-scout enforcement)
+    scout.run(stuckSignScout); // tick 1: starts the travel clock
+    assert((Memory.signQueue || {}).W7N7 === "stuck",
+        "the sign request is still pending right after starting to travel");
+    Game.time += 5; // past the (test-lowered) travel stall limit
+    scout.run(stuckSignScout);
+    assert(!(Memory.signQueue || {}).W7N7,
+        "the scout gives up on a signRoom() destination it never reaches and drops the request");
+    delete Memory.settings.routing;
+    delete Game.creeps.ScSign;
+}
+
 // --- scout: free-roam exploration actually crosses room borders, and an
 // unreachable target room gets blacklisted instead of retried forever
 // (ROADMAP 0009) -----------------------------------------------------
@@ -3393,6 +3424,22 @@ delete Game.creeps.Sc2;
     assert(remotesMod.active(room).length === 0,
         "a remote with hostiles seen is not active, even if reserved");
     Memory.rooms.W1N2.enemies = 0;
+
+    // --- isForeignOwned() (ROADMAP 0064 live follow-up): ownership alone,
+    // no hostile creep required - a claimer walked straight into an
+    // enemy-owned room with zero creeps visible there, and got blocked
+    // anyway by walls/ramparts the owner had already built ---------------
+    assert(remotesMod.isForeignOwned("W2N1") === true,
+        "a room owned by someone else's empire is foreign-owned, even with zero enemies seen");
+    Memory.rooms.WAllyOwned = { owner: "fR1dj" }; // one of utils/hostiles.js's default allies
+    assert(remotesMod.isForeignOwned("WAllyOwned") === false,
+        "an ally's own room is exempt - their interior obstacles are the reactive backtrack's " +
+            "job (ROADMAP 0061), not something routing refuses to enter outright");
+    delete Memory.rooms.WAllyOwned;
+    assert(remotesMod.isForeignOwned("W1N2") === false,
+        "an unowned room is never foreign-owned");
+    assert(remotesMod.isForeignOwned("WNeverVisited") === false,
+        "no intel at all for a room is never foreign-owned - never a guess");
 
     Memory.rooms.W1N1.defenseActive = true;
     assert(remotesMod.active(room).length === 0,
@@ -3587,64 +3634,64 @@ delete Game.creeps.Sc2;
             "a player in neither hostilePlayers nor targetEnemies is still not hostile outside our room");
 
         // --- isWeakEnemyRoom() -------------------------------------------
-        Memory.rooms.W5N5 = {
+        Memory.rooms.E77N77 = {
             lastVisit: Game.time, owner: "Rival1", enemies: 0,
             numberOfTowers: 0, controllerLevel: 2,
         };
-        assert(raidingMod.isWeakEnemyRoom("W5N5"),
+        assert(raidingMod.isWeakEnemyRoom("E77N77"),
             "a low-RCL, tower-less, hostile-free targetEnemy room is weak");
 
-        Memory.rooms.W5N5.owner = "SomeoneElse";
-        assert(!raidingMod.isWeakEnemyRoom("W5N5"),
+        Memory.rooms.E77N77.owner = "SomeoneElse";
+        assert(!raidingMod.isWeakEnemyRoom("E77N77"),
             "not in targetEnemies - never weak, never a valid raid target");
-        Memory.rooms.W5N5.owner = "Rival1";
+        Memory.rooms.E77N77.owner = "Rival1";
 
-        Memory.rooms.W5N5.numberOfTowers = 1;
-        assert(!raidingMod.isWeakEnemyRoom("W5N5"), "a tower seen makes it not weak");
-        Memory.rooms.W5N5.numberOfTowers = 0;
+        Memory.rooms.E77N77.numberOfTowers = 1;
+        assert(!raidingMod.isWeakEnemyRoom("E77N77"), "a tower seen makes it not weak");
+        Memory.rooms.E77N77.numberOfTowers = 0;
 
-        Memory.rooms.W5N5.enemies = 1;
-        assert(!raidingMod.isWeakEnemyRoom("W5N5"), "a hostile creep seen makes it not weak");
-        Memory.rooms.W5N5.enemies = 0;
+        Memory.rooms.E77N77.enemies = 1;
+        assert(!raidingMod.isWeakEnemyRoom("E77N77"), "a hostile creep seen makes it not weak");
+        Memory.rooms.E77N77.enemies = 0;
 
-        Memory.rooms.W5N5.controllerLevel = 6;
-        assert(!raidingMod.isWeakEnemyRoom("W5N5"),
+        Memory.rooms.E77N77.controllerLevel = 6;
+        assert(!raidingMod.isWeakEnemyRoom("E77N77"),
             "RCL above the configured ceiling (raiding.maxTargetRcl) makes it not weak");
-        Memory.rooms.W5N5.controllerLevel = 2;
+        Memory.rooms.E77N77.controllerLevel = 2;
 
         // --- raidRoom(): O4 (targetEnemy, gated by isWeakEnemyRoom) ------
         delete Memory.raidTarget;
-        Memory.rooms.W5N5.owner = "SomeoneElse";
-        global.raidRoom("W5N5");
+        Memory.rooms.E77N77.owner = "SomeoneElse";
+        global.raidRoom("E77N77");
         assert(!Memory.raidTarget, "raidRoom() refuses a player room that's not in targetEnemies");
 
-        Memory.rooms.W5N5.owner = "Rival1";
-        Memory.rooms.W5N5.numberOfTowers = 1;
-        global.raidRoom("W5N5");
+        Memory.rooms.E77N77.owner = "Rival1";
+        Memory.rooms.E77N77.numberOfTowers = 1;
+        global.raidRoom("E77N77");
         assert(!Memory.raidTarget, "raidRoom() refuses a targetEnemy room that isn't weak enough");
-        Memory.rooms.W5N5.numberOfTowers = 0;
+        Memory.rooms.E77N77.numberOfTowers = 0;
 
-        global.raidRoom("W5N5");
+        global.raidRoom("E77N77");
         assert(
-            Memory.raidTarget && Memory.raidTarget.room === "W5N5" &&
+            Memory.raidTarget && Memory.raidTarget.room === "E77N77" &&
                 Memory.raidTarget.from === "W1N1",
             "raidRoom() dispatches against a weak targetEnemy room"
         );
         delete Memory.raidTarget;
 
         // --- raidRoom(): O2 (PvE, no targetEnemies involved) -------------
-        Memory.rooms.W5N5 = { lastVisit: Game.time }; // no owner - neutral
-        global.raidRoom("W5N5");
+        Memory.rooms.E77N77 = { lastVisit: Game.time }; // no owner - neutral
+        global.raidRoom("E77N77");
         assert(!Memory.raidTarget, "raidRoom() refuses a neutral room with nothing hostile to raid");
 
-        Memory.rooms.W5N5.hasInvaderCore = true;
-        global.raidRoom("W5N5");
+        Memory.rooms.E77N77.hasInvaderCore = true;
+        global.raidRoom("E77N77");
         assert(
-            Memory.raidTarget && Memory.raidTarget.room === "W5N5",
+            Memory.raidTarget && Memory.raidTarget.room === "E77N77",
             "raidRoom() dispatches against a neutral room with an invader core - no targetEnemies check"
         );
         delete Memory.raidTarget;
-        delete Memory.rooms.W5N5;
+        delete Memory.rooms.E77N77;
 
         // --- isEnemyRemote() / raidRemote() (ROADMAP 0036, O3) -----------
         Memory.rooms.W6N6 = {
@@ -4079,27 +4126,27 @@ delete Game.creeps.Sc2;
         const raidingMod2 = require(path.join(PROJECT, "src/rooms/raiding"));
         delete Memory.pendingSquad;
         delete Memory.squads;
-        Memory.rooms.W5N5 = { lastVisit: Game.time, hasInvaderCore: true }; // O2, PvE-eligible
+        Memory.rooms.E77N77 = { lastVisit: Game.time, hasInvaderCore: true }; // O2, PvE-eligible
 
-        global.raidSquad("W5N5", "combat");
+        global.raidSquad("E77N77", "combat");
         assert(
-            Memory.pendingSquad && Memory.pendingSquad.room === "W5N5" &&
+            Memory.pendingSquad && Memory.pendingSquad.room === "E77N77" &&
                 Memory.pendingSquad.from === "W1N1" &&
                 JSON.stringify(Memory.pendingSquad.need) ===
                     JSON.stringify(["defenderStriker", "defenderStriker", "defenderMedic", "defenderMedic"]),
             "raidSquad('combat') queues the right 4-member recipe"
         );
 
-        global.raidSquad("W5N5", "combat");
+        global.raidSquad("E77N77", "combat");
         assert(Memory.pendingSquad.spawned.length === 0,
             "a second raidSquad() call while one is already assembling is refused");
 
         const data = raidingMod2.spawnPendingSquad(room);
-        assert(data && data.memory.role === "defenderStriker" && data.memory.pendingSquad === "W5N5",
+        assert(data && data.memory.role === "defenderStriker" && data.memory.pendingSquad === "E77N77",
             "spawnPendingSquad() returns the next needed role's spawn data, tagged pendingSquad");
 
         const pend1 = Object.assign(Object.create(Creep.prototype), {
-            id: "pend1", memory: { role: "defenderStriker", pendingSquad: "W5N5" },
+            id: "pend1", memory: { role: "defenderStriker", pendingSquad: "E77N77" },
         });
         REG.pend1 = pend1;
         squadMod2.registerPending(pend1);
@@ -4109,7 +4156,7 @@ delete Game.creeps.Sc2;
             "not promoted yet - only 1 of the 4 needed members exists so far");
 
         ["pend2", "pend3", "pend4"].forEach((id) => {
-            const c = Object.assign(Object.create(Creep.prototype), { id, memory: { pendingSquad: "W5N5" } });
+            const c = Object.assign(Object.create(Creep.prototype), { id, memory: { pendingSquad: "E77N77" } });
             REG[id] = c;
             squadMod2.registerPending(c);
         });
@@ -4120,7 +4167,7 @@ delete Game.creeps.Sc2;
         assert(
             promoted.members.length === 4 && promoted.leader === "pend1" &&
                 promoted.state === "advancing" && promoted.shape === "block" &&
-                promoted.room === "W5N5" && promoted.from === "W1N1",
+                promoted.room === "E77N77" && promoted.from === "W1N1",
             "the promoted squad has all 4 members, the first-registered as leader, advancing in block formation"
         );
         assert(
@@ -4130,7 +4177,7 @@ delete Game.creeps.Sc2;
 
         for (const id of ["pend1", "pend2", "pend3", "pend4"]) delete REG[id];
         delete Memory.squads;
-        delete Memory.rooms.W5N5;
+        delete Memory.rooms.E77N77;
     }
 
     // --- Fase 4: squadDismantler ----------------------------------------
@@ -4349,6 +4396,72 @@ delete Game.creeps.Sc2;
         "routeCostCallback always allows the destination");
     assert(routingCb("E15N15", routingCm) === false,
         "routeCostCallback blocks a room that's neither current, destination, nor on the route");
+    assert(routingCb.allowedRooms instanceof Set && routingCb.allowedRooms.has("W1N1"),
+        "routeCostCallback exposes its own allowed-room Set for diagnostics (ROADMAP 0064 " +
+            "live follow-up) - moveToRoom() logs its size on every ERR_NO_PATH tick to confirm " +
+            "or rule out the engine's own maxRooms ceiling directly instead of guessing");
+
+    // ROADMAP 0061 (researched from screeps-cartographer's findRoute
+    // enhancement): routeCostCallback also allows each route hop's known
+    // neighbors (Memory.rooms[x].exits) as slack, so the PathFinder isn't
+    // locked to the exact minimal room sequence with zero room to route
+    // around an internal obstacle findRoute (room-graph only, no terrain
+    // knowledge) could never see coming
+    Memory.rooms["E10N10"] = { exits: { 1: "E10N9", 3: "E11N10Hostile" } };
+    const slackCb = routing.routeCostCallback(
+        [{ exit: 1, room: "E10N10" }, { exit: 1, room: "E10N20" }],
+        "W1N1", "E10N20"
+    );
+    assert(slackCb("E10N9", routingCm) === routingCm,
+        "routeCostCallback's allowed set includes a hop's known neighbor as slack, on top of the exact route");
+    delete Memory.rooms["E10N10"];
+
+    Memory.rooms["E10N10x"] = { exits: { 3: "E11N10Hostile" } };
+    Memory.rooms["E11N10Hostile"] = { enemies: 1 };
+    const slackHostileCb = routing.routeCostCallback(
+        [{ exit: 1, room: "E10N10x" }, { exit: 1, room: "E10N20" }],
+        "W1N1", "E10N20",
+        { blockHostiles: true }
+    );
+    assert(slackHostileCb("E11N10Hostile", routingCm) === false,
+        "routeCostCallback's slack never adds a known-hostile neighbor under blockHostiles");
+    delete Memory.rooms["E10N10x"];
+    delete Memory.rooms["E11N10Hostile"];
+
+    const noIntelCb = routing.routeCostCallback(
+        [{ exit: 1, room: "E10N10NoIntel" }, { exit: 1, room: "E10N20" }],
+        "W1N1", "E10N20"
+    );
+    assert(noIntelCb("E10N9", routingCm) === false,
+        "routeCostCallback adds no slack for a hop with no exits intel yet");
+
+    // ROADMAP 0064 live follow-up: avoidCostCallback - the blocklist twin
+    // of routeCostCallback's allowlist, used once a route has actually
+    // been validated against real terrain (see moveToRoom() and its own
+    // comment for the full "raw PathFinder.search from the console"
+    // diagnosis) - only opts.avoid/hostile-under-blockHostiles excludes a
+    // room; every other room, whether or not it's anywhere near the
+    // validated sequence, stays fully open
+    {
+        const avoidCb = routing.avoidCostCallback(["WAvoidedRoom"], {});
+        assert(avoidCb("WAvoidedRoom", routingCm) === false,
+            "avoidCostCallback excludes a room in the avoid list outright");
+        assert(avoidCb("WTotallyUnrelatedRoom", routingCm) === routingCm,
+            "avoidCostCallback leaves every other room open, unlike routeCostCallback's " +
+                "curated allowlist - this is the whole point: computeRealRoute() itself used " +
+                "this same freedom to validate the route, so execution gets it too");
+
+        Memory.rooms.WAvoidHostile = { enemies: 1 };
+        const avoidHostileCb = routing.avoidCostCallback([], { blockHostiles: true });
+        assert(avoidHostileCb("WAvoidHostile", routingCm) === false,
+            "avoidCostCallback also excludes a known-hostile room under blockHostiles");
+        assert(routing.avoidCostCallback([], {})("WAvoidHostile", routingCm) === routingCm,
+            "but not without blockHostiles - matches routeCostCallback's own gating");
+        delete Memory.rooms.WAvoidHostile;
+
+        assert(routing.avoidCostCallback()("WNoOptsAtAll", routingCm) === routingCm,
+            "avoidCostCallback is safe to call with no avoid list/opts at all - never throws");
+    }
 
     // findRoute(): highway rooms are cheapened, hostile rooms are
     // penalized - or, with blockHostiles, excluded outright (Infinity)
@@ -4372,18 +4485,34 @@ delete Game.creeps.Sc2;
         "a hostile, non-highway room stacks hostilePenalty and nonHighwayPenalty");
     assert(routeCostFor("Whostile", { blockHostiles: true }) === Infinity,
         "blockHostiles gives a known-hostile room an infinite (fully excluded) route cost");
+    delete Memory.rooms.Whostile;
 
-    // a blacklisted room (routing.js's own trap-avoidance, ROADMAP 0058 -
-    // separate from roles/scout.js's scoutBlacklistUntil) is excluded
-    // outright, even without blockHostiles and even for a room that isn't
-    // otherwise flagged hostile at all
-    Memory.rooms.Wblacklisted = { routeBlacklistUntil: Game.time + 100 };
-    assert(routeCostFor("Wblacklisted", {}) === Infinity,
-        "a blacklisted room is excluded outright, regardless of blockHostiles or hostile status");
-    Memory.rooms.Wblacklisted.routeBlacklistUntil = Game.time - 1;
-    assert(routeCostFor("Wblacklisted", {}) === 1 + 2,
-        "the blacklist expires - an old routeBlacklistUntil no longer excludes the room");
-    delete Memory.rooms.Wblacklisted;
+    // ROADMAP 0064: a room owned by someone else's empire is just as
+    // dangerous as a known-hostile creep, even with zero enemies ever seen
+    // there - a claimer walked straight into one and got physically
+    // blocked by walls/ramparts the owner had already built
+    Memory.rooms.WEnemyOwned = { owner: "SomeEnemyPlayer" };
+    assert(routeCostFor("WEnemyOwned", {}) === 1 + 10 + 2,
+        "a foreign-owned room stacks the same penalty as a known-hostile room");
+    assert(routeCostFor("WEnemyOwned", { blockHostiles: true }) === Infinity,
+        "blockHostiles excludes a foreign-owned room outright too, not just a hostile-creep one");
+    delete Memory.rooms.WEnemyOwned;
+
+    // an ally's own room is exempt - their interior obstacles (if any) are
+    // the reactive backtrack's job (ROADMAP 0061), not something routing
+    // refuses to even approach
+    Memory.rooms.WAllyRoom = { owner: "fR1dj" };
+    assert(routeCostFor("WAllyRoom", { blockHostiles: true }) === 1 + 2,
+        "an ally's room is never excluded by blockHostiles just because they own it");
+    delete Memory.rooms.WAllyRoom;
+
+    // ROADMAP 0062: a room in opts.avoid (per-creep, set by moveToRoom() -
+    // see below) is excluded outright, even without blockHostiles and even
+    // for a room that isn't otherwise flagged hostile at all
+    assert(routeCostFor("Wavoided", { avoid: ["Wavoided"] }) === Infinity,
+        "a room in opts.avoid is excluded outright, regardless of blockHostiles or hostile status");
+    assert(routeCostFor("Wavoided", {}) === 1 + 2,
+        "a room NOT in opts.avoid is never excluded just because some other room's avoid list exists");
 
     // findRoute() itself returns null when the engine can't find a route
     // under those constraints (a stand-in for "the only path crosses a
@@ -4398,13 +4527,15 @@ delete Game.creeps.Sc2;
     }
     delete Memory.rooms.Whostile;
 
-    // moveToRoom() never runs a PathFinder.search of its own - a reachability
-    // pre-check (PathFinder.search once per room entered) was tried here and
-    // reverted: a scout cycling through several dead-end candidate rooms in
-    // a row (blacklisting its way out of a trap, picking a new target each
-    // tick) meant several fresh, uncached searches in a hurry, and that was
-    // enough in practice to drain the CPU bucket. moveToRoom is back to just
-    // findRoute() + the native moveTo, full stop.
+    // moveToRoom() never runs a PathFinder.search of its own BY DEFAULT - a
+    // reachability pre-check (PathFinder.search once per room entered) was
+    // tried here and reverted: a scout cycling through several dead-end
+    // candidate rooms in a row (blacklisting its way out of a trap, picking
+    // a new target each tick) meant several fresh, uncached searches in a
+    // hurry, and that was enough in practice to drain the CPU bucket.
+    // Without opts.realRoute, moveToRoom is just findRoute() + the native
+    // moveTo, full stop (opts.realRoute's very different, ONE-TIME-per-trip
+    // cost profile is covered separately below - ROADMAP 0064).
     {
         const realSearch = PathFinder.search;
         let searches = 0;
@@ -4419,86 +4550,633 @@ delete Game.creeps.Sc2;
         const result = routing.moveToRoom(plainCreep, "W9N9", { range: 20 });
         assert(result === "moved" && searches === 0,
             "moveToRoom() never calls PathFinder.search - it's just findRoute() + the native moveTo");
+        PathFinder.search = realSearch;
+    }
+
+    // ROADMAP 0064 live follow-up: confirmed live, a leg that computeRealRoute
+    // (200000-op budget) had JUST validated as genuinely walkable still came
+    // back ERR_NO_PATH from the very next native moveTo() call and triggered
+    // another (wrong) retreat anyway - that call was never given a matching
+    // maxOps/maxRooms, so it silently fell back to the engine's own defaults
+    // (2000 ops, 16 rooms), nowhere near enough once routeCostCallback's
+    // "allowed" room set spans a long validated route with real natural-wall
+    // clutter in it. Scoped to opts.realRoute callers only (same-day follow-
+    // up, at the user's request) - scout/pioneer/raider/squad have never
+    // shown this symptom, and a wider budget isn't free CPU-wise for a
+    // search that fails cheap and fast for a genuine reason (constitution
+    // §1) - so they keep the engine's own defaults exactly as before.
+    {
+        const realSearch = PathFinder.search;
+        PathFinder.search = () => ({ path: [], incomplete: true });
+
+        let seenMaxOps = null, seenMaxRooms = null;
+        const opsCreep = {
+            pos: new RoomPosition(25, 25, "W1N1"),
+            room: { name: "W1N1" },
+            memory: {},
+            moveTo: (pos, o) => { seenMaxOps = o.maxOps; seenMaxRooms = o.maxRooms; return OK; },
+        };
+        routing.moveToRoom(opsCreep, "W9N9", { range: 20, realRoute: true });
+        assert(seenMaxOps === 20000,
+            "with opts.realRoute, moveToRoom()'s main routed moveTo() call gets " +
+                "routing.moveMaxOps, not the engine's silent 2000 default");
+        assert(seenMaxRooms === 64,
+            "with opts.realRoute, moveToRoom()'s main routed moveTo() call gets " +
+                "routing.moveMaxRooms, not the engine's silent 16 default - a validated route " +
+                "longer than 16 hops (confirmed live) could never complete otherwise, no matter " +
+                "how many ops it's allowed");
+
+        let seenMaxOps2 = "untouched", seenMaxRooms2 = "untouched";
+        const noOpsCreep = {
+            pos: new RoomPosition(25, 25, "W1N1"),
+            room: { name: "W1N1" },
+            memory: {},
+            moveTo: (pos, o) => { seenMaxOps2 = o.maxOps; seenMaxRooms2 = o.maxRooms; return OK; },
+        };
+        routing.moveToRoom(noOpsCreep, "W9N9", { range: 20 }); // no realRoute - scout/pioneer/raider/squad shape
+        assert(seenMaxOps2 === undefined && seenMaxRooms2 === undefined,
+            "without opts.realRoute, maxOps/maxRooms are never set at all - every other caller " +
+                "(scout, pioneer, raider, squad) keeps the engine's own defaults, unchanged from " +
+                "before today");
 
         PathFinder.search = realSearch;
     }
 
-    // --- ROADMAP 0058: moveToRoom() catches a creep bouncing between the
-    // same two rooms on the way to ONE fixed destination (reserver's
-    // reserve/claim/contest, scout's sign/layout tasks - anything routed
-    // through this one function) and blacklists the trap room so the very
-    // next findRoute() call is forced to compute a genuinely different way
-    // around, instead of "wait and hope" or repeating the same dead end -----
+    // --- ROADMAP 0064: computeRealRoute() - a one-time PathFinder.search
+    // validation that a room sequence is actually WALKABLE (real terrain,
+    // available even without vision), not just adjacent on the map graph
+    // the way Game.map.findRoute sees things. Diagnosed live the same day
+    // as the 0063 fix: even with the dead end correctly excluded and the
+    // creep correctly backed out to a real, wide-open room, the native
+    // PathFinder (restricted to routeCostCallback's narrow "allowed" room
+    // set) STILL came back ERR_NO_PATH from there, because the real detour
+    // needed a room outside that restricted set entirely - no amount of
+    // reacting after the fact can fix a search that was never allowed to
+    // look in the right place. This validates the whole trip upfront
+    // instead, for the one mission that can't afford to burn travel ticks
+    // discovering that reactively (the claimer - CREEP_CLAIM_LIFE_TIME is a
+    // fixed 600-tick budget, ROADMAP 0033) --------------------------------
     {
-        const realFindRoute = Game.map.findRoute;
-        let lastCallback = null;
+        const realSearch = PathFinder.search;
+
+        // excludes opts.avoid, (blockHostiles) known-hostile rooms, AND
+        // (ROADMAP 0064 live follow-up) foreign-owned rooms outright - never
+        // just penalized - but an ally's own room is exempt from the
+        // ownership check (their interior obstacles are the reactive
+        // backtrack's job, ROADMAP 0061, not something this precheck
+        // refuses to even approach)
+        {
+            let seenAvoid = null, seenHostile = null, seenEnemyOwned = null, seenAllyOwned = null;
+            Memory.rooms.WRealHostile = { enemies: 1 };
+            Memory.rooms.WRealEnemyOwned = { owner: "SomeEnemyPlayer" };
+            Memory.rooms.WRealAllyOwned = { owner: "fR1dj" };
+            PathFinder.search = (origin, goal, o) => {
+                seenAvoid = o.roomCallback("WRealAvoided");
+                seenHostile = o.roomCallback("WRealHostile");
+                seenEnemyOwned = o.roomCallback("WRealEnemyOwned");
+                seenAllyOwned = o.roomCallback("WRealAllyOwned");
+                return { path: [], incomplete: true };
+            };
+            routing.computeRealRoute(new RoomPosition(25, 25, "W1N1"), "W9N9", {
+                avoid: ["WRealAvoided"],
+                blockHostiles: true,
+            });
+            assert(seenAvoid === false,
+                "computeRealRoute excludes every room in opts.avoid");
+            assert(seenHostile === false,
+                "computeRealRoute excludes known-hostile rooms under blockHostiles");
+            assert(seenEnemyOwned === false,
+                "computeRealRoute excludes a foreign-owned room outright, even with zero " +
+                    "hostile creeps ever seen there");
+            assert(seenAllyOwned !== false,
+                "computeRealRoute never excludes an ally's own room just because they own it");
+            delete Memory.rooms.WRealHostile;
+            delete Memory.rooms.WRealEnemyOwned;
+            delete Memory.rooms.WRealAllyOwned;
+            PathFinder.search = realSearch;
+        }
+
+        // collapses the tile path into a deduped room-name sequence,
+        // excluding the room the search started FROM (same convention
+        // Game.map.findRoute's own hop list already uses)
+        {
+            PathFinder.search = () => ({
+                path: [
+                    new RoomPosition(49, 25, "W1N1"),
+                    new RoomPosition(0, 25, "W2N1"),
+                    new RoomPosition(25, 25, "W2N1"),
+                    new RoomPosition(49, 25, "W2N1"),
+                    new RoomPosition(0, 25, "W3N1"),
+                    new RoomPosition(25, 25, "W3N1"),
+                ],
+                incomplete: false,
+            });
+            const rooms = routing.computeRealRoute(new RoomPosition(25, 25, "W1N1"), "W9N9", {});
+            assert(rooms.length === 2 && rooms[0] === "W2N1" && rooms[1] === "W3N1",
+                "computeRealRoute collapses the tile path into a deduped room sequence, " +
+                    "excluding the origin room");
+            PathFinder.search = realSearch;
+        }
+
+        // an incomplete (or empty) search is never trusted - null, not a
+        // partial/misleading sequence
+        {
+            PathFinder.search = () => ({ path: [new RoomPosition(30, 25, "W1N1")], incomplete: true });
+            assert(routing.computeRealRoute(new RoomPosition(25, 25, "W1N1"), "W9N9", {}) === null,
+                "computeRealRoute returns null when the search comes back incomplete");
+            PathFinder.search = () => ({ path: [], incomplete: false });
+            assert(routing.computeRealRoute(new RoomPosition(25, 25, "W1N1"), "W9N9", {}) === null,
+                "computeRealRoute returns null when the search comes back empty");
+            PathFinder.search = realSearch;
+        }
+    }
+
+    // --- ROADMAP 0064: moveToRoom(..., {realRoute: true}) - the cached
+    // route takes over from Game.map.findRoute entirely while it lasts, and
+    // falls back cleanly the moment ROADMAP 0063's reactive backtrack ever
+    // discards it -------------------------------------------------------
+    {
+        const realSearch = PathFinder.search;
+        const realFindRouteRR = Game.map.findRoute;
+
+        // computed once per trip, not once per tick
+        {
+            let searches = 0;
+            PathFinder.search = () => {
+                searches++;
+                return {
+                    path: [
+                        new RoomPosition(49, 25, "W1N1"),
+                        new RoomPosition(25, 25, "W2N1"),
+                    ],
+                    incomplete: false,
+                };
+            };
+            const rrCreep = {
+                pos: new RoomPosition(25, 25, "W1N1"),
+                room: { name: "W1N1" },
+                memory: {},
+                moveTo: () => OK,
+            };
+            routing.moveToRoom(rrCreep, "W9N9", { range: 20, realRoute: true });
+            routing.moveToRoom(rrCreep, "W9N9", { range: 20, realRoute: true });
+            routing.moveToRoom(rrCreep, "W9N9", { range: 20, realRoute: true });
+            assert(searches === 1,
+                "moveToRoom computes the real route once per trip, not once per tick");
+            assert(rrCreep.memory._realRoute && rrCreep.memory._realRoute[0] === "W2N1",
+                "the validated sequence is cached on the creep");
+            PathFinder.search = realSearch;
+        }
+
+        // the cached route drives execution instead of calling
+        // Game.map.findRoute at all - and (ROADMAP 0064 live follow-up: a
+        // raw PathFinder.search from the console, no code of ours in the
+        // way, found a complete path straight through rooms this module
+        // had been blaming as dead ends - EXACT rooms a validated
+        // _realRoute already said were fine) a validated real route now
+        // gets avoidCostCallback's BLOCKLIST freedom (only opts.avoid/
+        // hostile excluded, everything else open - matching the freedom
+        // computeRealRoute() itself used to validate the route in the
+        // first place), never routeCostCallback's narrower allowlist
+        {
+            let findRouteCalls = 0;
+            Game.map.findRoute = () => { findRouteCalls++; return [{ exit: 1, room: "W9N9" }]; };
+            PathFinder.search = () => ({
+                path: [
+                    new RoomPosition(49, 25, "WCache1"),
+                    new RoomPosition(25, 25, "WCache2"),
+                    new RoomPosition(25, 25, "WCache3"),
+                ],
+                incomplete: false,
+            });
+            let seenCostCallback = null;
+            const cacheCreep = {
+                pos: new RoomPosition(25, 25, "WCache1"),
+                room: { name: "WCache1" },
+                memory: {},
+                moveTo: (pos, o) => { seenCostCallback = o.costCallback; return OK; },
+            };
+            routing.moveToRoom(cacheCreep, "W9N9", { range: 20, realRoute: true });
+            assert(findRouteCalls === 0,
+                "Game.map.findRoute is never called while a validated real route is active");
+            const cm = new PathFinder.CostMatrix();
+            assert(seenCostCallback("WCache2", cm) === cm,
+                "the cached real route's next hop is allowed");
+            assert(seenCostCallback("WSomeUnrelatedRoom", cm) === cm,
+                "a room OUTSIDE the cached real route sequence is still allowed - only " +
+                    "opts.avoid/hostile actually excludes anything now, not membership in the " +
+                    "curated route+slack list (that allowlist is what caused the live bug)");
+            PathFinder.search = realSearch;
+            Game.map.findRoute = realFindRouteRR;
+        }
+
+        // and opts.avoid still genuinely excludes a room even while a
+        // validated real route is driving execution
+        {
+            PathFinder.search = () => ({
+                path: [
+                    new RoomPosition(49, 25, "WBlockStart"),
+                    new RoomPosition(25, 25, "WBlockNext"),
+                ],
+                incomplete: false,
+            });
+            let seenCostCallback2 = null;
+            const blockCreep = {
+                pos: new RoomPosition(25, 25, "WBlockStart"),
+                room: { name: "WBlockStart" },
+                memory: { _routeAvoid: ["WBlockedRoom"] },
+                moveTo: (pos, o) => { seenCostCallback2 = o.costCallback; return OK; },
+            };
+            routing.moveToRoom(blockCreep, "W9N9", { range: 20, realRoute: true });
+            const cm2 = new PathFinder.CostMatrix();
+            assert(seenCostCallback2("WBlockedRoom", cm2) === false,
+                "opts.avoid still excludes a room outright under the blocklist-based callback");
+            assert(seenCostCallback2("WAnyOtherRoom", cm2) === cm2,
+                "any room NOT in avoid stays open");
+            PathFinder.search = realSearch;
+        }
+
+        // ROADMAP 0064 live follow-up: once _routeAvoid grows enough that
+        // computeRealRoute can't find ANY complete route avoiding it, the
+        // OLD behavior fell through to plain findRoute() - a long, entirely
+        // unvalidated room sequence that fails on its own and gets the
+        // CURRENT room (never actually attempted!) wrongly blacklisted for
+        // it. Confirmed live with a full trace: this compounded across
+        // several legs (each wrongful blacklist forcing an even longer next
+        // detour) until the claimer's CREEP_CLAIM_LIFE_TIME ran out mid-
+        // cascade - and the "blamed" rooms were independently confirmed
+        // clean (checked their terrain directly) once the cascade was
+        // diagnosed. Fix: retreat one more hop instead, WITHOUT touching
+        // _routeAvoid, and never call findRoute()/moveTo() with an
+        // unvalidated route at all in this case ---------------------------
+        {
+            let findRouteCalls2 = 0;
+            Game.map.findRoute = () => { findRouteCalls2++; return [{ exit: 1, room: "E1N45" }]; };
+            PathFinder.search = () => ({ path: [], incomplete: true }); // computeRealRoute finds nothing
+            const noRouteCreep = {
+                pos: new RoomPosition(25, 25, "W3N51"),
+                room: { name: "W3N51" },
+                memory: {
+                    _routeStackDest: "E1N45",
+                    _routeStack: ["W2N51", "W3N51"], // already retreated once - a real earlier room exists
+                    _routeAvoid: ["E1N46", "E0N46"], // some genuinely-confirmed dead ends already
+                    _routeRetreatTo: "W3N51", // retreat just completed, arriving here
+                },
+                moveTo: (pos) => pos.roomName,
+            };
+            const result = routing.moveToRoom(noRouteCreep, "E1N45", { range: 20, realRoute: true });
+            assert(findRouteCalls2 === 0,
+                "when computeRealRoute finds nothing, findRoute() is never called at all - no " +
+                    "unvalidated room sequence is ever attempted");
+            assert(noRouteCreep.memory._routeAvoid.length === 2,
+                "the current room (W3N51) is NOT added to _routeAvoid - it was never actually " +
+                    "attempted, so blaming it would be wrong");
+            assert(noRouteCreep.memory._routeRetreatTo === "W2N51",
+                "instead, it retreats one more hop to the room before it in its own real history");
+            assert(result === "W2N51",
+                "and the creep is walked there the same tick, never toward the real destination " +
+                    "using an unvalidated route");
+            Game.map.findRoute = realFindRouteRR;
+            PathFinder.search = realSearch;
+        }
+
+        // a confirmed dead end (ROADMAP 0063's retreat) discards the cached
+        // real route immediately - see the NEXT block below for what
+        // happens once the retreat actually completes (ROADMAP 0064 same-day
+        // follow-up: it used to stay on findRoute()-only routing for the
+        // rest of the trip, which reintroduced the exact narrow-search-space
+        // bug 0064 exists to fix, just one room further out - confirmed live)
+        {
+            PathFinder.search = () => ({
+                path: [
+                    new RoomPosition(49, 25, "WGoodStart"),
+                    new RoomPosition(25, 25, "WDeadEndReal"),
+                ],
+                incomplete: false,
+            });
+            const rrDeadEndCreep = {
+                pos: new RoomPosition(25, 25, "WGoodStart"),
+                room: { name: "WGoodStart" },
+                memory: {},
+                moveTo: () => OK,
+            };
+            routing.moveToRoom(rrDeadEndCreep, "E9N9", { range: 20, realRoute: true });
+            assert(rrDeadEndCreep.memory._realRoute,
+                "sanity: the real route was cached for this trip");
+            PathFinder.search = realSearch;
+
+            // now the cached hop actually fails - routing.noPathTicks (2)
+            // consecutive ERR_NO_PATH ticks confirms the dead end
+            rrDeadEndCreep.room = { name: "WDeadEndReal" };
+            rrDeadEndCreep.pos = new RoomPosition(25, 25, "WDeadEndReal");
+            rrDeadEndCreep.moveTo = () => ERR_NO_PATH;
+            routing.moveToRoom(rrDeadEndCreep, "E9N9", { range: 20, realRoute: true });
+            routing.moveToRoom(rrDeadEndCreep, "E9N9", { range: 20, realRoute: true });
+            assert(!rrDeadEndCreep.memory._realRoute && !rrDeadEndCreep.memory._realRouteDest,
+                "a confirmed dead end discards the cached real route");
+            assert(rrDeadEndCreep.memory._routeAvoid.indexOf("WDeadEndReal") !== -1,
+                "and falls back to the ordinary reactive backtrack (ROADMAP 0063) from here on");
+
+            // ROADMAP 0064 same-day follow-up: once the retreat actually
+            // completes (creep physically back in WGoodStart), that's a new
+            // leg of the trip starting from known-good ground - re-validate
+            // it against real terrain again, not just findRoute() for good
+            let secondSearchAvoid = null;
+            let searchCalls = 0;
+            PathFinder.search = (origin, goal, o) => {
+                searchCalls++;
+                secondSearchAvoid = o.roomCallback("WDeadEndReal");
+                return {
+                    path: [
+                        new RoomPosition(49, 25, "WGoodStart"),
+                        new RoomPosition(25, 25, "WViaDetour"),
+                    ],
+                    incomplete: false,
+                };
+            };
+            rrDeadEndCreep.room = { name: "WGoodStart" }; // arrived back
+            rrDeadEndCreep.pos = new RoomPosition(25, 25, "WGoodStart");
+            rrDeadEndCreep.moveTo = () => OK;
+            routing.moveToRoom(rrDeadEndCreep, "E9N9", { range: 20, realRoute: true });
+            assert(searchCalls === 1,
+                "a completed retreat re-validates the rest of the trip against real terrain " +
+                    "again, not just once at the start");
+            assert(secondSearchAvoid === false,
+                "the re-validation's own search correctly excludes the dead end just found");
+            assert(rrDeadEndCreep.memory._realRoute && rrDeadEndCreep.memory._realRoute[0] === "WViaDetour",
+                "and caches the newly-validated (detoured) sequence for the rest of the trip");
+            PathFinder.search = realSearch;
+        }
+
+        // a failed precompute (incomplete search) never blocks the trip -
+        // moveToRoom falls back to the normal findRoute()-based flow the
+        // same tick, exactly as if opts.realRoute had never been passed
+        {
+            PathFinder.search = () => ({ path: [], incomplete: true });
+            const failedCreep = {
+                pos: new RoomPosition(25, 25, "WPrecomputeFails"),
+                room: { name: "WPrecomputeFails" },
+                memory: {},
+                moveTo: () => "moved",
+            };
+            const result = routing.moveToRoom(failedCreep, "W9N9", { range: 20, realRoute: true });
+            assert(result === "moved" && !failedCreep.memory._realRoute,
+                "a failed real-route precompute falls back to normal findRoute-based routing " +
+                    "instead of blocking the trip");
+            PathFinder.search = realSearch;
+        }
+    }
+
+    // --- ROADMAP 0064 live follow-up: native moveTo()'s own reusePath
+    // cache isn't invalidated just because a fresh costCallback closure is
+    // handed to it this tick - confirmed live, a claimer kept re-entering a
+    // room already sitting in its own _routeAvoid, because the cached path
+    // being walked predated that room joining the list and nothing forced
+    // a recompute in between. retreatFrom() already clears the cache the
+    // moment IT fires, but that's not the only way _routeAvoid can grow
+    // relative to whatever path is currently cached - this closes the gap
+    // generally, off _routeAvoid's own length rather than any one call site --
+    {
+        const staleCreep = {
+            pos: new RoomPosition(25, 25, "WStale"),
+            room: { name: "WStale" },
+            memory: { _routeAvoid: ["WSomeDeadEnd"], _move: { path: "stale" } },
+            moveTo: () => OK,
+        };
+        routing.moveToRoom(staleCreep, "E9N9", { range: 20 });
+        assert(staleCreep.memory._move === undefined,
+            "a creep whose _routeAvoid already has an entry the cached path never accounted " +
+                "for gets that stale path dropped, forcing a fresh (avoid-respecting) one");
+
+        // avoid unchanged on the next call - no reason to keep dropping a
+        // perfectly good fresh path every single tick
+        staleCreep.memory._move = { path: "fresh" };
+        routing.moveToRoom(staleCreep, "E9N9", { range: 20 });
+        assert(staleCreep.memory._move !== undefined,
+            "with _routeAvoid unchanged since the last recompute, a freshly-cached path is " +
+                "left alone - this isn't an unconditional clear-every-tick");
+
+        // _routeAvoid grows again (a real retreat) - the cache must drop
+        // again too, not just the one time at creep creation
+        staleCreep.memory._routeAvoid.push("WAnotherDeadEnd");
+        routing.moveToRoom(staleCreep, "E9N9", { range: 20 });
+        assert(staleCreep.memory._move === undefined,
+            "_routeAvoid growing again drops the cached path again, however it grew");
+    }
+
+    // --- ROADMAP 0063: the actual fix for the bug five specs straight
+    // (0057/0058/0060/0061/0062) failed to close. Diagnosis: Game.map.
+    // findRoute()'s routeCallback is only ever invoked for rooms the search
+    // CONSIDERS ENTERING, never for the room it starts FROM - so every one
+    // of those five fixes' core move ("push the room the creep is stuck in
+    // onto its own avoid list, then recompute findRoute() from that SAME
+    // room") changed nothing at all: the next findRoute() call still starts
+    // there, and routeCallback never once reads that room's own avoid
+    // entry. A creep standing in a dead-end room can never make findRoute()
+    // route around that room by avoiding it - only a DIFFERENT room's
+    // search can. Fix: retreat one hop back to the room this creep was
+    // last known to be in (creep.memory._routeStack, its own real path -
+    // never a guess from room-name geometry or linear distance, the two
+    // ways ROADMAP 0061's fixes broke), exclude the dead end from THERE,
+    // and let findRoute() pick a genuinely different room (B>D>E instead
+    // of B>C>E, once C proves to be the dead end).
+    //
+    // Live follow-up the same day: gating this on mere POSITION freeze was
+    // itself a false-positive trap - a creep froze in a perfectly good room
+    // (confirmed by checking its terrain directly: wide open on both
+    // sides) because of ordinary highway traffic on the very next tile,
+    // and got backed out of a room it never needed to leave. The trigger
+    // now reads native moveTo()'s own ERR_NO_PATH instead - the engine's
+    // authoritative "no route exists", not a guess from "hasn't moved" ---
+    {
+        const backtrackCreep = {
+            pos: new RoomPosition(25, 25, "W1N50"),
+            room: { name: "W1N50" },
+            memory: {},
+            moveTo: () => OK, // a real path exists - nothing wrong with W1N50 itself
+        };
+        routing.moveToRoom(backtrackCreep, "E1N45", { range: 20 }); // still in W1N50
+        assert(
+            backtrackCreep.memory._routeStack.length === 1 &&
+                backtrackCreep.memory._routeStack[0] === "W1N50",
+            "moveToRoom() records each room actually visited toward the current destination"
+        );
+
+        // crosses into W1N49 - the dead end - where native moveTo() itself
+        // reports no path at all toward the real destination
+        backtrackCreep.room = { name: "W1N49" };
+        backtrackCreep.pos = new RoomPosition(25, 25, "W1N49");
+        backtrackCreep.moveTo = (pos) => (pos.roomName === "E1N45" ? ERR_NO_PATH : OK);
+        routing.moveToRoom(backtrackCreep, "E1N45", { range: 20 }); // 1st ERR_NO_PATH tick
+        assert(!backtrackCreep.memory._routeAvoid,
+            "a single ERR_NO_PATH tick isn't a confirmed dead end yet (routing.noPathTicks " +
+                "default is 2 - traffic or a one-tick fluke doesn't blacklist a room)");
+
+        let retreatTarget = null;
+        backtrackCreep.moveTo = (pos) => {
+            if (pos.roomName === "E1N45") return ERR_NO_PATH; // still no path to the real target
+            retreatTarget = pos.roomName; // any other target is the retreat move itself
+            return OK;
+        };
+        routing.moveToRoom(backtrackCreep, "E1N45", { range: 20 }); // 2nd ERR_NO_PATH tick - confirmed
+        assert(
+            backtrackCreep.memory._routeAvoid.length === 1 &&
+                backtrackCreep.memory._routeAvoid[0] === "W1N49",
+            "the dead end itself goes into _routeAvoid - never the room behind it, which the " +
+                "creep still needs to retreat through"
+        );
+        assert(backtrackCreep.memory._routeRetreatTo === "W1N50",
+            "the room right before the dead end in this creep's OWN visited history becomes " +
+                "the retreat target - read from its real path, never guessed from geometry");
+        assert(retreatTarget === "W1N50",
+            "moveToRoom() immediately walks the creep back there the SAME tick it gives up on " +
+                "the dead end, instead of repeating the identical doomed crossing again");
+
+        // still crossing back - moveToRoom keeps steering it toward W1N50,
+        // ignoring the real destination for now, until it actually arrives
+        retreatTarget = null;
+        routing.moveToRoom(backtrackCreep, "E1N45", { range: 20 });
+        assert(retreatTarget === "W1N50",
+            "still short of the retreat target - moveToRoom keeps walking it there");
+
+        // arrives back in W1N50 - routing now resumes FROM here, with the
+        // dead end correctly excluded: it's a real candidate this search
+        // actually evaluates, unlike when it was the search's own origin
+        backtrackCreep.room = { name: "W1N50" };
+        backtrackCreep.pos = new RoomPosition(25, 25, "W1N50");
+        backtrackCreep.moveTo = () => OK; // back on known-good ground
+        const realFindRoute1 = Game.map.findRoute;
+        let sawFrom = null, sawAvoidCost = null;
         Game.map.findRoute = (from, to, o) => {
-            lastCallback = o.routeCallback;
+            sawFrom = from;
+            sawAvoidCost = o.routeCallback("W1N49");
             return [{ exit: 1, room: to }];
         };
+        routing.moveToRoom(backtrackCreep, "E1N45", { range: 20 });
+        assert(sawFrom === "W1N50",
+            "the route is recomputed FROM the room behind the dead end, not from inside it");
+        assert(sawAvoidCost === Infinity,
+            "and from there, the dead end is genuinely excluded - routeCallback actually gets " +
+                "asked about it this time");
+        assert(!backtrackCreep.memory._routeRetreatTo,
+            "retreat clears once the creep is actually back");
+        Game.map.findRoute = realFindRoute1;
+    }
 
-        const flapCreep = {
-            pos: new RoomPosition(25, 25, "W1N1"),
-            room: { name: "W1N1" },
+    // --- ROADMAP 0062's original finding, still true, now fixed properly
+    // (ROADMAP 0063): a creep that crosses a border back and forth every
+    // cycle never sits still for two ticks running, so the freeze-based
+    // isStuck() above can never see it - only a room-NAME trail can. Real
+    // geometry from the live incident: W1N49 (an ally's room, interior
+    // closed by their own rampart/wall) and W1N50 (the corridor in front of
+    // it). ROADMAP 0062's own reaction here was the unsound part, not the
+    // detection: it pushed BOTH trail rooms into the avoid list, "no
+    // guessing which one is really the trap" - except W1N50, the safe
+    // corridor the creep needed to retreat THROUGH, was never actually safe
+    // to avoid; blocking it could sever the creep's only way back. Once
+    // caught, this now feeds the exact same retreatFrom() as a frozen
+    // stall: only the room the pattern closes on (the one the creep keeps
+    // failing to get past) is excluded, and the creep is walked back to the
+    // room before it - never the reverse -----------------------------------
+    {
+        const bounceCreep = {
+            pos: new RoomPosition(25, 25, "W1N50"),
+            room: { name: "W1N50" },
             memory: {},
             moveTo: () => OK,
         };
-        routing.moveToRoom(flapCreep, "W9N9", { range: 20 }); // A
-        flapCreep.room = { name: "W1N2" };
-        routing.moveToRoom(flapCreep, "W9N9", { range: 20 }); // A, B
-        flapCreep.room = { name: "W1N1" };
-        routing.moveToRoom(flapCreep, "W9N9", { range: 20 }); // A, B, A
-        assert(!routing.isBlacklisted("W1N2"),
-            "A, B, A alone doesn't blacklist anything yet - could just be normal backtracking");
+        routing.moveToRoom(bounceCreep, "E1N45", { range: 20 }); // W1N50
+        bounceCreep.room = { name: "W1N49" };
+        bounceCreep.pos = new RoomPosition(25, 40, "W1N49");
+        routing.moveToRoom(bounceCreep, "E1N45", { range: 20 }); // W1N50, W1N49
+        bounceCreep.room = { name: "W1N50" };
+        bounceCreep.pos = new RoomPosition(25, 25, "W1N50");
+        routing.moveToRoom(bounceCreep, "E1N45", { range: 20 }); // W1N50, W1N49, W1N50
+        assert(!bounceCreep.memory._routeAvoid,
+            "W1N50, W1N49, W1N50 alone isn't a confirmed bounce yet - could be normal backtracking");
 
-        flapCreep.room = { name: "W1N2" };
-        routing.moveToRoom(flapCreep, "W9N9", { range: 20 }); // A, B, A, B - flapping
-        assert(routing.isBlacklisted("W1N2"),
-            "A, B, A, B while heading to one fixed destination blacklists the trap room (W1N2)");
-        assert(flapCreep.memory._routeTrail.length === 0,
-            "the trail resets once the flap is caught, so it doesn't immediately re-trigger");
-        assert(lastCallback("W1N2") === Infinity,
-            "the same tick's findRoute() call already excludes the freshly blacklisted room");
-
-        delete Memory.rooms.W1N2.routeBlacklistUntil;
-        Game.map.findRoute = realFindRoute;
+        bounceCreep.room = { name: "W1N49" };
+        bounceCreep.pos = new RoomPosition(25, 41, "W1N49"); // different tile each visit - never frozen
+        let retreatTarget = null;
+        bounceCreep.moveTo = (pos) => { retreatTarget = pos.roomName; return OK; };
+        routing.moveToRoom(bounceCreep, "E1N45", { range: 20 }); // W1N50, W1N49, W1N50, W1N49 - bouncing
+        assert(
+            bounceCreep.memory._routeAvoid.length === 1 &&
+                bounceCreep.memory._routeAvoid[0] === "W1N49",
+            "bouncing excludes only the room the pattern closes on (the one the creep keeps " +
+                "failing to get past) - never the safe corridor behind it"
+        );
+        assert(bounceCreep.memory._routeTrail.length === 0,
+            "the trail resets once the bounce is caught, so it doesn't immediately re-trigger");
+        assert(retreatTarget === "W1N50",
+            "and the creep is walked straight back to that corridor room, the same tick");
     }
 
-    // --- ROADMAP 0060: a creep confirmed live sitting still on a room's edge
-    // coordinate gets shoved off it by the engine without a fresh move
-    // queued - which can happen before the next tick's script even reads its
-    // position, so isRouteFlapping()'s room-name trail above can miss it
-    // completely (no room-name change to ever catch). isStuckAtBorder()
-    // catches it by position instead; nudgeAwayFromBorder() steps the creep
-    // off the edge directly rather than leaving it to another moveTo() call
-    // that might just propose the same doomed step again ------------------
+    // --- ROADMAP 0060/0061: a creep confirmed live sitting still (with no
+    // fatigue) for several ticks running - originally checked only at a
+    // room's edge coordinate (the engine shoves an unmoving creep off an
+    // exit tile without a fresh move queued, which can happen before the
+    // next tick's script even reads its position, so isRouteFlapping()'s
+    // room-name trail above can miss it completely - no room-name change to
+    // ever catch), generalized (0061, researched from screeps-cartographer's
+    // creepIsStuck) to ANY tile - a creep frozen in the middle of a maze
+    // room never produces a room-name change either, and the old
+    // border-only check ignored that case outright. isStuck() catches both
+    // by position instead; isOnBorder() (split out of the old border check)
+    // tells callers which remedy applies; nudgeAwayFromBorder() steps a
+    // border-stuck creep off the edge directly rather than leaving it to
+    // another moveTo() call that might just propose the same doomed step
+    // again -----------------------------------------------------------
     {
-        const centerCreep = { pos: new RoomPosition(25, 25, "W1N1"), room: { name: "W1N1" }, memory: {} };
-        assert(routing.isStuckAtBorder(centerCreep, "_k") === false,
-            "the room center is never a border stall");
-
-        const edgeCreep = { pos: new RoomPosition(49, 10, "W1N1"), room: { name: "W1N1" }, memory: {} };
-        assert(routing.isStuckAtBorder(edgeCreep, "_k") === false,
-            "first tick on the border isn't a stall yet");
-        assert(routing.isStuckAtBorder(edgeCreep, "_k") === false,
+        const centerCreep = { pos: new RoomPosition(25, 25, "W1N1"), room: { name: "W1N1" }, memory: {}, fatigue: 0 };
+        assert(routing.isOnBorder(centerCreep) === false, "the room center is never a border tile");
+        assert(routing.isStuck(centerCreep, "_k") === false,
+            "first tick anywhere isn't a stall yet");
+        assert(routing.isStuck(centerCreep, "_k") === false,
             "second tick unmoved in the exact same spot still isn't a stall yet");
-        assert(routing.isStuckAtBorder(edgeCreep, "_k") === true,
-            "third tick unmoved on the border is a stall");
+        assert(routing.isStuck(centerCreep, "_k") === false,
+            "third tick unmoved in the exact same spot still isn't a stall yet");
+        assert(routing.isStuck(centerCreep, "_k") === true,
+            "fourth tick unmoved anywhere - not just the border - is a stall (ROADMAP 0061)");
+
+        const edgeCreep = { pos: new RoomPosition(49, 10, "W1N1"), room: { name: "W1N1" }, memory: {}, fatigue: 0 };
+        assert(routing.isOnBorder(edgeCreep) === true, "x/y 49 is a border tile");
+        routing.isStuck(edgeCreep, "_k");
+        routing.isStuck(edgeCreep, "_k");
+        routing.isStuck(edgeCreep, "_k");
+        assert(routing.isStuck(edgeCreep, "_k") === true,
+            "the same stall detection applies on a border tile too");
 
         edgeCreep.pos = new RoomPosition(48, 10, "W1N1");
-        assert(routing.isStuckAtBorder(edgeCreep, "_k") === false,
-            "moving off the border tile resets the stall count immediately");
+        assert(routing.isStuck(edgeCreep, "_k") === false,
+            "moving off the exact spot resets the stall count immediately");
+
+        // a tick with fatigue > 0 never counts toward the counter - ordinary
+        // terrain/body fatigue keeping a creep from moving isn't "stuck"
+        const fatiguedCreep = { pos: new RoomPosition(25, 25, "W1N1"), room: { name: "W1N1" }, memory: {}, fatigue: 2 };
+        routing.isStuck(fatiguedCreep, "_k");
+        routing.isStuck(fatiguedCreep, "_k");
+        routing.isStuck(fatiguedCreep, "_k");
+        assert(routing.isStuck(fatiguedCreep, "_k") === false,
+            "a tick with fatigue never counts toward the stuck counter, even at the same position");
+        fatiguedCreep.fatigue = 0;
+        routing.isStuck(fatiguedCreep, "_k");
+        routing.isStuck(fatiguedCreep, "_k");
+        routing.isStuck(fatiguedCreep, "_k");
+        assert(routing.isStuck(fatiguedCreep, "_k") === true,
+            "once fatigue clears, the same-position count resumes normally");
 
         // independent key prefixes never share state on the same creep - a
         // scout doing both a fixed-destination task (routing's own
         // tracking) and free exploration (its own tracking) needs both to
         // work independently without clobbering each other
-        const dualCreep = { pos: new RoomPosition(0, 5, "W1N1"), room: { name: "W1N1" }, memory: {} };
-        routing.isStuckAtBorder(dualCreep, "_routeBorder");
-        routing.isStuckAtBorder(dualCreep, "_routeBorder");
-        assert(routing.isStuckAtBorder(dualCreep, "_routeBorder") === true,
-            "the first key prefix reaches a stall after 3 ticks");
-        assert(routing.isStuckAtBorder(dualCreep, "_exploreBorder") === false,
+        const dualCreep = { pos: new RoomPosition(0, 5, "W1N1"), room: { name: "W1N1" }, memory: {}, fatigue: 0 };
+        routing.isStuck(dualCreep, "_routeStuck");
+        routing.isStuck(dualCreep, "_routeStuck");
+        routing.isStuck(dualCreep, "_routeStuck");
+        assert(routing.isStuck(dualCreep, "_routeStuck") === true,
+            "the first key prefix reaches a stall after 4 ticks");
+        assert(routing.isStuck(dualCreep, "_exploreStuck") === false,
             "a different key prefix on the same creep/tick starts its own count from zero");
 
         const nudgeCreep = {
@@ -4517,90 +5195,116 @@ delete Game.creeps.Sc2;
             "a creep nowhere near the edge has nothing to nudge away from, and move() is never called");
     }
 
-    // borderNeighborRoom(): which neighbor an edge actually leads to, read
-    // straight from Memory.rooms[x].exits (same shape roles/scout.js's own
-    // exploration reads) - all 4 edges, plus no-intel-yet falling back to
-    // null rather than guessing
+    // moveToRoom() itself: a creep stuck with no OTHER room in its visited
+    // history (this IS the trip's own origin) has nowhere to retreat to -
+    // only the current room goes into _routeAvoid, and the creep still
+    // gets a normal moveTo() call every tick (not a border tile here - the
+    // nudge fallback is covered separately below) since it always falls
+    // through to the regular findRoute()+moveTo() path now
     {
-        Memory.rooms.WBorderExits = {
-            exits: { 1: "WNorth", 3: "WEast", 5: "WSouth", 7: "WWest" },
-        };
-        const at = (x, y) => ({
-            pos: new RoomPosition(x, y, "WBorderExits"),
-            room: { name: "WBorderExits" },
-        });
-        assert(routing.borderNeighborRoom(at(25, 0)) === "WNorth",
-            "the top edge leads to the exits' FIND_EXIT_TOP room");
-        assert(routing.borderNeighborRoom(at(49, 25)) === "WEast",
-            "the right edge leads to the exits' FIND_EXIT_RIGHT room");
-        assert(routing.borderNeighborRoom(at(25, 49)) === "WSouth",
-            "the bottom edge leads to the exits' FIND_EXIT_BOTTOM room");
-        assert(routing.borderNeighborRoom(at(0, 25)) === "WWest",
-            "the left edge leads to the exits' FIND_EXIT_LEFT room");
-        assert(routing.borderNeighborRoom(at(25, 25)) === null,
-            "the room center isn't any edge, so there's no neighbor to name");
-        delete Memory.rooms.WBorderExits;
-
-        assert(routing.borderNeighborRoom({
-            pos: new RoomPosition(49, 25, "WNoIntelYet"),
-            room: { name: "WNoIntelYet" },
-        }) === null,
-            "no exits intel for the room yet - null, not a guess");
-    }
-
-    // moveToRoom() itself: a creep parked unmoving on the border for 3 ticks
-    // running gets blacklisted out of that room and nudged inward directly,
-    // instead of another moveTo() call that could just propose the same
-    // doomed step again
-    {
-        // no exits intel for this room - borderNeighborRoom() can't name the
-        // actual trap, so the fallback blacklists the room the creep is
-        // standing in (better than blacklisting nothing at all)
-        Memory.rooms.WBorderStall = {};
         let moveCalls = 0;
         const parkedCreep = {
-            pos: new RoomPosition(49, 25, "WBorderStall"),
-            room: { name: "WBorderStall" },
+            pos: new RoomPosition(25, 25, "WNoHistoryRoom"),
+            room: { name: "WNoHistoryRoom" },
             memory: {},
-            moveTo: () => { moveCalls++; return OK; },
-            move: () => { moveCalls++; return OK; },
+            moveTo: () => { moveCalls++; return ERR_NO_PATH; },
+            move: () => { throw new Error("not on a border - nudge fallback should never fire here"); },
         };
-        routing.moveToRoom(parkedCreep, "W9N9", { range: 20 }); // tick 1
-        routing.moveToRoom(parkedCreep, "W9N9", { range: 20 }); // tick 2
-        assert(!routing.isBlacklisted("WBorderStall"),
-            "sitting on the border for only 2 ticks isn't a stall yet");
+        routing.moveToRoom(parkedCreep, "W9N9", { range: 20 }); // 1st ERR_NO_PATH tick
+        assert(!parkedCreep.memory._routeAvoid,
+            "a single ERR_NO_PATH tick isn't a confirmed dead end yet");
 
-        moveCalls = 0;
-        routing.moveToRoom(parkedCreep, "W9N9", { range: 20 }); // tick 3 - stall
-        assert(routing.isBlacklisted("WBorderStall"),
-            "parked unmoving on the border for 3 ticks, with no exits intel, falls back to " +
-                "blacklisting the room it's stuck in");
-        assert(moveCalls === 1,
-            "a stuck-at-border creep gets one direct move() nudge that tick, not a second moveTo() call");
-        delete Memory.rooms.WBorderStall;
+        routing.moveToRoom(parkedCreep, "W9N9", { range: 20 }); // 2nd - confirmed
+        assert(
+            parkedCreep.memory._routeAvoid.length === 1 &&
+                parkedCreep.memory._routeAvoid[0] === "WNoHistoryRoom",
+            "with no earlier room in this trip's history to retreat to, only the room the " +
+                "creep is stuck in goes into _routeAvoid"
+        );
+        assert(moveCalls === 2,
+            "moveTo() is called every tick including the confirming one - no special " +
+                "early-return needed since there's nowhere to retreat to");
+    }
 
-        // WITH exits intel, the actual neighbor (the real trap) is
-        // blacklisted instead of the room the creep is still standing in -
-        // routeCostCallback always allows the creep's own current room no
-        // matter its blacklist status, so blacklisting THAT would leave the
-        // very next findRoute() call free to propose the same crossing again
-        Memory.rooms.WBorderStall2 = { exits: { 3: "WBorderTrap" } };
+    // the destination itself is already in _routeAvoid (a previous stall
+    // already proved this exact room can't be entered from here) - refuse
+    // outright, no move()/moveTo() call at all, instead of walking up to
+    // its border and trying the identical crossing every few ticks forever
+    {
         let moveCalls2 = 0;
-        const parkedCreep2 = {
-            pos: new RoomPosition(49, 25, "WBorderStall2"),
-            room: { name: "WBorderStall2" },
-            memory: {},
+        const refusedCreep = {
+            pos: new RoomPosition(25, 25, "E77N77"),
+            room: { name: "E77N77" },
+            memory: { _routeAvoid: ["E77N78"] },
             moveTo: () => { moveCalls2++; return OK; },
             move: () => { moveCalls2++; return OK; },
         };
-        routing.moveToRoom(parkedCreep2, "WBorderTrap", { range: 20 });
-        routing.moveToRoom(parkedCreep2, "WBorderTrap", { range: 20 });
-        routing.moveToRoom(parkedCreep2, "WBorderTrap", { range: 20 }); // stall
-        assert(routing.isBlacklisted("WBorderTrap") && !routing.isBlacklisted("WBorderStall2"),
-            "with exits intel available, the actual neighbor room is blacklisted, not the " +
-                "room the creep is still standing in");
-        delete Memory.rooms.WBorderStall2;
-        delete Memory.rooms.WBorderTrap;
+        const result = routing.moveToRoom(refusedCreep, "E77N78", { range: 20 });
+        assert(result === ERR_NO_PATH && moveCalls2 === 0,
+            "moveToRoom() refuses outright (no move()/moveTo() call at all) once the " +
+                "destination itself is already in _routeAvoid, instead of retrying the same " +
+                "crossing every few ticks forever");
+    }
+
+    // a creep in a genuine maze/pocket (native moveTo() itself reports no
+    // path, not just "hasn't moved") - adds the room it's actually stuck IN
+    // to _routeAvoid and drops the cached path (creep.memory._move) so the
+    // moveTo() call right after recomputes from scratch instead of walking
+    // the same dead-end path again
+    {
+        let moveCalls3 = 0;
+        const mazeCreep = {
+            pos: new RoomPosition(25, 25, "WMazeRoom"), // not a border tile
+            room: { name: "WMazeRoom" },
+            memory: { _move: { path: "stale" } },
+            moveTo: () => { moveCalls3++; return ERR_NO_PATH; },
+            move: () => { throw new Error("should never nudge - not on a border"); },
+        };
+        routing.moveToRoom(mazeCreep, "W9N9", { range: 20 }); // 1st ERR_NO_PATH tick
+        assert(!mazeCreep.memory._routeAvoid,
+            "a single ERR_NO_PATH tick doesn't touch _routeAvoid yet");
+
+        routing.moveToRoom(mazeCreep, "W9N9", { range: 20 }); // 2nd - confirmed dead end
+        assert(
+            mazeCreep.memory._routeAvoid.length === 1 &&
+                mazeCreep.memory._routeAvoid[0] === "WMazeRoom",
+            "a confirmed dead end (not a border tile) adds the current room to _routeAvoid " +
+                "and drops the cached path"
+        );
+        assert(mazeCreep.memory._move === undefined,
+            "the stale cached path is dropped once the dead end is confirmed");
+        assert(moveCalls3 === 2,
+            "moveTo() is called every tick including the confirming one - the cached path " +
+                "is dropped, not the movement intent itself");
+    }
+
+    // fallback safety net (ROADMAP 0060's original finding, kept under the
+    // simpler 0062 design): if moveTo() itself can't find ANY path at all
+    // (even after the avoid list update) and the creep is sitting exactly
+    // on a border, nudge it off directly - the engine won't let a creep
+    // rest on an exit tile without a fresh move queued that tick
+    {
+        let nudgeDir = null;
+        const noPathCreep = {
+            pos: new RoomPosition(0, 25, "WDeadEnd"),
+            room: { name: "WDeadEnd" },
+            memory: {},
+            moveTo: () => ERR_NO_PATH,
+            move: (d) => { nudgeDir = d; return OK; },
+        };
+        routing.moveToRoom(noPathCreep, "W9N9", { range: 20 });
+        assert(nudgeDir !== null,
+            "moveTo() returning ERR_NO_PATH while on a border falls back to a direct nudge " +
+                "off the exit tile");
+
+        const noPathCenterCreep = {
+            pos: new RoomPosition(25, 25, "WDeadEnd"),
+            room: { name: "WDeadEnd" },
+            memory: {},
+            moveTo: () => ERR_NO_PATH,
+            move: () => { throw new Error("should never nudge - not on a border"); },
+        };
+        routing.moveToRoom(noPathCenterCreep, "W9N9", { range: 20 });
     }
 }
 
@@ -4743,12 +5447,41 @@ delete Game.creeps.Sc2;
     assert(!Memory.layoutRequests[stalledRoomName],
         "the scout gives up on a layout preview that never finishes and drops the request");
     delete Memory.settings.routing;
-
     delete Game.creeps.Sc4;
+
+    // --- travel stall guard (ROADMAP 0060 follow-up): separate from the
+    // post-arrival wait guard just above - this one covers never even
+    // GETTING there (moveToRoom() now refuses a blacklisted destination
+    // outright, but planLayout's travel branch never checked its return
+    // value, so without this it would camp silently for the life of the
+    // blacklist instead of giving up and freeing the scout for other work)
+    Memory.settings.routing = { travelStallLimit: 2 };
+    const unreachableRoomName = "W7N6";
+    global.planLayout(unreachableRoomName);
+    const travelStallScout = Object.assign(new Creep(), {
+        id: "sc5b", name: "Sc5b", room, memory: { role: "scout", home: "W1N1" },
+        ticksToLive: 500, pos: new RoomPosition(20, 20, "W1N1"),
+        signController: () => OK, suicide: () => OK, moveTo: () => OK,
+    });
+    Game.creeps.Sc5b = travelStallScout;
+    Game.time++; // census.all() caches by Game.time - bust the stale scan
+    // that still shows the just-deleted Sc4 (>1 "scout" would suicide this
+    // new one via the census-based single-scout enforcement)
+    scoutMod.run(travelStallScout); // tick 1: starts the travel clock
+    assert(Memory.layoutRequests[unreachableRoomName],
+        "the layout request is still pending right after starting to travel");
+    Game.time += 5; // past the (test-lowered) travel stall limit
+    scoutMod.run(travelStallScout);
+    assert(!Memory.layoutRequests[unreachableRoomName],
+        "the scout gives up on a layout destination it never reaches and drops the request");
+    delete Memory.settings.routing;
+    delete Game.creeps.Sc5b;
+
     delete Game.rooms[previewRoomName];
     delete Game.rooms[stalledRoomName];
     delete Memory.rooms[previewRoomName];
     delete Memory.rooms[stalledRoomName];
+    delete Memory.rooms[unreachableRoomName];
     delete Memory.layoutRequests;
 }
 

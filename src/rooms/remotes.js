@@ -8,6 +8,7 @@
 // mining, not a parallel goal.
 
 const config = require("../utils/config");
+const { isAlly } = require("../utils/hostiles");
 // Tunables (defaults + Memory.settings override path) live in utils/config:
 // remotes.reserveHealthyTicks, remotes.maxDistance, remotes.maxPerRoom.
 
@@ -43,6 +44,23 @@ function isReservedByMe(roomName) {
 function hasHostiles(roomName) {
     const mem = Memory.rooms[roomName];
     return !!(mem && mem.enemies > 0);
+}
+
+// True when `roomName` is owned by someone else's empire - regardless of
+// whether a hostile CREEP has ever been seen there (ROADMAP 0064 live
+// follow-up: a claimer walked straight into an enemy-owned room because
+// hasHostiles() above only tracks creep presence, never ownership - the
+// room's own walls/ramparts, already built, blocked it just the same, with
+// zero creeps required to do that). An ally's room is deliberately exempt
+// here (utils/hostiles.isAlly) - that's the SAME judgment call routing
+// already makes for actual hostile creeps, and an ally's own interior
+// obstacles are a different, narrower problem (ROADMAP 0061's live
+// incident - see utils/routing.js's routeCostCallback for the terrain-slack
+// side of that one).
+function isForeignOwned(roomName) {
+    const mem = Memory.rooms[roomName];
+    const owner = mem && mem.owner;
+    return !!(owner && owner !== myUsername() && !isAlly(owner));
 }
 
 // Room-to-room hop count (not path length) - cheap and cached per tick, used
@@ -309,6 +327,7 @@ module.exports = {
     isMine,
     isReservedByMe,
     hasHostiles,
+    isForeignOwned,
     roomDistance,
     nearestOwnedRoom,
     eligible,

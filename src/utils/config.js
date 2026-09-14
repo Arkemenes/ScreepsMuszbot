@@ -200,6 +200,73 @@ const defaults = {
         // correctly waits at its own room's border instead of crossing, but
         // silently forever isn't acceptable (constitution stall-guard rule)
         claimStallTicks: 50,
+        // scout: ticks spent still travelling toward a signRoom()/
+        // planLayout() destination (never arrived yet) before giving up on
+        // that one-off request entirely - e.g. the destination turned out
+        // to be an unreachable adjacent room (utils/routing.js's moveToRoom
+        // now refuses it outright once blacklisted) and neither task checks
+        // moveToRoom's return value, so without this it would camp on the
+        // request forever with zero feedback. Same order of magnitude as
+        // layoutWaitLimit (that one guards the SEPARATE post-arrival
+        // waiting-for-plan phase, not getting there in the first place).
+        travelStallLimit: 500,
+        // ROADMAP 0061: consecutive ticks a travelling creep can hold the
+        // exact same position (any tile, not just a room border) before
+        // isStuck() calls it genuinely stuck rather than just fatigued/
+        // momentarily blocked by traffic. Same order of magnitude as the
+        // old border-only threshold (3) this replaces. Only used by
+        // roles/scout.js's own free-roam exploration now - moveToRoom()'s
+        // cross-room retreat trigger moved to noPathTicks below (ROADMAP
+        // 0063), which reads native moveTo()'s own ERR_NO_PATH instead of
+        // guessing "stuck" from a frozen position (traffic on the very
+        // next tile freezes a creep just as well as a sealed room does,
+        // but only the sealed room actually returns ERR_NO_PATH).
+        stuckTicks: 4,
+        // ROADMAP 0063: consecutive ticks moveToRoom()'s own moveTo() call
+        // returns ERR_NO_PATH (never merely "hasn't moved") before
+        // retreatFrom() backs the creep out to the previous room in its
+        // own visited history and excludes this one. Small on purpose -
+        // ERR_NO_PATH is the engine's own authoritative "no route exists
+        // under these constraints", not a guess, so it doesn't need the
+        // same margin as position-based stall detection.
+        noPathTicks: 2,
+        // ROADMAP 0064: computeRealRoute()'s PathFinder.search budget -
+        // runs once per trip (opt-in, opts.realRoute), so it can afford a
+        // much bigger ceiling than any per-tick search in this codebase.
+        // maxRooms 64 is the engine's own hard cap; maxOps scaled up from
+        // the 2000 default since a multi-room trip covers far more tiles
+        // than a same-room search ever would.
+        realRouteMaxRooms: 64,
+        realRouteMaxOps: 200000,
+        // ROADMAP 0064 live follow-up: the native creep.moveTo() calls
+        // moveToRoom() actually executes movement with never got this -
+        // they silently used the engine's own default (2000), regardless of
+        // how generous computeRealRoute()'s own budget was. Confirmed live:
+        // a leg re-validated fine (computeRealRoute found a real 8-hop
+        // detour, moveOpts already sensible) but the very next native
+        // moveTo() call, given that exact validated route, still came back
+        // ERR_NO_PATH twice and triggered another retreat anyway - the only
+        // thing that differs between the two searches is the ops ceiling.
+        // W1N50 (the room in that incident) has a fair amount of natural
+        // wall scattered through it (confirmed by looking at its terrain
+        // directly); routing around that from wherever the creep currently
+        // stands can cost more than 2000 ops even when the room-level route
+        // is already correct. Smaller than realRouteMaxOps on purpose -
+        // this runs on every tick a fresh path is actually needed (not just
+        // once per leg), so it stays a ceiling, not a routine expense.
+        // maxOps alone didn't fix the live symptom - routeCostCallback's
+        // "allowed" set (the route + each hop's known-exits neighbors as
+        // slack) can also exceed the engine's own default maxRooms (16)
+        // once a validated route runs 8+ hops; PathFinder caps total rooms
+        // EXPLORED at maxRooms regardless of ops left. Both scoped to
+        // opts.realRoute callers only (same-day follow-up, at the user's
+        // request - "isso aumenta consumo de CPU? vale pra todo path?"): a
+        // wider ceiling costs nothing for a search that already succeeds
+        // within the old one, but only opts.realRoute callers (today, just
+        // the claimer) have shown evidence of actually needing it -
+        // scout/pioneer/raider/squad keep the engine's own defaults.
+        moveMaxOps: 20000,
+        moveMaxRooms: 64,
     },
     observer: {
         // exploration priority score = staleness * (1 + enemies *

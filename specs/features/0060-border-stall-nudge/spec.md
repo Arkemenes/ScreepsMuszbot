@@ -65,6 +65,45 @@ blacklistada.
   (não `creep.room.name`; a exploração usa a sala-alvo como identidade,
   igual ao `isFlapping` já fazia) e limpa `targetRoom`/`_roomTrail` do mesmo
   jeito que o flap por nome de sala já fazia.
+- Correção no mesmo dia (usuário testou de novo ao vivo: o creep saiu da
+  borda, mas voltou pra sala antiga e o destino continuava sendo a sala que
+  não conseguia entrar, com rota nula, e depois de vários ticks decidia
+  tentar entrar de novo na mesma sala — um loop externo mais lento, mas
+  ainda um loop). Causa: `routeCostCallback` sempre permite `toRoomName` **não
+  importa o blacklist** (é preciso poder chegar no destino de verdade) — isso
+  é correto quando a armadilha é um hop **intermediário** (0058: outra rota
+  evita), mas quando a armadilha É o próprio destino direto e adjacente (o
+  caso que o 0058 deixou de propósito pras "soluções próprias" do scout/0009
+  e do claim/0057), blacklistar não muda nada, porque `moveToRoom` nunca para
+  de tentar entrar lá. Isso afeta qualquer destino **fixo** que nunca muda
+  sozinho: `reserver` em missão `"reserve"`/`"contest"` (só `"claim"` tinha o
+  pré-check de `remotes.hasHostiles` do 0057) e as tarefas `signRoom`/
+  `planLayout` do scout. Fix: `moveToRoom()` agora checa `isBlacklisted(toRoomName)`
+  logo na entrada, antes de qualquer outra coisa — se o próprio destino está
+  blacklistado, devolve `ERR_NO_PATH` na hora, sem chamar `move()` nem
+  `moveTo()`, sem sequer rodar `isRouteFlapping`/`isStuckAtBorder` de novo.
+  Generaliza o pré-check específico do 0057 (só cobria `"claim"` + hostil
+  conhecido) pra qualquer chamador + qualquer motivo de bloqueio detectado
+  por borda. Auto-recupera quando `routing.blacklistTicks` expira, igual
+  qualquer outra sala blacklistada.
+- Terceira correção no mesmo dia: o fix acima devolve `ERR_NO_PATH` — mas
+  usuário reportou um dump de `Memory.creeps[x]` mostrando um scout preso
+  numa tarefa `signRoom`/`planLayout` (sem `targetRoom`/`cameFrom`/
+  `_roomTrail` — campos só da exploração livre — mas com `_routeTrail`/
+  `_routeBorderTicks`/`_move` do `moveToRoom` compartilhado), que revelou:
+  nenhuma das duas tarefas do scout **lê o retorno de `moveToRoom` durante a
+  viagem**. Sem isso, um destino blacklistado (fix acima) travava a tarefa
+  em silêncio pelo resto do TTL do blacklist (`routing.blacklistTicks`,
+  5000 ticks) — sem log, sem desistir, sem liberar o scout pra outra coisa.
+  Fix: `src/utils/config.js`'s novo `routing.travelStallLimit` (500, mesma
+  ordem de grandeza do `layoutWaitLimit` já existente — que só cobre a fase
+  **depois** de chegar, esperando o plano terminar, não a viagem até
+  chegar); `roles/scout.js` ganha `signTravelSince`/`signTravelTarget` e
+  `layoutTravelSince`/`layoutTravelTarget` — contam ticks ainda viajando sem
+  ter chegado (resetam quando o alvo muda ou ao chegar) e, passado o limite,
+  desistem: `delete Memory.signQueue[x]`/`delete Memory.layoutRequests[x]` +
+  log explicando o motivo, liberando o scout pra pegar outra tarefa ou
+  voltar a explorar em vez de acampar num pedido morto.
 
 ## Out of scope
 
@@ -99,6 +138,18 @@ blacklistada.
    verdade, não a sala em que o creep ainda está parado —
    `test/smoke.js`: `"with exits intel available, the actual neighbor room
    is blacklisted, not the room the creep is still standing in"`.
+7. Com o destino já blacklistado, `moveToRoom()` devolve `ERR_NO_PATH` sem
+   chamar `move()` nem `moveTo()` nenhuma vez —
+   `test/smoke.js`: `"moveToRoom() refuses outright (no move()/moveTo() call
+   at all) once the destination itself is blacklisted, instead of retrying
+   the same crossing every few ticks forever"`.
+8. `signRoom()`/`planLayout()` desistem do pedido depois de
+   `routing.travelStallLimit` ticks ainda viajando sem ter chegado, e não
+   antes — `test/smoke.js`: `"the sign request is still pending right after
+   starting to travel"` / `"the scout gives up on a signRoom() destination
+   it never reaches and drops the request"`, e o par equivalente pro
+   `planLayout()` (`"the layout request is still pending..."` /
+   `"...gives up on a layout destination it never reaches..."`).
 
 ## Constitution check
 

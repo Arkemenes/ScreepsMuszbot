@@ -135,9 +135,32 @@ var scout = {
         const signRoom = pendingSignRoom();
         if (signRoom) {
             if (creep.room.name !== signRoom) {
+                // stall guard: give up on this one-off request if it never
+                // gets there (e.g. the destination turned out unreachable -
+                // moveToRoom now refuses it outright once blacklisted,
+                // ROADMAP 0060, but that return value isn't checked here;
+                // this catches it either way) instead of camping on it with
+                // zero feedback for the life of the blacklist
+                if (creep.memory.signTravelTarget !== signRoom) {
+                    creep.memory.signTravelTarget = signRoom;
+                    creep.memory.signTravelSince = Game.time;
+                }
+                const travelLimit = config.get("routing.travelStallLimit", 500);
+                if (Game.time - creep.memory.signTravelSince > travelLimit) {
+                    delete Memory.signQueue[signRoom];
+                    creep.memory.signTravelSince = undefined;
+                    creep.memory.signTravelTarget = undefined;
+                    console.log(
+                        `[sign] ${signRoom}: gave up trying to reach it - ` +
+                            `run signRoom("${signRoom}", text) again if still needed`
+                    );
+                    return;
+                }
                 routing.moveToRoom(creep, signRoom, { range: 20, reusePath: 30 });
                 return;
             }
+            creep.memory.signTravelSince = undefined;
+            creep.memory.signTravelTarget = undefined;
             const ctrl = creep.room.controller;
             if (!ctrl) {
                 delete Memory.signQueue[signRoom]; // nothing to sign here
@@ -163,12 +186,38 @@ var scout = {
             if (lmem && lmem.planned) {
                 delete Memory.layoutRequests[layoutRoom];
                 creep.memory.layoutWaitSince = undefined;
+                creep.memory.layoutTravelSince = undefined;
+                creep.memory.layoutTravelTarget = undefined;
                 console.log(`[layout] ${layoutRoom}: plan ready`);
             } else if (creep.room.name !== layoutRoom) {
                 creep.memory.layoutWaitSince = undefined;
+                // stall guard: give up on this one-off request if it never
+                // even gets there - separate from the post-arrival wait
+                // guard below (that one only starts once the scout has
+                // already reached layoutRoom); without this a destination
+                // that turns out unreachable (moveToRoom now refuses it
+                // outright once blacklisted, ROADMAP 0060) would camp here
+                // with zero feedback for the life of the blacklist.
+                if (creep.memory.layoutTravelTarget !== layoutRoom) {
+                    creep.memory.layoutTravelTarget = layoutRoom;
+                    creep.memory.layoutTravelSince = Game.time;
+                }
+                const travelLimit = config.get("routing.travelStallLimit", 500);
+                if (Game.time - creep.memory.layoutTravelSince > travelLimit) {
+                    delete Memory.layoutRequests[layoutRoom];
+                    creep.memory.layoutTravelSince = undefined;
+                    creep.memory.layoutTravelTarget = undefined;
+                    console.log(
+                        `[layout] ${layoutRoom}: gave up trying to reach it - ` +
+                            `run planLayout("${layoutRoom}") again if still needed`
+                    );
+                    return;
+                }
                 routing.moveToRoom(creep, layoutRoom, { range: 20, reusePath: 30 });
                 return;
             } else {
+                creep.memory.layoutTravelSince = undefined;
+                creep.memory.layoutTravelTarget = undefined;
                 // stall guard: give up if the plan never finishes (e.g. CPU
                 // bucket chronically below planner.minBucket) instead of
                 // camping here forever - planLayout() can be re-issued later
@@ -209,19 +258,22 @@ var scout = {
             return;
         }
 
-        // border-stall guard: the engine won't let a creep rest on an exit
-        // tile without a fresh move queued - it gets shoved back off, which
-        // can happen before the next tick's script even reads the position,
-        // so isFlapping()'s room-name trail above never sees a change at all
-        // (see routing.isStuckAtBorder's comment). Position bookkeeping
-        // catches it instead; own key prefix so this never collides with
+        // stall guard: the engine won't let a creep rest on an exit tile
+        // without a fresh move queued - it gets shoved back off, which can
+        // happen before the next tick's script even reads the position, so
+        // isFlapping()'s room-name trail above never sees a change at all
+        // (see routing.isStuck's comment). Position bookkeeping catches it
+        // instead - generalized (ROADMAP 0061) to also catch a creep stuck
+        // wandering/frozen somewhere in the MIDDLE of a room, never at the
+        // border, which isFlapping() can't see either (no room-name change
+        // to catch). Own key prefix so this never collides with
         // routing.moveToRoom()'s own use of the same mechanism for the
         // sign/layout tasks above.
-        if (routing.isStuckAtBorder(creep, "_exploreBorder")) {
+        if (routing.isStuck(creep, "_exploreStuck")) {
             if (creep.memory.targetRoom) blacklistRoom(creep.memory.targetRoom);
             creep.memory.targetRoom = undefined;
             creep.memory._roomTrail = [];
-            routing.nudgeAwayFromBorder(creep);
+            if (!routing.nudgeAwayFromBorder(creep)) delete creep.memory._move;
             return;
         }
 
