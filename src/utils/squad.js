@@ -284,10 +284,10 @@ function advance(creep, squadId) {
                 disband(squadId);
                 return;
             }
-            routing.moveToRoom(creep, squad.from, { range: 20, reusePath: 20 });
+            routing.moveToRoom(creep, squad.from, { range: 20, reusePath: 20, realRoute: true });
             return;
         }
-        routing.moveToRoom(creep, squad.target.room, { range: 20, reusePath: 20 });
+        routing.moveToRoom(creep, squad.target.room, { range: 20, reusePath: 20, realRoute: true });
         return;
     }
 

@@ -129,13 +129,13 @@ const pioneer = {
             if (creep.room.name === home) {
                 delete creep.memory.returning;
             } else {
-                routing.moveToRoom(creep, home, { range: 20, reusePath: 20 });
+                routing.moveToRoom(creep, home, { range: 20, reusePath: 20, realRoute: true });
                 return;
             }
         }
 
         if (creep.room.name !== targetRoomName) {
-            routing.moveToRoom(creep, targetRoomName, { range: 20, reusePath: 20 });
+            routing.moveToRoom(creep, targetRoomName, { range: 20, reusePath: 20, realRoute: true });
             return;
         }
 
@@ -177,7 +177,7 @@ const pioneer = {
                 return;
             }
             creep.memory.returning = true;
-            routing.moveToRoom(creep, home, { range: 20, reusePath: 20 });
+            routing.moveToRoom(creep, home, { range: 20, reusePath: 20, realRoute: true });
             return;
         }
 

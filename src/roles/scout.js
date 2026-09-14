@@ -156,7 +156,7 @@ var scout = {
                     );
                     return;
                 }
-                routing.moveToRoom(creep, signRoom, { range: 20, reusePath: 30 });
+                routing.moveToRoom(creep, signRoom, { range: 20, reusePath: 30, realRoute: true });
                 return;
             }
             creep.memory.signTravelSince = undefined;
@@ -213,7 +213,7 @@ var scout = {
                     );
                     return;
                 }
-                routing.moveToRoom(creep, layoutRoom, { range: 20, reusePath: 30 });
+                routing.moveToRoom(creep, layoutRoom, { range: 20, reusePath: 30, realRoute: true });
                 return;
             } else {
                 creep.memory.layoutTravelSince = undefined;
