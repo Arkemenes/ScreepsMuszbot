@@ -1,6 +1,6 @@
 # 0054 — Logistics manager: resource spending tiers
 
-- **Status:** spec
+- **Status:** done
 - **Owner:** usuário + Claude
 - **Created:** 2026-09-12
 
@@ -176,9 +176,14 @@ nesta ordem:
 5. Torre: abaixo de `tower.criticalRatio` (0.5, ou 0.8 sob
    `defenseActive`) continua sendo puxada do storage incondicionalmente
    (crítico, sem gate); entre `criticalRatio` e `satisfactoryRatio` (0.5–0.8,
-   ou 0.8–0.95 sob ataque) deixa de ser alvo do `pickDeliver`/
-   `essentialConsumer` (satisfatório, não mais prioritário nem gastando);
-   acima de `satisfactoryRatio` (banda ideal) só continua sendo topada
+   ou 0.8–0.95 sob ataque) deixa de ser alvo prioritário do `pickDeliver`/
+   `essentialConsumer` (satisfatório, não mais prioritário nem gastando) —
+   mas continua como último recurso do próprio `pickDeliver`: se nada mais
+   no cascade quiser a energia (spawn/ext cheios, sem storage para
+   completar/receber, sem lab/container de controller pendente), uma torre
+   nessa faixa morta ainda recebe a entrega em vez do hauler ficar parado
+   cheio ao lado dela (smoke test cobre esse fallback); acima de
+   `satisfactoryRatio` (banda ideal) só continua sendo topada
    (`towerDeliverable`) quando `resourceTiers.aboveReserve(room)` é `true` —
    hoje esse trecho é incondicional, smoke test cobre a mudança.
 6. `structures/link.js` — smoke test com 3 links stub (coletor + controller

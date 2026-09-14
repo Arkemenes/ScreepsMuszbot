@@ -34,10 +34,20 @@ function pickDeliver(creep) {
     ) {
         return creep.room.storage;
     }
-    return creep.pos.findClosestByPath(FIND_MY_STRUCTURES, {
+    const consumer = creep.pos.findClosestByPath(FIND_MY_STRUCTURES, {
         filter: (s) =>
             (s.structureType === STRUCTURE_SPAWN ||
                 s.structureType === STRUCTURE_EXTENSION) &&
+            s.store.getFreeCapacity(RESOURCE_ENERGY) > 0,
+    });
+    if (consumer) return consumer;
+
+    // ROADMAP 0059 - last resort, same principle as hauler.js's own final
+    // tower fallback: storage and spawn/extension are both full/absent, but
+    // a tower still has room - top it off instead of idling home full.
+    return creep.pos.findClosestByRange(FIND_MY_STRUCTURES, {
+        filter: (s) =>
+            s.structureType === STRUCTURE_TOWER &&
             s.store.getFreeCapacity(RESOURCE_ENERGY) > 0,
     });
 }

@@ -5,6 +5,7 @@ const roomCache = require("../utils/roomCache");
 const { takeCover } = require("../utils/combat");
 const { roomNeeds } = require("../rooms/needs");
 const reservations = require("../utils/reservations");
+const resourceTiers = require("../utils/resourceTiers");
 const names = require("../utils/names");
 
 var roleUpgrader = {
@@ -63,13 +64,32 @@ var roleUpgrader = {
                 return;
             }
 
-            let structure = creep.pos.findClosestByPath(FIND_STRUCTURES, {
-                filter: (s) =>
-                    (s.structureType == STRUCTURE_STORAGE ||
-                        s.structureType == STRUCTURE_CONTAINER) &&
-                    s.store[RESOURCE_ENERGY] >= 50 &&
-                    reservations.available(creep, s) >= 50,
-            });
+            // Storage/container is room-wide stock meant for spawn/ext first
+            // (reservations only discounts a pile another creep is ALSO
+            // claiming this exact tick - it never stops the upgrader from
+            // draining a container/storage no hauler happens to be pulling
+            // from at this exact moment, e.g. a source container the
+            // instant it fills back up after the room ran dry). Only touch
+            // it once the room can actually spare it (economyStable - spawn/
+            // ext already topped off) or the controller is genuinely close
+            // to downgrading (resourceTiers.controllerCritical) - otherwise
+            // skip straight to the fallbacks below (mine a nearby source
+            // directly, or wait), which don't compete with the room's own
+            // stockpile at all (real bug this fixes - the upgrader was
+            // draining a freshly-refilled source container before the
+            // hauler could route it to spawn/ext, even at RCL8 with the
+            // controller nowhere near its downgrade limit).
+            let structure =
+                reservations.economyStable(creep.room) ||
+                resourceTiers.controllerCritical(creep.room)
+                    ? creep.pos.findClosestByPath(FIND_STRUCTURES, {
+                          filter: (s) =>
+                              (s.structureType == STRUCTURE_STORAGE ||
+                                  s.structureType == STRUCTURE_CONTAINER) &&
+                              s.store[RESOURCE_ENERGY] >= 50 &&
+                              reservations.available(creep, s) >= 50,
+                      })
+                    : null;
 
             if (structure) {
                 reservations.claim(creep, structure.id);

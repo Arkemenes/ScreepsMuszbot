@@ -193,10 +193,15 @@ function hasDepositTarget(creep) {
     if (!container) return true;
     if (container.store.getFreeCapacity(RESOURCE_ENERGY) > 0) return true;
 
-    const linkStruct = creep.pos.findInRange(FIND_MY_STRUCTURES, 1, {
+    const collectorLinks = creep.pos.findInRange(FIND_MY_STRUCTURES, 1, {
         filter: (s) => s.structureType === STRUCTURE_LINK && s.isCollector(),
-    })[0];
-    if (linkStruct && linkStruct.store.getFreeCapacity(RESOURCE_ENERGY) > 0) {
+    });
+    if (
+        _.some(
+            collectorLinks,
+            (l) => l.store.getFreeCapacity(RESOURCE_ENERGY) > 0
+        )
+    ) {
         return true;
     }
 
@@ -224,14 +229,17 @@ function distribute(creep) {
         creep.pos.findInRange(FIND_STRUCTURES, 1),
         (s) => s.structureType === STRUCTURE_CONTAINER
     );
-    const linkStruct = creep.pos.findInRange(FIND_MY_STRUCTURES, 1, {
+    const collectorLinks = creep.pos.findInRange(FIND_MY_STRUCTURES, 1, {
         filter: (s) =>
             s.structureType === STRUCTURE_LINK && s.isCollector(),
-    })[0];
+    });
+    const roomiestLink = _.max(collectorLinks, (l) =>
+        l.store.getFreeCapacity(RESOURCE_ENERGY)
+    );
     const link =
-        linkStruct &&
-        linkStruct.store.getFreeCapacity(RESOURCE_ENERGY) > 0
-            ? linkStruct
+        roomiestLink !== -Infinity &&
+        roomiestLink.store.getFreeCapacity(RESOURCE_ENERGY) > 0
+            ? roomiestLink
             : null;
     const tower = creep.pos.findInRange(FIND_MY_STRUCTURES, 1, {
         filter: (s) => s.structureType === STRUCTURE_TOWER,
@@ -268,8 +276,10 @@ function distribute(creep) {
     const surplus =
         !!container &&
         container.store.getFreeCapacity(RESOURCE_ENERGY) === 0 &&
-        (!linkStruct ||
-            linkStruct.store.getFreeCapacity(RESOURCE_ENERGY) === 0);
+        !_.some(
+            collectorLinks,
+            (l) => l.store.getFreeCapacity(RESOURCE_ENERGY) > 0
+        );
     const mayFeedTower = consumersFull || surplus;
 
     if (tower && tower.store[RESOURCE_ENERGY] < cap * reserve) {

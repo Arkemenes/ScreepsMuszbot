@@ -111,12 +111,75 @@ O3) — este documento não reabre essas perguntas, só leva pra plan/tasks.
   `raider.js` pra `FIND_HOSTILE_STRUCTURES`.
 - **§3 (fail-soft):** `activateSafeMode()` pode devolver erro (cooldown,
   sem carga) — nunca lança, só loga e segue.
-- **§4 (testável offline):** tudo aqui é determinístico (hp ratio, contagem
-  de census, lista de Memory.rooms) — testa bem no smoke.
-- **§6 (config sobre hardcode):** `combat.safeModeSpawnHpRatio` via
-  `config.get`, mesmo padrão dos outros limiares de combate.
+- **§4 (testável offline):** tudo aqui é determinístico (composição de
+  corpo/boost dos hostis, hp de spawn/rampart, lista de Memory.rooms) —
+  testa bem no smoke. **Revisão:** `ticksToKill` não depende mais de
+  census.
+- **§6 (config sobre hardcode):** `combat.safeModeTicksToKillThreshold` via
+  `config.get`, mesmo padrão dos outros limiares de combate (**revisão:**
+  substitui `safeModeSpawnHpRatio`). O multiplicador de boost não é config
+  — é lido ao vivo do `BOOSTS` nativo do jogo (dado do motor, não um
+  tunable do bot).
 
 ## Open questions
 
 Nenhuma — D6/O3 já foram decididos na revisão de `0032`; este spec só
 formaliza a implementação represada.
+
+## Bug real (usuário reportou em produção, 2026-09-12)
+
+Uma sala RCL2 ativou safe mode porque um invader pequeno atacou a maioria
+dos creeps da sala (não todos) — o spawn nunca esteve perto de morrer.
+
+**Causa raiz:** o gate original disparava com `hp_ratio_spawn ≤ 0.5 OU zero
+defenders vivos`. `defender`/`defenderStriker` só são *wanted* em
+`rooms/needs.js` quando `hostiles > 0` — nascem **reativamente**, depois de
+spawnar e viajar até a sala. Isso faz `defendersAlive() === 0` ser
+trivialmente verdade nos primeiros ticks de **qualquer** incursão — um
+invader fraco cutucando um hauler incluído — não só quando a defesa foi de
+fato derrotada. Um segundo problema, menor: `attackReach`/`spawnUnderThreat`
+não sabiam de rampart própria sob o spawn — no motor do Screeps um rampart
+absorve todo o dano até zerar (o `hits` da estrutura embaixo nem começa a
+cair enquanto ele aguenta), então a perna "zero defenders" podia disparar
+mesmo com o spawn blindado.
+
+Pesquisa (docs oficiais do Screeps + padrões de bots open-source,
+2026-09-12): safe mode é "a defense tactic of last resort" — as cargas são
+extremamente escassas (ganhas por level-up do controller ou compráveis a
+1000 ghodium via `generateSafeMode`, RCL alto). Nenhuma fonte usa "zero
+defenders" como gatilho isolado; o padrão é reagir a dano real ou iminente
+numa estrutura crítica, não à mera ausência de defesa montada.
+
+**Redesenho (substitui a acceptance criteria #1 original):** a perna "hp
+ratio OU zero defenders" foi trocada por uma projeção única de
+**ticks-to-kill**: `effectiveHp(spawn) / incomingDps(hostis a alcance)`.
+`effectiveHp` é o `hits` do rampart próprio na mesma tile (se houver e >0),
+senão o `hits` do próprio spawn. `incomingDps` soma o dano/tick da
+composição de corpo dos hostis a alcance daquele spawn especificamente
+(`ATTACK_POWER`/`RANGED_ATTACK_POWER` por parte, multiplicador de boost lido
+ao vivo do `BOOSTS` nativo — nunca hardcoded, mesmo princípio de
+`REACTIONS`/`COMMODITIES` no 0051). `checkSafeMode()` ativa quando o pior
+`ticksToKill` entre os spawns próprios ≤
+`config.get("combat.safeModeTicksToKillThreshold", 20)`.
+
+Essa fórmula generaliza as duas metades do gate antigo sem os dois modos de
+falha: um hostil fraco tem dps baixo → `ticksToKill` gigante → nunca
+dispara (corrige o bug relatado — um invader de 1 `ATTACK` contra um spawn
+saudável de 5000hp projeta ~167 ticks); um burst letal (rush boostado) tem
+dps alto → dispara rápido mesmo com hp cheio; um cerco sustentado corrói o
+hp *atual* do spawn com o tempo, então `ticksToKill` cai sozinho conforme a
+luta vai mal de verdade — sem precisar de uma perna de hp-ratio separada
+(decisão do usuário: substituir totalmente, não manter em paralelo).
+`defendersAlive()`/census saem do gate inteiramente — não é mais um sinal
+consultado.
+
+`combat.safeModeSpawnHpRatio` foi removido de `utils/config.js`, substituído
+por `combat.safeModeTicksToKillThreshold` (default 20 — ver
+`plan.md` pras contas que justificam o valor).
+
+Smoke assertions revisadas em `test/smoke.js` (mesmo bloco de
+`checkSafeMode()`): sem hostil em alcance (nunca considera); invader fraco
+contra spawn saudável **não** dispara (regressão do bug); rush boostado
+dispara rápido mesmo com spawn saudável; hp já baixo por dano sustentado
+dispara; rampart própria saudável sob o spawn absorve e não dispara; já
+ativo é no-op; erro do `activateSafeMode()` nunca lança.

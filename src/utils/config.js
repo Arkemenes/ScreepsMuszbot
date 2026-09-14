@@ -33,11 +33,24 @@ const defaults = {
         // overkill at RCL2. Below rampartHealthyRatio a structure is always
         // fair game (rampartCriticalRatio just picks the worst of those
         // first); at/above it, repair only continues while the room's
-        // storage has real surplus (rampartStorageFillGate) - otherwise
-        // that effort is better spent elsewhere (building, upgrading).
+        // storage still has its emergency reserve intact
+        // (logistics.reserveRatio, via utils/resourceTiers.aboveReserve) -
+        // otherwise that effort is better spent elsewhere (building,
+        // upgrading).
         rampartCriticalRatio: 0.001,
         rampartHealthyRatio: 0.01,
-        rampartStorageFillGate: 0.5,
+        // ROADMAP 0054: the tower's own 3-tier delivery bands - hauler.js
+        // decides where to load/deliver energy from these. Critical is
+        // pulled from storage unconditionally; satisfactory is left alone
+        // (not a target either way); ideal (>= satisfactoryRatio) only
+        // keeps being topped off while logistics.reserveRatio is intact.
+        // Under defenseActive both bands shift up together - a tower nearly
+        // full going into a fight is worth more than the same energy idle
+        // in storage.
+        criticalRatio: 0.5,
+        satisfactoryRatio: 0.8,
+        criticalRatioUnderAttack: 0.8,
+        satisfactoryRatioUnderAttack: 0.95,
     },
     upgrader: {
         // rooms/needs.js + utils/autoscale.js: ABSOLUTE ceiling on the
@@ -58,18 +71,50 @@ const defaults = {
         // energy piling up), not to tick-to-tick noise.
         cooldown: 30000,
     },
+    logistics: {
+        // ROADMAP 0054: utils/resourceTiers.js's single reserve floor - a
+        // fraction of the room's storage capacity kept off-limits to every
+        // OPTIONAL energy spend (lab/factory/power spawn/controller
+        // container, rampart/wall past the healthy tier, a tower past its
+        // satisfactory band). Replaces two independently-tuned pisos that
+        // used to answer the same question differently (tower's old 50%
+        // rampartStorageFillGate, hauler's old 5% storageReserveFloor).
+        // Essential spends (spawn/extension, a critical tower) ignore this
+        // entirely, same as before.
+        reserveRatio: 0.01,
+        // utils/resourceTiers.js's controllerCritical(room) - true once the
+        // controller's ticksToDowngrade falls below this fraction of
+        // CONTROLLER_DOWNGRADE[rcl]; risk of losing RCL always wins.
+        // structures/link.js's collector: the controller link outranks the
+        // storage link, even an empty one. roles/upgrader.js: the one
+        // override that lets the upgrader spend room-wide storage/container
+        // energy even while the room itself isn't stable yet (ROADMAP 0054
+        // follow-up, real bug - see upgrader.js's own comment).
+        controllerCriticalDowngradeRatio: 0.1,
+        // structures/link.js's collector: once the storage is at/above this
+        // fill ratio AND the controller isn't RCL8 yet (still has real RCL
+        // to gain), the controller link wins by default over a storage
+        // that's already comfortable.
+        storageSatisfactoryRatio: 0.5,
+        // roles/hauler.js's terminalWithdrawable(): never let the
+        // ledger-credited withdrawable slice drain the terminal below this
+        // fraction of its own capacity - a floor on TOP of the ledger's own
+        // "what's withdrawable in theory" bookkeeping (ROADMAP 0043), not a
+        // replacement for it.
+        terminalReserveRatio: 0.1,
+    },
     hauler: {
         // a source container needs more than this much energy before a
         // hauler bothers with the trip
         minContainerLoad: 1000,
         // headcount when there's no link network
         maxCountNoLinks: 5,
-        // fraction of capacity a tower must be at/below to jump the delivery
-        // queue
-        deliverReserve: 0.5,
-        deliverReserveUnderAttack: 0.8,
-        // beyond deliverReserve, top a tower off further once it still has
-        // more than this fraction of free capacity
+        // ROADMAP 0054: within the tower's ideal band (>= tower.satisfactoryRatio),
+        // top it off further only while it still has more than this fraction
+        // of free capacity - the practical cutoff for "already close enough
+        // to full, not worth another trip" (unchanged by 0054, tower's own
+        // critical/satisfactory bands moved to tower.criticalRatio/
+        // satisfactoryRatio above).
         toppingOffThreshold: 0.05,
         // utils/autoscale.js (ROADMAP 0040/0049): ABSOLUTE ceiling on the
         // room's hauler count, base tier + autoscale delta combined (below
@@ -77,6 +122,15 @@ const defaults = {
         // haulerBacklogEligible in rooms/needs.js, this can genuinely clamp
         // the base tier down, not just stop the autoscale adding more).
         autoscaleMaxCount: 3,
+        // rooms/needs.js: floor on the base hauler tier once an active
+        // mineral operation (extractor + container, deposit not depleted)
+        // shares the room with a storage to deliver into - the mineral
+        // errand (roles/hauler.js's pickMineralJob) competes with the
+        // room's own energy loop for the same creep, so a solo hauler in a
+        // link room (normally just 1, the link network's last mile) starves
+        // one job or the other. Drops back to the room's normal count on
+        // its own once the deposit runs dry - see mineralOperationActive.
+        minCountWithMineral: 2,
     },
     builder: {
         // utils/autoscale.js (ROADMAP 0040): pickableEnergy() thresholds
@@ -102,12 +156,16 @@ const defaults = {
     combat: {
         // tiles a non-combat creep wants to stay from any armed hostile
         safeRange: 5,
-        // rooms/defense.js's checkSafeMode() (ROADMAP 0032 D6): with a
-        // hostile in attack range of a spawn, activateSafeMode() fires once
-        // the spawn's hp ratio drops at/below this (or zero defenders are
-        // alive, checked separately) - conservative on purpose, a real raid
-        // the normal defense handles shouldn't burn the limited charges.
-        safeModeSpawnHpRatio: 0.5,
+        // rooms/defense.js's checkSafeMode() (ROADMAP 0032 D6, revised -
+        // see "Bug real" in specs/features/0036-.../spec.md): projected
+        // ticks until the most-endangered spawn's effective hp (its own
+        // rampart's hits, if any, else its own hits) reaches zero at the
+        // current incoming dps. Below this, activateSafeMode() fires -
+        // conservative on purpose, a weak poke the normal defense handles
+        // shouldn't burn the limited charges (a lone unboosted attacker
+        // against a full-hp spawn projects to 100+ ticks; a real lethal
+        // rush projects well under this even at full hp).
+        safeModeTicksToKillThreshold: 20,
     },
     planner: {
         // planCity() won't spend a tick's CPU below this bucket
@@ -136,6 +194,12 @@ const defaults = {
         // scout: ticks to wait, parked in a room, for its layout preview
         // plan (planLayout()) to finish before giving up
         layoutWaitLimit: 500,
+        // reserver (reserve/claim/contest): ticks parked in the same spot
+        // before logging a stall warning - e.g. blockHostiles finds no safe
+        // route around a genuinely hostile chokepoint room, so the creep
+        // correctly waits at its own room's border instead of crossing, but
+        // silently forever isn't acceptable (constitution stall-guard rule)
+        claimStallTicks: 50,
     },
     observer: {
         // exploration priority score = staleness * (1 + enemies *

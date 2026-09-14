@@ -59,9 +59,18 @@ function spawnCreeps(room) {
     // While the room has hostiles, pour all spawn capacity into defenders.
     // A single bootstrap is still allowed so the economy can't fully collapse
     // during a long siege (bootstrap.spawn() only fires when there is none).
+    // Must include BOTH defense shapes rooms/needs.js can want here - once
+    // energyCapacityAvailable crosses defender.pairEnergyThreshold (500,
+    // easily reached at RCL2 with just a handful of extensions) it zeroes
+    // out `defender` and wants `defenderStriker`/`defenderMedic` instead
+    // (ROADMAP 0032 D2); omitting those two here left a room under attack
+    // queuing nothing for defense at all once it crossed that threshold -
+    // real bug this fixes.
     const roomMem = Memory.rooms[room.name];
     const underAttack = roomMem && roomMem.defenseActive;
-    const types = underAttack ? ["defender", "bootstrap"] : creepTypes;
+    const types = underAttack
+        ? ["defender", "defenderStriker", "defenderMedic", "bootstrap"]
+        : creepTypes;
 
     const requests = [];
 
@@ -74,12 +83,21 @@ function spawnCreeps(room) {
     }
 
     // Every role that currently wants a creep, in priority order. Scouts,
-    // raiders, and squadDismantler are pure luxury/never-solo - only spawn
-    // once every other role (including scout, for the raider) is already
-    // satisfied; squadDismantler never spawns here at all (only via
-    // spawnPendingSquad above).
+    // raiders, pioneers, and squadDismantler are pure luxury/never-solo -
+    // only spawn once every other role (including scout, for the raider) is
+    // already satisfied; squadDismantler never spawns here at all (only via
+    // spawnPendingSquad above). Pioneer rescues a sister room, which matters,
+    // but never at the cost of this room's own minimums (a la usuário) - it
+    // waits behind scout/raider too, same as they wait behind each other.
     for (const type of types) {
-        if (type === "scout" || type === "raider" || type === "squadDismantler") continue;
+        if (
+            type === "scout" ||
+            type === "raider" ||
+            type === "squadDismantler" ||
+            type === "pioneer"
+        ) {
+            continue;
+        }
         if (creepLogic[type] && creepLogic[type].spawn(room)) {
             const data = creepLogic[type].spawnData(room);
             if (data) requests.push(data);
@@ -103,6 +121,16 @@ function spawnCreeps(room) {
         creepLogic.raider.spawn(room)
     ) {
         const data = creepLogic.raider.spawnData(room);
+        if (data) requests.push(data);
+    }
+
+    if (
+        !requests.length &&
+        !underAttack &&
+        creepLogic.pioneer &&
+        creepLogic.pioneer.spawn(room)
+    ) {
+        const data = creepLogic.pioneer.spawnData(room);
         if (data) requests.push(data);
     }
 

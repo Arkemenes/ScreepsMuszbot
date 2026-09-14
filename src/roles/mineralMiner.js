@@ -6,13 +6,14 @@
 // energy-economy role for the same resource (constitution §5).
 
 const census = require("../utils/census");
+const roomCache = require("../utils/roomCache");
 const { takeCover } = require("../utils/combat");
 const names = require("../utils/names");
 
 // The mineral, its extractor (mining is impossible without one), and its
 // container (architect.js's job to plant both - this role never builds).
 function mineralSite(room) {
-    const mineral = room.find(FIND_MINERALS)[0];
+    const mineral = roomCache.minerals(room)[0];
     if (!mineral) return {};
     const extractor = mineral.pos.findInRange(FIND_STRUCTURES, 0, {
         filter: (s) => s.structureType === STRUCTURE_EXTRACTOR,

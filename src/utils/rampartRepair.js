@@ -16,11 +16,14 @@
 //                                   priority as the critical tier above it
 //                                   loses to nothing else defensive.
 //   >= rampartHealthyRatio        - already plenty tanky for now - only
-//                                   keeps improving while the room has real
-//                                   energy surplus (storage fill ratio past
-//                                   rampartStorageFillGate). Otherwise that
-//                                   effort is better spent elsewhere.
+//                                   keeps improving while the room's storage
+//                                   still has its emergency reserve intact
+//                                   (utils/resourceTiers.aboveReserve, 1% of
+//                                   capacity - ROADMAP 0054, replaced the old
+//                                   50% rampartStorageFillGate). Otherwise
+//                                   that effort is better spent elsewhere.
 const config = require("./config");
+const resourceTiers = require("./resourceTiers");
 
 function isCritical(structure) {
     return (
@@ -34,25 +37,11 @@ function isHealthy(structure) {
     );
 }
 
-// the room has enough spare energy to keep hardening a structure that's
-// already past the "healthy" tier. No storage at all never counts as
-// surplus (constitution §3 - never throws on a missing storage either).
-function hasSurplusEnergy(room) {
-    const storage = room.storage;
-    if (!storage) return false;
-    const capacity = storage.store.getCapacity(RESOURCE_ENERGY);
-    if (!capacity) return false;
-    return (
-        storage.store.energy / capacity >
-        config.get("tower.rampartStorageFillGate", 0.5)
-    );
-}
-
 // the single predicate both tower.js and builder.js call to decide whether
 // a damaged rampart/wall is worth spending repair effort on right now.
 function worthHardening(structure, room) {
     if (structure.hits >= structure.hitsMax) return false;
-    return isHealthy(structure) || hasSurplusEnergy(room);
+    return isHealthy(structure) || resourceTiers.aboveReserve(room);
 }
 
-module.exports = { isCritical, isHealthy, hasSurplusEnergy, worthHardening };
+module.exports = { isCritical, isHealthy, worthHardening };

@@ -71,6 +71,7 @@ global.help = function () {
                 ["unreserveRoom(roomName)", "remove a sala da lista de remotes - reserver/remoteMiner/remoteHauler daquela sala recolhem pra casa"],
                 ["claimRoom(roomName, motherRoomName?)", "despacha um reserver pra dominar (claimController) a sala - só 1 claim por vez no império; recusa se a viagem não couber nos 600 ticks de vida de um corpo com CLAIM"],
                 ["cancelClaim()", "cancela a ordem de claim pendente - o claimer já em trânsito não é chamado de volta, só a fila de respawn de reposição"],
+                ["routeCheck(fromRoomName, toRoomName)", "mostra a rota sem restrição e a rota evitando hostil (blockHostiles) entre duas salas - usa quando um reserver/claimer fica parado sem avançar, pra saber se é intel de hostil velha, hostil real bloqueando o único caminho, ou nenhuma rota"],
             ],
         },
         {
@@ -101,7 +102,7 @@ global.help = function () {
             title: "Manutenção",
             commands: [
                 ["GCStructureMemory()", "limpa Memory.structures de estruturas que não existem mais (rodar de vez em quando, ex.: a cada 10k ticks)"],
-                ["Memory.settings = { profiler: true }", "liga o profiler (screeps-profiler); depois: Game.profiler.profile(100)"],
+                ["profile(ticks=100)", "liga o profiler (screeps-profiler) por N ticks, imprime o relatório de calls/tempo/média por função sozinho no fim e desliga o profiler de novo - não precisa mexer em Memory.settings.profiler na mão"],
                 ["resetTerminalLedger(roomName)", "reseta o ledger de retirada do terminal do hauler - usa quando o saldo já existente no terminal ficou preso como \"protegido pra sempre\" (ex.: build antigo, ou saldo de antes desse recurso existir); a partir do próximo tick o saldo atual vira a nova baseline, já liberado"],
             ],
         },

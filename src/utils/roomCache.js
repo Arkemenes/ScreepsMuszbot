@@ -30,6 +30,16 @@ function constructionSites(room) {
     return s.sites;
 }
 
+// A room has at most one mineral deposit, but several callers (roles/
+// mineralMiner.js, roles/hauler.js's mineral job, rooms/needs.js's hauler
+// count) each used to run their own FIND_MINERALS - collapsed to the same
+// one-per-tick slot as every other find() here (constitution).
+function minerals(room) {
+    const s = slot(room);
+    if (!s.minerals) s.minerals = room.find(FIND_MINERALS);
+    return s.minerals;
+}
+
 // Structures of a given type, derived from the cached full list.
 function structuresByType(room, structureType) {
     const s = slot(room);
@@ -48,4 +58,5 @@ module.exports = {
     myStructures,
     constructionSites,
     structuresByType,
+    minerals,
 };

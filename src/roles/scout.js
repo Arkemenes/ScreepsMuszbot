@@ -82,6 +82,33 @@ function blacklistRoom(roomName) {
         Game.time + config.get("scout.blacklistTicks", 5000);
 }
 
+// --- room-flap detector: the reactive, cheap alternative to a live
+// PathFinder.search (tried once, reverted - ROADMAP: cycling through a few
+// dead-end candidate rooms in a row meant several fresh, uncached searches
+// in a hurry, and that was enough to drain the CPU bucket). Same idea as
+// utils/move.js's `m.stuck` / utils/squad.js's `stuckTicks`: just track what
+// actually happened, no prediction. Only appends when the room actually
+// changes (a border crossing), so this is pure bookkeeping, not a per-tick
+// cost - a room stuck on the far side of a sealed pocket still enters and
+// exits every few ticks (that's the bug), and each crossing pushes one
+// entry. [A, B, A, B] means it's bouncing between exactly two rooms with no
+// net progress; anything else (reaching a third room, or just sitting in
+// one) clears itself out naturally.
+function isFlapping(creep) {
+    const trail = creep.memory._roomTrail || [];
+    if (trail[trail.length - 1] !== creep.room.name) {
+        trail.push(creep.room.name);
+        if (trail.length > 4) trail.shift();
+        creep.memory._roomTrail = trail;
+    }
+    return (
+        trail.length === 4 &&
+        trail[0] === trail[2] &&
+        trail[1] === trail[3] &&
+        trail[0] !== trail[1]
+    );
+}
+
 var scout = {
     /** @param {Creep} creep **/
     run: function (creep) {
@@ -168,6 +195,33 @@ var scout = {
         // wandering. ---
         if (observer.hasAnyObserver()) {
             creep.suicide();
+            return;
+        }
+
+        // room-flap guard: a sealed-off target room makes the native engine
+        // walk the creep to the border and back forever (see isFlapping()
+        // above) - catch that before either moveToRoom call below gets a
+        // chance to send it back in.
+        if (isFlapping(creep)) {
+            if (creep.memory.targetRoom) blacklistRoom(creep.memory.targetRoom);
+            creep.memory.targetRoom = undefined;
+            creep.memory._roomTrail = [];
+            return;
+        }
+
+        // border-stall guard: the engine won't let a creep rest on an exit
+        // tile without a fresh move queued - it gets shoved back off, which
+        // can happen before the next tick's script even reads the position,
+        // so isFlapping()'s room-name trail above never sees a change at all
+        // (see routing.isStuckAtBorder's comment). Position bookkeeping
+        // catches it instead; own key prefix so this never collides with
+        // routing.moveToRoom()'s own use of the same mechanism for the
+        // sign/layout tasks above.
+        if (routing.isStuckAtBorder(creep, "_exploreBorder")) {
+            if (creep.memory.targetRoom) blacklistRoom(creep.memory.targetRoom);
+            creep.memory.targetRoom = undefined;
+            creep.memory._roomTrail = [];
+            routing.nudgeAwayFromBorder(creep);
             return;
         }
 
@@ -270,6 +324,10 @@ var scout = {
             memory: { role: "scout", home: room.name },
         };
     },
+
+    // exposed for smoke.js - the room-flap detector is otherwise only
+    // reachable indirectly through run()
+    isFlapping: isFlapping,
 };
 
 module.exports = scout;

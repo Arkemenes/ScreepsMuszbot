@@ -10,6 +10,7 @@ const { roomNeeds } = require("../rooms/needs");
 const remotes = require("../rooms/remotes");
 const routing = require("../utils/routing");
 const names = require("../utils/names");
+const config = require("../utils/config");
 const { silenceAttackAlerts } = require("../utils/combat");
 
 // CLAIM parts beyond this don't help - extra buffer for "reserve" missions
@@ -49,16 +50,54 @@ var reserver = {
         }
 
         if (creep.room.name !== targetRoomName) {
-            // never a scout-style exploratory move - always one specific
-            // room, so route through highways and completely avoid any
-            // room with known hostiles (utils/routing).
-            routing.moveToRoom(creep, targetRoomName, {
-                range: 20,
-                reusePath: 30,
-                blockHostiles: true,
-            });
+            // claim: blockHostiles below already refuses to CROSS a room
+            // with known hostiles on the way there, but findRoute/moveToRoom
+            // deliberately never block the destination itself (you have to
+            // enter your actual target eventually - contest's whole point is
+            // walking into a hostile-owned room, see silenceAttackAlerts
+            // above, and reserve targets are already filtered upstream by
+            // remotes.pendingReserves()). "claim" is the one mission where a
+            // hostile *destination* is still worth waiting out rather than
+            // marching an unarmed CLAIM/MOVE body straight into - without
+            // this it would walk in and out of that room every time a
+            // hostile (re)appears there, never actually claiming anything.
+            const hostileTarget =
+                mission === "claim" && remotes.hasHostiles(targetRoomName);
+            if (!hostileTarget) {
+                // never a scout-style exploratory move - always one specific
+                // room, so route through highways and completely avoid any
+                // room with known hostiles (utils/routing).
+                routing.moveToRoom(creep, targetRoomName, {
+                    range: 20,
+                    reusePath: 30,
+                    blockHostiles: true,
+                });
+            }
+
+            // stall guard (constitution): blockHostiles correctly refuses to
+            // cross a genuinely hostile chokepoint room, and a hostile claim
+            // target (above) refuses to even approach it - either way the
+            // creep just parks instead of camping silently forever. Warn
+            // once instead of doing that without a trace.
+            const posKey = creep.pos.x + ":" + creep.pos.y + ":" + creep.room.name;
+            if (creep.memory._stallPos === posKey) {
+                creep.memory._stallTicks = (creep.memory._stallTicks || 0) + 1;
+            } else {
+                creep.memory._stallPos = posKey;
+                creep.memory._stallTicks = 0;
+            }
+            if (creep.memory._stallTicks === config.get("routing.claimStallTicks", 50)) {
+                console.log(
+                    `[reserver] ${creep.name} (mission ${mission}) stuck heading to ` +
+                        `${targetRoomName} - ` +
+                        (hostileTarget
+                            ? "the target room itself has a hostile - waiting for it to clear"
+                            : "likely no route avoiding a hostile room")
+                );
+            }
             return;
         }
+        creep.memory._stallTicks = 0;
 
         const controller = creep.room.controller;
         if (!controller) {

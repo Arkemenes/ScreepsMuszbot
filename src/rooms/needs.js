@@ -119,6 +119,28 @@ function pickableEnergy(room) {
     return e;
 }
 
+// True once the room is actively pulling a mineral out of the ground -
+// extractor + container both planted (architect.js's job) next to a deposit
+// that isn't currently depleted. Mirrors roles/mineralMiner.js's own
+// mineralSite() gate (kept separate rather than imported - that role is
+// deliberately never routed through this module, see its own header
+// comment) so the two can never read the deposit's state differently.
+// Depleted (mineralAmount <= 0) reads as inactive on purpose: nothing left
+// to haul, so the extra hauler below wouldn't have a job either.
+function mineralOperationActive(room) {
+    const mineral = roomCache.minerals(room)[0];
+    if (!mineral || mineral.mineralAmount <= 0) return false;
+    const extractor = mineral.pos.findInRange(FIND_STRUCTURES, 0, {
+        filter: (s) => s.structureType === STRUCTURE_EXTRACTOR,
+    })[0];
+    if (!extractor) return false;
+    return (
+        mineral.pos.findInRange(FIND_STRUCTURES, 1, {
+            filter: (s) => s.structureType === STRUCTURE_CONTAINER,
+        }).length > 0
+    );
+}
+
 // source containers that don't yet have a collector link next to them - those
 // still rely on a hauler even in a link-network room
 function unlinkedSourceContainers(room) {
@@ -330,6 +352,15 @@ function compute(room) {
         hauler = 1 + unlinkedSourceContainers(room);
     } else {
         hauler = Math.min(config.get("hauler.maxCountNoLinks", 5), containers + 1);
+    }
+
+    // an active mineral operation shares this room's haulers with the
+    // energy loop (roles/hauler.js's pickMineralJob, lowest priority but
+    // still a real trip) - floor the count at 2 while there's a deposit
+    // worth hauling and somewhere (storage) to put it, so mineral hauling
+    // doesn't come entirely out of the room's own energy throughput.
+    if (room.storage && mineralOperationActive(room)) {
+        hauler = Math.max(hauler, config.get("hauler.minCountWithMineral", 2));
     }
 
     // --- bootstrap: emergency only ---

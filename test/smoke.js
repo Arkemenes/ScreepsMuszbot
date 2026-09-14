@@ -42,7 +42,18 @@ const constants = {
     BODYPART_COST: { work: 100, carry: 50, move: 50, tough: 10, heal: 250,
         attack: 80, ranged_attack: 150, claim: 600 },
     CREEP_SPAWN_TIME: 3, CREEP_LIFE_TIME: 1500, CREEP_CLAIM_LIFE_TIME: 600,
-    OBSERVER_RANGE: 10, HARVEST_POWER: 2,
+    OBSERVER_RANGE: 10, HARVEST_POWER: 2, ATTACK_POWER: 30, RANGED_ATTACK_POWER: 10,
+    // ROADMAP 0036 revision: BOOSTS is a genuine Screeps-provided global
+    // constant (src/ never hardcodes boost multipliers, only consults this
+    // live, same principle as REACTIONS/COMMODITIES below) - a small
+    // internally-consistent MOCK of just the attack/ranged_attack corner for
+    // exercising the code path offline, not the real (much larger) table.
+    BOOSTS: {
+        attack: { UH: { attack: 2 }, UH2O: { attack: 3 }, XUH2O: { attack: 4 } },
+        ranged_attack: {
+            KO: { rangedAttack: 2 }, KHO2: { rangedAttack: 3 }, XKHO2: { rangedAttack: 4 },
+        },
+    },
     CONTROLLER_DOWNGRADE: { 1: 20000, 2: 10000, 3: 20000, 4: 50000, 5: 100000,
         6: 150000, 7: 150000, 8: 200000 },
     // ROADMAP 0051: REACTIONS/COMMODITIES are genuine Screeps-provided
@@ -608,8 +619,10 @@ assert(guarded2.length === 0,
 assert(global.Memory.rooms.W1N1.defenseActive === true, "intel flagged defenseActive");
 assert(spawnCalls.length > 0, "something was spawned while under attack");
 assert(
-    spawnCalls.every((c) => c.role === "defender" || c.role === "bootstrap"),
-    "under attack only defender/bootstrap spawned (got: " +
+    spawnCalls.every((c) =>
+        ["defender", "defenderStriker", "defenderMedic", "bootstrap"].includes(c.role)
+    ),
+    "under attack only defense-related roles (+ bootstrap) spawned (got: " +
         spawnCalls.map((c) => c.role).join(", ") + ")"
 );
 assert(
@@ -1098,6 +1111,35 @@ function withFindLookup(pos, lists) {
     );
 }
 
+// --- a dead-zone tower (between criticalRatio and satisfactoryRatio) is
+// deliberately skipped by pickDeliver's normal cascade above - but only in
+// favor of something more urgent existing. With nothing else in the room
+// wanting energy (spawn/ext full, no storage to fall back to), a hauler
+// idling full right next to a tower that still has room helps nobody -----
+{
+    const deadZoneTowerFallback = Object.assign(new OwnedStructure(), {
+        id: "towerdeadzonefallback", structureType: STRUCTURE_TOWER, my: true,
+        pos: new RoomPosition(27, 27, "W1N1"), room,
+        store: Object.assign(store(980, 1000), { getFreeCapacity: () => 20 }), // 98% full - dead zone
+    });
+    REG.towerdeadzonefallback = deadZoneTowerFallback;
+    findMap[FIND_MY_STRUCTURES].push(deadZoneTowerFallback);
+    const savedSpawnStoreFB = spawn.store;
+    spawn.store = Object.assign(store(300, 300), { getFreeCapacity: () => 0 });
+    room.storage = null;
+    Game.time++;
+    const hFallback = makeCreep("HFallback", "hauler", { store: store(200, 200) });
+    hFallback.transfer = (t) => { hFallback._to = t && t.id; return OK; };
+    hauler.run(hFallback);
+    assert(hFallback._to === "towerdeadzonefallback",
+        "with nothing else to deliver to, a dead-zone tower still gets topped off " +
+            "rather than the hauler idling full (got " + hFallback._to + ")");
+    spawn.store = savedSpawnStoreFB;
+    findMap[FIND_MY_STRUCTURES] = findMap[FIND_MY_STRUCTURES].filter(
+        (s) => s.id !== "towerdeadzonefallback"
+    );
+}
+
 // --- ROADMAP 0043 follow-up: the storage reserve floor only protects the
 // OPTIONAL uses (lab/controller container) - spawn/ext/tower (essential,
 // keeping the room able to spawn/defend itself) must still be able to pull
@@ -1164,7 +1206,14 @@ function withFindLookup(pos, lists) {
 // --- ROADMAP 0043 follow-up: terminal - top collection priority, but only
 // the ledger-credited (withdrawable) slice, and always straight to storage
 // on delivery -------------------------------------------------------------
+// ROADMAP 0054 adds a SEPARATE floor on top of the ledger (never drain the
+// terminal below logistics.terminalReserveRatio of its own capacity, see
+// the dedicated test further below) - disabled here (ratio 0) so this
+// block keeps testing only the ledger bookkeeping it was written for,
+// against balances that predate that floor's existence.
 {
+    Memory.settings = Memory.settings || {};
+    Memory.settings.logistics = { terminalReserveRatio: 0 };
     const term = Object.assign(new Structure(), {
         id: "term1", structureType: STRUCTURE_TERMINAL, room,
         pos: new RoomPosition(24, 24, "W1N1"), store: store(5000, 300000),
@@ -1242,6 +1291,46 @@ function withFindLookup(pos, lists) {
     assert(hReset._from === "term1" && hReset._amt === 200,
         "after a reset, the terminal's current balance is immediately withdrawable again " +
             "(got " + hReset._from + "/" + hReset._amt + ")");
+
+    delete Memory.rooms.W1N1.terminalLedger;
+    room.terminal = null;
+    delete Memory.settings.logistics;
+}
+
+// --- ROADMAP 0054: terminalWithdrawable() never returns a value that would
+// drain the terminal below logistics.terminalReserveRatio (10%) of its own
+// capacity, even when the ledger says more is withdrawable in theory -----
+{
+    const floorTerm = Object.assign(new Structure(), {
+        id: "termfloor", structureType: STRUCTURE_TERMINAL, room,
+        pos: new RoomPosition(24, 24, "W1N1"), store: store(1200, 10000), // 12% full, floor is 10% (1000)
+    });
+    REG.termfloor = floorTerm;
+    room.terminal = floorTerm;
+    delete Memory.rooms.W1N1.terminalLedger;
+
+    // first look: the whole 1200 becomes the ledger's baseline/withdrawable,
+    // but only 200 of it (1200 - the 1000 floor) may actually be drawn out
+    Game.time++;
+    const hFloor = makeCreep("HTermFloor", "hauler", { store: store(0, 200) });
+    hFloor.withdraw = (t, r, amt) => { hFloor._from = t && t.id; hFloor._amt = amt; return OK; };
+    hFloor.memory.job = "load";
+    hauler.run(hFloor);
+    assert(hFloor._from === "termfloor" && hFloor._amt === 200,
+        "near the floor but still 200 above it: exactly that much is withdrawable " +
+            "(got " + hFloor._from + "/" + hFloor._amt + ")");
+
+    // right at the floor (10% exactly) - nothing left to withdraw, even
+    // though the ledger itself still shows a positive withdrawable balance
+    floorTerm.store = Object.assign(store(1000, 10000), {});
+    Game.time++;
+    const hAtFloor = makeCreep("HTermAtFloor", "hauler", { store: store(0, 200) });
+    hAtFloor.withdraw = (t) => { hAtFloor._from = t && t.id; return OK; };
+    hAtFloor.memory.job = "load";
+    hauler.run(hAtFloor);
+    assert(hAtFloor._from !== "termfloor",
+        "at the terminal reserve floor: nothing is withdrawable (ROADMAP 0054, got " +
+            hAtFloor._from + ")");
 
     delete Memory.rooms.W1N1.terminalLedger;
     room.terminal = null;
@@ -1539,6 +1628,37 @@ room.storage = Object.assign(new Structure(), { id: "st5", store: store(1000, 1e
 Game.time++;
 assert(needs.roomNeeds(room).hauler === 1,
     "a full link network needs exactly one hauler (even with a storage)");
+
+// an active mineral operation (extractor + container next to the deposit,
+// mineral not depleted) shares this room's haulers with the energy loop
+// (roles/hauler.js's pickMineralJob) - the base tier bumps from 1 to 2
+// while there's real storage to deliver into
+const mineralExtractor = Object.assign(new OwnedStructure(), {
+    id: "needsMinExtractor1", structureType: STRUCTURE_EXTRACTOR, my: true,
+});
+const mineralContainer = Object.assign(new StructureContainer(), {
+    id: "needsMinContainer1", structureType: STRUCTURE_CONTAINER,
+});
+const realNeedsMineralFindInRange = mineral.pos.findInRange;
+mineral.pos.findInRange = (type, range, opts) => {
+    let list = type === FIND_STRUCTURES ? [mineralExtractor, mineralContainer] : [];
+    if (opts && typeof opts.filter === "function") list = list.filter(opts.filter);
+    return list;
+};
+const savedNeedsMineralAmount = mineral.mineralAmount;
+mineral.mineralAmount = 5000;
+Game.time++;
+assert(needs.roomNeeds(room).hauler === 2,
+    "an active mineral operation (extractor + container) bumps the hauler floor to 2 once storage exists");
+
+// depleted deposit -> nothing left to haul, back to the room's normal count
+mineral.mineralAmount = 0;
+Game.time++;
+assert(needs.roomNeeds(room).hauler === 1,
+    "a depleted mineral deposit drops the hauler count back down (nothing left to haul)");
+
+mineral.mineralAmount = savedNeedsMineralAmount;
+mineral.pos.findInRange = realNeedsMineralFindInRange;
 findMap[FIND_MY_STRUCTURES] = findMap[FIND_MY_STRUCTURES].filter(
     (s) => s.id !== "nlc" && s.id !== "nlr"
 );
@@ -2490,12 +2610,13 @@ findMap[FIND_HOSTILE_CREEPS] = [];
     }
 
     // --- D4 + follow-up: tower rampart/wall repair uses the single shared
-    // 3-tier model in utils/rampartRepair.js (ROADMAP 0032 D4 follow-up) -
-    // critical / healthy / storage-gated, all as a FRACTION of hitsMax
-    // (which already scales with RCL), never a fixed number. C is critical
-    // (0.05% < 0.1%), H is healthy but not critical (0.5%, between 0.1%
-    // and 1%), S is past the healthy tier (5% > 1%) and only eligible with
-    // real storage surplus.
+    // 3-tier model in utils/rampartRepair.js (ROADMAP 0032 D4 follow-up,
+    // gate updated to the unified 1% reserve by ROADMAP 0054) - critical /
+    // healthy / reserve-gated, all as a FRACTION of hitsMax (which already
+    // scales with RCL), never a fixed number. C is critical (0.05% < 0.1%),
+    // H is healthy but not critical (0.5%, between 0.1% and 1%), S is past
+    // the healthy tier (5% > 1%) and only eligible while the room's storage
+    // reserve (logistics.reserveRatio, 1%) is intact.
     const C = mkTestRampart("c", 500, 1000000);
     const H = mkTestRampart("h", 5000, 1000000);
     const S = mkTestRampart("s", 50000, 1000000);
@@ -2524,22 +2645,36 @@ findMap[FIND_HOSTILE_CREEPS] = [];
             "past the healthy tier with no storage at all: nothing eligible, no repair");
     }
     {
-        const lowStorage = { store: store(400, 1000) }; // 40% fill, at/below the 50% gate
-        const { tower, getRepaired } = mkTestTower([S], lowStorage);
+        const belowReserve = { store: store(5, 1000) }; // 0.5% fill, below the 1% reserve
+        const { tower, getRepaired } = mkTestTower([S], belowReserve);
         Game.time++;
         towerMod.run(tower);
         assert(getRepaired() === null,
-            "past the healthy tier, storage fill at 40% (below the 50% " +
-                "gate): still no repair");
+            "past the healthy tier, storage fill at 0.5% (below the 1% " +
+                "reserve): still no repair");
     }
     {
-        const fullEnoughStorage = { store: store(600, 1000) }; // 60% fill, past the gate
+        // ROADMAP 0054: the gate dropped from the old 50% fill down to a
+        // 1% reserve - 20% fill is well below the old gate but above the
+        // new one, so this is now eligible where it wasn't before
+        // (deliberate behavior change, acceptance criterion 3)
+        const twentyPercentStorage = { store: store(200, 1000) }; // 20% fill
+        const { tower, getRepaired } = mkTestTower([S], twentyPercentStorage);
+        Game.time++;
+        towerMod.run(tower);
+        assert(getRepaired() === S,
+            "past the healthy tier, storage fill at 20% (above the new 1% " +
+                "reserve, below the old 50% gate): now eligible, gets repaired " +
+                "(ROADMAP 0054)");
+    }
+    {
+        const fullEnoughStorage = { store: store(600, 1000) }; // 60% fill, well past the reserve
         const { tower, getRepaired } = mkTestTower([S], fullEnoughStorage);
         Game.time++;
         towerMod.run(tower);
         assert(getRepaired() === S,
-            "past the healthy tier, storage fill at 60% (past the 50% " +
-                "gate): now eligible, gets repaired");
+            "past the healthy tier, storage fill at 60% (past the 1% " +
+                "reserve): eligible, gets repaired");
     }
     {
         // no storage at all must never throw (constitution §3)
@@ -2625,8 +2760,119 @@ findMap[FIND_HOSTILE_CREEPS] = [];
             assert(!threw, "builder.run with storage surplus never throws" +
                 (threw ? "\n      " + (threw.stack || threw) : ""));
             assert(getRepairs().includes(RCap),
-                "storage past the 50% gate: the same rampart is fair game " +
+                "storage past the 1% reserve: the same rampart is fair game " +
                     "again, matching structures/tower.js's rule exactly");
+        }
+    }
+
+    // --- ROADMAP 0054 "Link tiers": the collector link decides between a
+    // controller link and a storage link by ticksToDowngrade/storage fill,
+    // not just "whichever non-collector link has more free capacity" ------
+    {
+        const linkMod = require(path.join(PROJECT, "src/structures/link"));
+
+        function mkLink(id, x, y, isCollectorVal) {
+            return Object.assign(new StructureLink(), {
+                id, structureType: STRUCTURE_LINK,
+                pos: new RoomPosition(x, y, "LinkRoom"),
+                store: store(0, 800),
+                isCollector: () => isCollectorVal,
+                cooldown: 0,
+                isActive: () => true,
+            });
+        }
+
+        function linkFind(structures) {
+            return (type, opts) => {
+                let list = type === FIND_STRUCTURES ? structures : [];
+                if (opts && typeof opts.filter === "function") list = list.filter(opts.filter);
+                return list;
+            };
+        }
+
+        function runLinkScenario({ rcl, ticksToDowngrade, storageEnergy, storageCapacity }) {
+            const linkController = Object.assign(new RoomObject(), {
+                id: "link-ctrl", my: true, level: rcl, ticksToDowngrade,
+                pos: new RoomPosition(25, 25, "LinkRoom"),
+            });
+            const storage = storageCapacity
+                ? { store: store(storageEnergy, storageCapacity) }
+                : null;
+
+            const collector = mkLink("lk-col", 5, 5, true);
+            const controllerLink = mkLink("lk-ctrl", 24, 25, false); // range 1 to controller
+            const storageLink = mkLink("lk-stor", 40, 40, false); // far from controller
+
+            let transferredTo = null;
+            collector.transferEnergy = (t) => { transferredTo = t && t.id; return OK; };
+            collector.store = store(200, 800);
+
+            collector.room = Object.assign(new Room("LinkRoom"), {
+                controller: linkController, storage,
+                find: linkFind([collector, controllerLink, storageLink]),
+            });
+
+            Game.time++;
+            linkMod.run(collector);
+            return transferredTo;
+        }
+
+        // (a) controller near downgrade wins, even over an empty storage
+        // link (and even with no storage at all) - risk of losing RCL beats
+        // everything else
+        {
+            const rcl = 4;
+            const limit = CONTROLLER_DOWNGRADE[rcl];
+            const got = runLinkScenario({
+                rcl, ticksToDowngrade: Math.floor(limit * 0.05), // below the 10% threshold
+                storageEnergy: 0, storageCapacity: 0,
+            });
+            assert(got === "lk-ctrl",
+                "controller near downgrade wins over the storage link, even with no " +
+                    "storage at all (got " + got + ")");
+        }
+
+        // (b) controller not critical, storage below its 1% reserve ->
+        // storage link (the symmetric emergency)
+        {
+            const rcl = 4;
+            const limit = CONTROLLER_DOWNGRADE[rcl];
+            const got = runLinkScenario({
+                rcl, ticksToDowngrade: limit, // nowhere near critical
+                storageEnergy: 50, storageCapacity: 100000, // 0.05%, below the 1% reserve
+            });
+            assert(got === "lk-stor",
+                "storage below its 1% reserve wins when the controller isn't critical " +
+                    "(got " + got + ")");
+        }
+
+        // (c) storage comfortable (>=50% fill) and controller still short of
+        // RCL8 -> controller link (real RCL to gain beats a storage that's
+        // already fine)
+        {
+            const rcl = 6;
+            const limit = CONTROLLER_DOWNGRADE[rcl];
+            const got = runLinkScenario({
+                rcl, ticksToDowngrade: limit,
+                storageEnergy: 60000, storageCapacity: 100000, // 60% fill
+            });
+            assert(got === "lk-ctrl",
+                "a comfortable storage below RCL8 favors the controller link " +
+                    "(got " + got + ")");
+        }
+
+        // (d) default: none of the above -> storage link (RCL8, nothing left
+        // to gain from the controller)
+        {
+            const rcl = 8;
+            const limit = CONTROLLER_DOWNGRADE[rcl];
+            const got = runLinkScenario({
+                rcl, ticksToDowngrade: limit,
+                storageEnergy: 60000, storageCapacity: 100000, // 60% fill, but RCL8
+            });
+            assert(got === "lk-stor",
+                "RCL8 with a comfortable storage falls back to the storage link by " +
+                    "default (got " + got + ")");
         }
     }
 
@@ -3282,6 +3528,38 @@ delete Game.creeps.Sc2;
             "abandoning the claim logs why");
     }
 
+    // --- claim mission: a hostile in the TARGET room itself is never
+    // walked into - routing.moveToRoom/findRoute deliberately never block
+    // the destination room (contest needs to enter one on purpose, reserve
+    // targets are already pre-filtered by remotes.pendingReserves()), so
+    // this mission-level check in reserver.js is what actually stops the
+    // claimer from marching an unarmed CLAIM/MOVE body straight into a room
+    // with a hostile creep camping it -------------------------------------
+    {
+        delete Memory.claimTarget;
+        global.claimRoom("W1N2");
+        Memory.rooms.W1N2.enemies = 1; // a hostile is camping the target now
+
+        let moveToCalled = false;
+        const hostileClaimCreep = Object.assign(Object.create(Creep.prototype), {
+            id: "claimtest2", room, pos: new RoomPosition(20, 20, "W1N1"),
+            body: [{ type: CLAIM }, { type: MOVE }],
+            memory: { role: "reserver", mission: "claim", targetRoom: "W1N2", home: "W1N1" },
+            moveTo: () => { moveToCalled = true; return OK; },
+            claimController: () => OK, suicide: () => OK,
+        });
+        reserver.run(hostileClaimCreep);
+        assert(!moveToCalled,
+            "a claim mission never moves toward a target room that currently has a hostile in it");
+
+        Memory.rooms.W1N2.enemies = 0; // the hostile is gone
+        reserver.run(hostileClaimCreep);
+        assert(moveToCalled,
+            "once the target room is clear again, the claim mission resumes moving toward it");
+
+        delete Memory.claimTarget;
+    }
+
     // --- Fase 3: targetEnemies + raiding (ROADMAP 0032 O2/O4) ----------
     {
         const raidingMod = require(path.join(PROJECT, "src/rooms/raiding"));
@@ -3521,7 +3799,13 @@ delete Game.creeps.Sc2;
         delete Memory.raidTarget;
     }
 
-    // --- rooms/defense.js: checkSafeMode() (ROADMAP 0032/0036, D6) ------
+    // --- rooms/defense.js: checkSafeMode() (ROADMAP 0032/0036 D6, revised -
+    //     see "Bug real" in specs/features/0036-.../spec.md: the old "hp
+    //     ratio OR zero defenders alive" gate fired off a weak invader in
+    //     production because defenders only exist reactively - "zero
+    //     defenders" was trivially true in the opening ticks of ANY
+    //     incursion, not just one the defense had actually lost. Replaced by
+    //     a projected ticks-to-kill from real incoming dps.) -------------
     {
         const defenseMod = require(path.join(PROJECT, "src/rooms/defense"));
 
@@ -3535,20 +3819,28 @@ delete Game.creeps.Sc2;
             };
             const spawnFixture = Object.assign(new Spawn(), {
                 id: "defspawn_" + Math.random(), structureType: STRUCTURE_SPAWN, my: true,
-                hits: opts.spawnHits, hitsMax: 100,
+                hits: opts.spawnHits === undefined ? 5000 : opts.spawnHits, hitsMax: 5000,
                 pos: new RoomPosition(25, 25, "DefRoom"),
             });
+            const structs = [spawnFixture];
+            if (opts.rampartHits) {
+                structs.push(Object.assign(new Structure(), {
+                    structureType: STRUCTURE_RAMPART, my: true,
+                    hits: opts.rampartHits, hitsMax: 300000,
+                    pos: new RoomPosition(25, 25, "DefRoom"),
+                }));
+            }
             const hostileCreep = opts.hostileRange === undefined ? null : Object.assign(new Creep(), {
                 id: "defhostile_" + Math.random(), owner: { username: "Warrobot10" },
                 pos: new RoomPosition(25 + opts.hostileRange, 25, "DefRoom"),
                 hits: 100, hitsMax: 100,
-                body: [{ type: RANGED_ATTACK }, { type: MOVE }],
+                body: opts.hostileBody || [{ type: RANGED_ATTACK }, { type: MOVE }],
             });
             const roomFixture = {
                 name: "DefRoom", controller: ctrl,
                 find: (type, findOpts) => {
                     let list = [];
-                    if (type === FIND_STRUCTURES) list = [spawnFixture];
+                    if (type === FIND_STRUCTURES) list = structs;
                     if (type === FIND_HOSTILE_CREEPS) list = hostileCreep ? [hostileCreep] : [];
                     if (findOpts && typeof findOpts.filter === "function") list = list.filter(findOpts.filter);
                     return list;
@@ -3559,52 +3851,66 @@ delete Game.creeps.Sc2;
 
         // no hostile in attack range at all - never even considers it
         Game.time++;
-        let d = mkDefenseRoom({ spawnHits: 20, hostileRange: 10 });
+        let d = mkDefenseRoom({ hostileRange: 10 });
         defenseMod.checkSafeMode(d.room);
         assert(d.calls() === 0,
             "checkSafeMode() does nothing when no armed hostile is in attack range of any spawn");
 
-        // hostile in range (ranged reach 3), spawn healthy, a defender alive
-        // - defense is handling it, don't burn a safe mode charge
+        // the reported production bug: a weak, unboosted invader (1 ATTACK
+        // part - 30 dps) at melee range of a FULL-hp spawn. Projected
+        // ticks-to-kill is ~167, nowhere near the threshold - the old "zero
+        // defenders alive" branch fired here regardless, this must not.
         Game.time++;
-        d = mkDefenseRoom({ spawnHits: 100, hostileRange: 3 });
-        Game.creeps.SafeModeDefender1 = Object.assign(Object.create(Creep.prototype), {
-            memory: { role: "defender" }, room: { name: "DefRoom" },
-        });
+        d = mkDefenseRoom({ hostileRange: 1, hostileBody: [{ type: ATTACK }, { type: MOVE }] });
         defenseMod.checkSafeMode(d.room);
         assert(d.calls() === 0,
-            "checkSafeMode() doesn't fire when the spawn is healthy and a defender is alive, even under threat");
-        delete Game.creeps.SafeModeDefender1;
+            "checkSafeMode() does NOT fire for a weak invader against a healthy spawn, even with zero defenders (ROADMAP 0036 production bug fix)");
 
-        // hostile in range, spawn hp ratio below the configured threshold,
-        // even with a defender alive - real risk, fire
+        // a real lethal rush: 10 boosted ATTACK parts (XUH2O, x4 -> 1200
+        // dps) against a still-FULL-hp spawn. ticksToKill ~4.2, well under
+        // the threshold - must fire fast, before hp ever visibly drops.
         Game.time++;
-        d = mkDefenseRoom({ spawnHits: 30, hostileRange: 3 }); // 30% < default 0.5
-        Game.creeps.SafeModeDefender2 = Object.assign(Object.create(Creep.prototype), {
-            memory: { role: "defender" }, room: { name: "DefRoom" },
+        const heavyBody = [];
+        for (let i = 0; i < 10; i++) heavyBody.push({ type: ATTACK, boost: "XUH2O" });
+        heavyBody.push({ type: MOVE }, { type: MOVE });
+        d = mkDefenseRoom({ hostileRange: 1, hostileBody: heavyBody });
+        defenseMod.checkSafeMode(d.room);
+        assert(d.calls() === 1,
+            "checkSafeMode() fires fast against a boosted lethal rush even while the spawn is still at full hp");
+
+        // a moderate, unboosted attacker (3 ATTACK - 90 dps) but the spawn
+        // is already down to a sliver of hp from sustained damage - this is
+        // the "real sustained siege" case the old hp-ratio leg covered;
+        // ticksToKill (200/90 ~ 2.2) still catches it without that leg.
+        Game.time++;
+        d = mkDefenseRoom({
+            spawnHits: 200,
+            hostileRange: 1,
+            hostileBody: [{ type: ATTACK }, { type: ATTACK }, { type: ATTACK }, { type: MOVE }],
         });
         defenseMod.checkSafeMode(d.room);
         assert(d.calls() === 1,
-            "checkSafeMode() activates when the spawn's hp ratio drops at/below the threshold");
-        delete Game.creeps.SafeModeDefender2;
+            "checkSafeMode() fires once sustained damage has actually driven the spawn's current hp low");
 
-        // hostile in range, spawn healthy, but zero defenders alive - real
-        // risk the other way, fire
+        // same lethal rush as above, but the spawn sits on its own healthy
+        // rampart - attacks land on the rampart first (native mechanic), so
+        // effective hp is the rampart's ~300000, not the spawn's 5000.
+        // Must NOT fire: the spawn is in no real danger.
         Game.time++;
-        d = mkDefenseRoom({ spawnHits: 100, hostileRange: 1 }); // melee reach
+        d = mkDefenseRoom({ hostileRange: 1, hostileBody: heavyBody, rampartHits: 300000 });
         defenseMod.checkSafeMode(d.room);
-        assert(d.calls() === 1,
-            "checkSafeMode() activates when zero defenders are alive, even with a healthy spawn");
+        assert(d.calls() === 0,
+            "checkSafeMode() does not fire when a healthy own rampart on the spawn's tile absorbs the damage");
 
         // already active - never calls activateSafeMode again
         Game.time++;
-        d = mkDefenseRoom({ spawnHits: 10, hostileRange: 1, alreadyActive: true });
+        d = mkDefenseRoom({ hostileRange: 1, hostileBody: heavyBody, alreadyActive: true });
         defenseMod.checkSafeMode(d.room);
         assert(d.calls() === 0, "checkSafeMode() is a no-op once safe mode is already active");
 
         // activateSafeMode() erroring never throws, and is logged
         Game.time++;
-        d = mkDefenseRoom({ spawnHits: 10, hostileRange: 1 });
+        d = mkDefenseRoom({ hostileRange: 1, hostileBody: heavyBody });
         d.setResult(ERR_NOT_ENOUGH_RESOURCES);
         const logsBeforeSafeMode = logs.length;
         const origLogSafeMode = console.log;
@@ -3961,6 +4267,50 @@ delete Game.creeps.Sc2;
     assert(!threw, "remoteHauler.run does not throw on site" +
         (threw ? "\n      " + (threw.stack || threw) : ""));
 
+    // --- ROADMAP 0059: remoteHauler.pickDeliver's last-resort tower fallback
+    // -----------------------------------------------------------------------
+    // same class of bug as hauler.js's own dead-zone fallback: storage and
+    // spawn/extension both give it nothing to deliver to, but a tower back
+    // home still has room - top it off instead of idling home full.
+    function withMyStructuresLookup(pos, structures) {
+        const filtered = (opts) =>
+            opts && typeof opts.filter === "function"
+                ? structures.filter(opts.filter)
+                : structures.slice();
+        pos.findClosestByPath = (a, opts) =>
+            a === FIND_MY_STRUCTURES
+                ? RoomPosition.prototype._closest.call(pos, filtered(opts), {})
+                : RoomPosition.prototype.findClosestByPath.call(pos, a, opts);
+        pos.findClosestByRange = (a, opts) =>
+            a === FIND_MY_STRUCTURES
+                ? RoomPosition.prototype._closest.call(pos, filtered(opts), {})
+                : RoomPosition.prototype.findClosestByRange.call(pos, a, opts);
+        return pos;
+    }
+    {
+        const towerFallback = Object.assign(new OwnedStructure(), {
+            id: "rhtowerfallback", structureType: STRUCTURE_TOWER, my: true,
+            pos: new RoomPosition(20, 20, "W1N1"), room,
+            store: Object.assign(store(500, 1000), { getFreeCapacity: () => 500 }),
+        });
+        REG.rhtowerfallback = towerFallback;
+
+        room.storage = null;
+        const rhFallback = Object.assign(Object.create(Creep.prototype), {
+            id: "rhfallback", room,
+            pos: withMyStructuresLookup(new RoomPosition(20, 20, "W1N1"), [towerFallback]),
+            store: store(100, 100),
+            body: [{ type: CARRY }, { type: MOVE }],
+            memory: { role: "remoteHauler", home: "W1N1", targetRoom: "W1N2", job: "deliver" },
+            moveTo: () => OK, suicide: () => OK,
+        });
+        rhFallback.transfer = (t) => { rhFallback._to = t && t.id; return OK; };
+        remoteHauler.run(rhFallback);
+        assert(rhFallback._to === "rhtowerfallback",
+            "remoteHauler tops off a tower when storage and spawn/extension are both full " +
+                "(ROADMAP 0059, got " + rhFallback._to + ")");
+    }
+
     delete Memory.rooms.W1N1.remotes;
     // reset back to the bare state intel.js itself would leave an
     // unvisited neighbor in - later tests (the edge-road gate, further
@@ -4023,6 +4373,18 @@ delete Game.creeps.Sc2;
     assert(routeCostFor("Whostile", { blockHostiles: true }) === Infinity,
         "blockHostiles gives a known-hostile room an infinite (fully excluded) route cost");
 
+    // a blacklisted room (routing.js's own trap-avoidance, ROADMAP 0058 -
+    // separate from roles/scout.js's scoutBlacklistUntil) is excluded
+    // outright, even without blockHostiles and even for a room that isn't
+    // otherwise flagged hostile at all
+    Memory.rooms.Wblacklisted = { routeBlacklistUntil: Game.time + 100 };
+    assert(routeCostFor("Wblacklisted", {}) === Infinity,
+        "a blacklisted room is excluded outright, regardless of blockHostiles or hostile status");
+    Memory.rooms.Wblacklisted.routeBlacklistUntil = Game.time - 1;
+    assert(routeCostFor("Wblacklisted", {}) === 1 + 2,
+        "the blacklist expires - an old routeBlacklistUntil no longer excludes the room");
+    delete Memory.rooms.Wblacklisted;
+
     // findRoute() itself returns null when the engine can't find a route
     // under those constraints (a stand-in for "the only path crosses a
     // blocked room" - the default test-harness findRoute stub always
@@ -4035,6 +4397,258 @@ delete Game.creeps.Sc2;
         Game.map.findRoute = realFindRoute;
     }
     delete Memory.rooms.Whostile;
+
+    // moveToRoom() never runs a PathFinder.search of its own - a reachability
+    // pre-check (PathFinder.search once per room entered) was tried here and
+    // reverted: a scout cycling through several dead-end candidate rooms in
+    // a row (blacklisting its way out of a trap, picking a new target each
+    // tick) meant several fresh, uncached searches in a hurry, and that was
+    // enough in practice to drain the CPU bucket. moveToRoom is back to just
+    // findRoute() + the native moveTo, full stop.
+    {
+        const realSearch = PathFinder.search;
+        let searches = 0;
+        PathFinder.search = () => { searches++; return { path: [], incomplete: true }; };
+
+        const plainCreep = {
+            pos: new RoomPosition(25, 25, "W1N1"),
+            room: { name: "W1N1" },
+            memory: {},
+            moveTo: () => "moved",
+        };
+        const result = routing.moveToRoom(plainCreep, "W9N9", { range: 20 });
+        assert(result === "moved" && searches === 0,
+            "moveToRoom() never calls PathFinder.search - it's just findRoute() + the native moveTo");
+
+        PathFinder.search = realSearch;
+    }
+
+    // --- ROADMAP 0058: moveToRoom() catches a creep bouncing between the
+    // same two rooms on the way to ONE fixed destination (reserver's
+    // reserve/claim/contest, scout's sign/layout tasks - anything routed
+    // through this one function) and blacklists the trap room so the very
+    // next findRoute() call is forced to compute a genuinely different way
+    // around, instead of "wait and hope" or repeating the same dead end -----
+    {
+        const realFindRoute = Game.map.findRoute;
+        let lastCallback = null;
+        Game.map.findRoute = (from, to, o) => {
+            lastCallback = o.routeCallback;
+            return [{ exit: 1, room: to }];
+        };
+
+        const flapCreep = {
+            pos: new RoomPosition(25, 25, "W1N1"),
+            room: { name: "W1N1" },
+            memory: {},
+            moveTo: () => OK,
+        };
+        routing.moveToRoom(flapCreep, "W9N9", { range: 20 }); // A
+        flapCreep.room = { name: "W1N2" };
+        routing.moveToRoom(flapCreep, "W9N9", { range: 20 }); // A, B
+        flapCreep.room = { name: "W1N1" };
+        routing.moveToRoom(flapCreep, "W9N9", { range: 20 }); // A, B, A
+        assert(!routing.isBlacklisted("W1N2"),
+            "A, B, A alone doesn't blacklist anything yet - could just be normal backtracking");
+
+        flapCreep.room = { name: "W1N2" };
+        routing.moveToRoom(flapCreep, "W9N9", { range: 20 }); // A, B, A, B - flapping
+        assert(routing.isBlacklisted("W1N2"),
+            "A, B, A, B while heading to one fixed destination blacklists the trap room (W1N2)");
+        assert(flapCreep.memory._routeTrail.length === 0,
+            "the trail resets once the flap is caught, so it doesn't immediately re-trigger");
+        assert(lastCallback("W1N2") === Infinity,
+            "the same tick's findRoute() call already excludes the freshly blacklisted room");
+
+        delete Memory.rooms.W1N2.routeBlacklistUntil;
+        Game.map.findRoute = realFindRoute;
+    }
+
+    // --- ROADMAP 0060: a creep confirmed live sitting still on a room's edge
+    // coordinate gets shoved off it by the engine without a fresh move
+    // queued - which can happen before the next tick's script even reads its
+    // position, so isRouteFlapping()'s room-name trail above can miss it
+    // completely (no room-name change to ever catch). isStuckAtBorder()
+    // catches it by position instead; nudgeAwayFromBorder() steps the creep
+    // off the edge directly rather than leaving it to another moveTo() call
+    // that might just propose the same doomed step again ------------------
+    {
+        const centerCreep = { pos: new RoomPosition(25, 25, "W1N1"), room: { name: "W1N1" }, memory: {} };
+        assert(routing.isStuckAtBorder(centerCreep, "_k") === false,
+            "the room center is never a border stall");
+
+        const edgeCreep = { pos: new RoomPosition(49, 10, "W1N1"), room: { name: "W1N1" }, memory: {} };
+        assert(routing.isStuckAtBorder(edgeCreep, "_k") === false,
+            "first tick on the border isn't a stall yet");
+        assert(routing.isStuckAtBorder(edgeCreep, "_k") === false,
+            "second tick unmoved in the exact same spot still isn't a stall yet");
+        assert(routing.isStuckAtBorder(edgeCreep, "_k") === true,
+            "third tick unmoved on the border is a stall");
+
+        edgeCreep.pos = new RoomPosition(48, 10, "W1N1");
+        assert(routing.isStuckAtBorder(edgeCreep, "_k") === false,
+            "moving off the border tile resets the stall count immediately");
+
+        // independent key prefixes never share state on the same creep - a
+        // scout doing both a fixed-destination task (routing's own
+        // tracking) and free exploration (its own tracking) needs both to
+        // work independently without clobbering each other
+        const dualCreep = { pos: new RoomPosition(0, 5, "W1N1"), room: { name: "W1N1" }, memory: {} };
+        routing.isStuckAtBorder(dualCreep, "_routeBorder");
+        routing.isStuckAtBorder(dualCreep, "_routeBorder");
+        assert(routing.isStuckAtBorder(dualCreep, "_routeBorder") === true,
+            "the first key prefix reaches a stall after 3 ticks");
+        assert(routing.isStuckAtBorder(dualCreep, "_exploreBorder") === false,
+            "a different key prefix on the same creep/tick starts its own count from zero");
+
+        const nudgeCreep = {
+            pos: new RoomPosition(0, 25, "W1N1"), room: { name: "W1N1" }, moveDir: null,
+            move: function (d) { this.moveDir = d; },
+        };
+        assert(routing.nudgeAwayFromBorder(nudgeCreep) === true,
+            "a creep on the edge gets nudged");
+        assert(nudgeCreep.moveDir !== null, "nudging actually queues a move");
+
+        const noNudgeCreep = {
+            pos: new RoomPosition(25, 25, "W1N1"),
+            move: () => { throw new Error("should not move"); },
+        };
+        assert(routing.nudgeAwayFromBorder(noNudgeCreep) === false,
+            "a creep nowhere near the edge has nothing to nudge away from, and move() is never called");
+    }
+
+    // borderNeighborRoom(): which neighbor an edge actually leads to, read
+    // straight from Memory.rooms[x].exits (same shape roles/scout.js's own
+    // exploration reads) - all 4 edges, plus no-intel-yet falling back to
+    // null rather than guessing
+    {
+        Memory.rooms.WBorderExits = {
+            exits: { 1: "WNorth", 3: "WEast", 5: "WSouth", 7: "WWest" },
+        };
+        const at = (x, y) => ({
+            pos: new RoomPosition(x, y, "WBorderExits"),
+            room: { name: "WBorderExits" },
+        });
+        assert(routing.borderNeighborRoom(at(25, 0)) === "WNorth",
+            "the top edge leads to the exits' FIND_EXIT_TOP room");
+        assert(routing.borderNeighborRoom(at(49, 25)) === "WEast",
+            "the right edge leads to the exits' FIND_EXIT_RIGHT room");
+        assert(routing.borderNeighborRoom(at(25, 49)) === "WSouth",
+            "the bottom edge leads to the exits' FIND_EXIT_BOTTOM room");
+        assert(routing.borderNeighborRoom(at(0, 25)) === "WWest",
+            "the left edge leads to the exits' FIND_EXIT_LEFT room");
+        assert(routing.borderNeighborRoom(at(25, 25)) === null,
+            "the room center isn't any edge, so there's no neighbor to name");
+        delete Memory.rooms.WBorderExits;
+
+        assert(routing.borderNeighborRoom({
+            pos: new RoomPosition(49, 25, "WNoIntelYet"),
+            room: { name: "WNoIntelYet" },
+        }) === null,
+            "no exits intel for the room yet - null, not a guess");
+    }
+
+    // moveToRoom() itself: a creep parked unmoving on the border for 3 ticks
+    // running gets blacklisted out of that room and nudged inward directly,
+    // instead of another moveTo() call that could just propose the same
+    // doomed step again
+    {
+        // no exits intel for this room - borderNeighborRoom() can't name the
+        // actual trap, so the fallback blacklists the room the creep is
+        // standing in (better than blacklisting nothing at all)
+        Memory.rooms.WBorderStall = {};
+        let moveCalls = 0;
+        const parkedCreep = {
+            pos: new RoomPosition(49, 25, "WBorderStall"),
+            room: { name: "WBorderStall" },
+            memory: {},
+            moveTo: () => { moveCalls++; return OK; },
+            move: () => { moveCalls++; return OK; },
+        };
+        routing.moveToRoom(parkedCreep, "W9N9", { range: 20 }); // tick 1
+        routing.moveToRoom(parkedCreep, "W9N9", { range: 20 }); // tick 2
+        assert(!routing.isBlacklisted("WBorderStall"),
+            "sitting on the border for only 2 ticks isn't a stall yet");
+
+        moveCalls = 0;
+        routing.moveToRoom(parkedCreep, "W9N9", { range: 20 }); // tick 3 - stall
+        assert(routing.isBlacklisted("WBorderStall"),
+            "parked unmoving on the border for 3 ticks, with no exits intel, falls back to " +
+                "blacklisting the room it's stuck in");
+        assert(moveCalls === 1,
+            "a stuck-at-border creep gets one direct move() nudge that tick, not a second moveTo() call");
+        delete Memory.rooms.WBorderStall;
+
+        // WITH exits intel, the actual neighbor (the real trap) is
+        // blacklisted instead of the room the creep is still standing in -
+        // routeCostCallback always allows the creep's own current room no
+        // matter its blacklist status, so blacklisting THAT would leave the
+        // very next findRoute() call free to propose the same crossing again
+        Memory.rooms.WBorderStall2 = { exits: { 3: "WBorderTrap" } };
+        let moveCalls2 = 0;
+        const parkedCreep2 = {
+            pos: new RoomPosition(49, 25, "WBorderStall2"),
+            room: { name: "WBorderStall2" },
+            memory: {},
+            moveTo: () => { moveCalls2++; return OK; },
+            move: () => { moveCalls2++; return OK; },
+        };
+        routing.moveToRoom(parkedCreep2, "WBorderTrap", { range: 20 });
+        routing.moveToRoom(parkedCreep2, "WBorderTrap", { range: 20 });
+        routing.moveToRoom(parkedCreep2, "WBorderTrap", { range: 20 }); // stall
+        assert(routing.isBlacklisted("WBorderTrap") && !routing.isBlacklisted("WBorderStall2"),
+            "with exits intel available, the actual neighbor room is blacklisted, not the " +
+                "room the creep is still standing in");
+        delete Memory.rooms.WBorderStall2;
+        delete Memory.rooms.WBorderTrap;
+    }
+}
+
+// --- scout: room-flap guard (the cheap replacement for the reverted
+// PathFinder-based reachability check above) - a sealed-off target room
+// makes the native moveTo walk the creep to the border and back forever;
+// isFlapping() catches that the same way utils/move.js's m.stuck and
+// utils/squad.js's stuckTicks catch their own stalls: purely reactive
+// tick/position bookkeeping, no pathfinding call of any kind -------------
+{
+    const scoutMod = require(path.join(PROJECT, "src/roles/scout"));
+    const flapCreep = { room: { name: "W1N1" }, memory: {} };
+
+    assert(scoutMod.isFlapping(flapCreep) === false,
+        "a single room is never flapping");
+
+    flapCreep.room = { name: "W1N2" };
+    assert(scoutMod.isFlapping(flapCreep) === false,
+        "two different rooms in a row (A, B) isn't flapping yet - could just be normal travel");
+
+    flapCreep.room = { name: "W1N1" };
+    assert(scoutMod.isFlapping(flapCreep) === false,
+        "A, B, A isn't flapping yet either - needs the repeat to confirm it's not just backtracking once");
+
+    flapCreep.room = { name: "W1N2" };
+    assert(scoutMod.isFlapping(flapCreep) === true,
+        "A, B, A, B - bouncing between exactly two rooms with no net progress - is flapping");
+
+    // reaching a genuinely new third room clears it - this was real progress,
+    // not a bounce
+    const progressingCreep = { room: { name: "W1N1" }, memory: {} };
+    scoutMod.isFlapping(progressingCreep);
+    progressingCreep.room = { name: "W1N2" };
+    scoutMod.isFlapping(progressingCreep);
+    progressingCreep.room = { name: "W2N1" };
+    assert(scoutMod.isFlapping(progressingCreep) === false,
+        "reaching a third distinct room is real progress, not flapping");
+
+    // staying in the same room tick after tick (not moving at all) never
+    // flags as flapping either - the trail only grows on an actual room
+    // change, so this is cheap: no bookkeeping work at all while parked
+    const parkedCreep = { room: { name: "W1N1" }, memory: {} };
+    for (let i = 0; i < 6; i++) {
+        assert(scoutMod.isFlapping(parkedCreep) === false,
+            "sitting in one room, tick after tick, is never flapping");
+    }
+    assert(parkedCreep.memory._roomTrail.length === 1,
+        "the trail only records actual room changes, not every tick spent parked");
 }
 
 // --- planLayout(): scout dispatch + architect preview mode for a room we
@@ -4384,6 +4998,89 @@ delete Game.creeps.Sc2;
     delete Game.structures.obs1;
     delete Memory.layoutRequests;
     delete Memory.signQueue.W1N1;
+}
+
+// --- ROADMAP 0056: with 2+ observers, the whole empire still only observes
+// ONE room per tick total - chosen across every room any observer can
+// reach, not one room per observer. Two observers far enough apart that
+// their OBSERVER_RANGE squares never overlap (E60N60 / E90N60), so a room
+// only one of them can reach still proves the other is being consulted. ---
+{
+    const observerLogic = require(path.join(PROJECT, "src/structures/observer"));
+    const now = Game.time;
+
+    let observed = null;
+    let observedBy = null;
+    const obsX = Object.assign(new OwnedStructure(), {
+        id: "obsX", my: true, structureType: STRUCTURE_OBSERVER,
+        room: { name: "E60N60" },
+        observeRoom: (rn) => { observed = rn; observedBy = "X"; return OK; },
+    });
+    const obsY = Object.assign(new OwnedStructure(), {
+        id: "obsY", my: true, structureType: STRUCTURE_OBSERVER,
+        room: { name: "E90N60" },
+        observeRoom: (rn) => { observed = rn; observedBy = "Y"; return OK; },
+    });
+    Game.structures.obsX = obsX;
+    Game.structures.obsY = obsY;
+
+    const [oxX, oxY] = observerLogic.roomNameToXY("E60N60");
+    const [oyX, oyY] = observerLogic.roomNameToXY("E90N60");
+    const farRoom = observerLogic.xyToRoomName(oyX + 5, oyY); // in obsY's range only
+
+    // --- a layout request only obsY can reach is still served this tick,
+    // even though obsX (which can't reach it) is the one that runs first --
+    Memory.layoutRequests = { [farRoom]: true };
+    observed = null;
+    observedBy = null;
+    observerLogic.run(obsX);
+    assert(observed === farRoom && observedBy === "Y",
+        "a layout request only one observer can reach is still served the same tick, even when a different observer runs first");
+
+    // --- with the tick's one observation already spent, the other
+    // observer's run() this same tick is a no-op ------------------------
+    observed = null;
+    observerLogic.run(obsY);
+    assert(observed === null,
+        "a second observer's run() is a no-op once another observer already acted this tick");
+
+    // --- next tick, the guard resets and a fresh decision is made -------
+    Game.time = now + 1;
+    observed = null;
+    observedBy = null;
+    observerLogic.run(obsY);
+    assert(observed === farRoom && observedBy === "Y",
+        "the per-tick observation guard resets on the next tick");
+    delete Memory.layoutRequests;
+
+    // --- idle exploration considers the union of both observers' ranges -
+    // fill both squares so the never-visited shortcut can't short-circuit
+    // the comparison, then make one room deep in obsY's square by far the
+    // stalest - it must win even though run() is called on obsX ----------
+    Game.time = now + 2;
+    for (let dx = -10; dx <= 10; dx++) {
+        for (let dy = -10; dy <= 10; dy++) {
+            Memory.rooms[observerLogic.xyToRoomName(oxX + dx, oxY + dy)] = { lastVisit: Game.time - 100 };
+            Memory.rooms[observerLogic.xyToRoomName(oyX + dx, oyY + dy)] = { lastVisit: Game.time - 100 };
+        }
+    }
+    const unionTarget = observerLogic.xyToRoomName(oyX + 3, oyY - 4);
+    Memory.rooms[unionTarget] = { lastVisit: Game.time - 100000 };
+
+    observed = null;
+    observedBy = null;
+    observerLogic.run(obsX);
+    assert(observed === unionTarget && observedBy === "Y",
+        "idle exploration with two observers picks the best room across the union of both ranges");
+
+    for (let dx = -10; dx <= 10; dx++) {
+        for (let dy = -10; dy <= 10; dy++) {
+            delete Memory.rooms[observerLogic.xyToRoomName(oxX + dx, oxY + dy)];
+            delete Memory.rooms[observerLogic.xyToRoomName(oyX + dx, oyY + dy)];
+        }
+    }
+    delete Game.structures.obsX;
+    delete Game.structures.obsY;
 }
 
 // --- determinism: replanning from the same starting state twice gives the
@@ -5127,6 +5824,42 @@ delete Game.creeps.Sc2;
 
     Game.cpu.bucket = 10000; // restore the shared default
     delete Game.cpu.generatePixel;
+
+    // --- console: profile(ticks) enables itself, then turns itself back off
+    const mainForProfiler = require(path.join(PROJECT, "src/main"));
+
+    delete Memory.settings;
+    global.profile(3);
+    assert(Memory.settings.profiler === true,
+        "profile(ticks) turns Memory.settings.profiler on");
+    assert(Memory.profiler && Memory.profiler.type === "profile",
+        "profile(ticks) writes a profile-type session to Memory.profiler");
+    const disableTick = Memory.profiler.disableTick;
+    assert(disableTick === Game.time + 3,
+        "profile(ticks) schedules disableTick 3 ticks ahead of the call");
+
+    const logsBefore = logs.length;
+    console.log = (...a) => { logs.push(a.join(" ")); };
+    mainForProfiler.loop(); // first tick after the call: wraps prototypes
+    const profilerBuilt = Game.profiler && typeof Game.profiler.profile === "function";
+    Game.time++;
+
+    // run through the disableTick itself (screeps-profiler prints its report
+    // there), plus one more tick for maybeAutoDisableProfiler() to notice the
+    // window closed and flip the setting back off
+    while (Game.time <= disableTick + 1) {
+        mainForProfiler.loop();
+        Game.time++;
+    }
+    console.log = origLog;
+
+    assert(profilerBuilt, "the tick after profile() call builds Game.profiler");
+    assert(logs.slice(logsBefore).some((l) => l.indexOf("calls") !== -1 && l.indexOf("function") !== -1),
+        "profile(ticks) prints a calls/time/avg report on the disableTick");
+    assert(Memory.settings.profiler === false,
+        "profile(ticks) turns Memory.settings.profiler back off once its window closes");
+    assert(Memory.profiler === null,
+        "profile(ticks) clears Memory.profiler once its window closes");
 }
 
 // --- ROADMAP 0046: contestRoom() - siege an already-claimed/reserved room
@@ -5525,6 +6258,34 @@ function mineralStore(resources, freeCap) {
     delete Memory.rooms.PickJobRoom;
 }
 
+// --- hauler.spawnsAndExtensionsFull() gates the mineral-job cascade ------
+// a hauler must never chase mineral/lab/factory errands while a spawn or
+// extension is still hungry for energy (that's this role's actual job).
+{
+    const gateRoom = { name: "GateRoom" };
+    const gateSpawn = {
+        structureType: STRUCTURE_SPAWN, store: { getFreeCapacity: () => 0 },
+    };
+    const gateExt = {
+        structureType: STRUCTURE_EXTENSION, store: { getFreeCapacity: () => 0 },
+    };
+    gateRoom.find = (type) =>
+        type === FIND_MY_STRUCTURES ? [gateSpawn, gateExt] : [];
+
+    Game.time++; // bust roomCache's per-tick memoisation
+    assert(
+        hauler.spawnsAndExtensionsFull(gateRoom) === true,
+        "spawnsAndExtensionsFull() is true once spawn and extensions are both full"
+    );
+
+    gateExt.store.getFreeCapacity = () => 50;
+    Game.time++;
+    assert(
+        hauler.spawnsAndExtensionsFull(gateRoom) === false,
+        "spawnsAndExtensionsFull() is false while an extension still wants energy"
+    );
+}
+
 // --- Fase 2: setLabReaction()/cancelLabReaction() -----------------------
 {
     const refiningMod = require(path.join(PROJECT, "src/rooms/refining"));
@@ -5752,6 +6513,265 @@ function mineralStore(resources, freeCap) {
     assert(processed === false, "powerSpawn.enabled=false disables processPower() even with Power stored");
     delete global.Memory.settings.powerSpawn;
     void configMod;
+}
+
+// --- ROADMAP 0054 follow-up (usuário reportou em produção): the upgrader
+// must not drain room-wide storage/container energy meant for spawn/ext
+// just because reservations.available() found no OTHER creep contending
+// for that exact pile THIS tick - a source container refilling after the
+// room ran dry, with no hauler currently also targeting it, used to be
+// fair game for the upgrader even with the room starving and the
+// controller nowhere near downgrading (real report: RCL8, ticksToDowngrade
+// 194864 out of a 200000 ceiling - plenty of buffer). Now it only touches
+// that pool once the room can spare it (economyStable) or the controller
+// is genuinely close to downgrading (resourceTiers.controllerCritical) --
+{
+    const upgraderMod = require(path.join(PROJECT, "src/roles/upgrader"));
+
+    function upFind(structures) {
+        return (type, opts) => {
+            let list = type === FIND_STRUCTURES ? structures : [];
+            if (opts && typeof opts.filter === "function") list = list.filter(opts.filter);
+            return list;
+        };
+    }
+
+    function mkUpController(ticksToDowngrade) {
+        return Object.assign(new RoomObject(), {
+            id: "up-ctrl", my: true, level: 8, ticksToDowngrade,
+            pos: new RoomPosition(25, 25, "UpTiersRoom"),
+        });
+    }
+
+    function mkUpContainer() {
+        return Object.assign(new StructureContainer(), {
+            id: "up-cont", structureType: STRUCTURE_CONTAINER,
+            pos: new RoomPosition(25, 24, "UpTiersRoom"),
+            store: store(2000, 2000),
+        });
+    }
+
+    function mkUpCreep(room) {
+        return Object.assign(new Creep(), {
+            id: "up-creep", name: "UpTiers1",
+            pos: new RoomPosition(20, 20, "UpTiersRoom"), room,
+            memory: { role: "upgrader" },
+            store: store(0, 50),
+            harvest: noop, upgradeController: noop, build: noop, repair: noop,
+            transfer: noop, withdraw: noop, pickup: noop, move: noop,
+            moveTo: noop, moveByPath: noop, drop: noop,
+            rangedAttack: noop, rangedMassAttack: noop, heal: noop,
+            rangedHeal: noop, attack: noop,
+        });
+    }
+
+    function runUpScenario({ ticksToDowngrade, energyAvailable, energyCapacityAvailable }) {
+        const container = mkUpContainer();
+        REG[container.id] = container;
+        const upRoom = Object.assign(new Room("UpTiersRoom"), {
+            controller: mkUpController(ticksToDowngrade), storage: null,
+            energyAvailable, energyCapacityAvailable,
+            find: upFind([container]),
+        });
+        const creep = mkUpCreep(upRoom);
+        REG[creep.id] = creep;
+        withFindLookup(creep.pos, { [FIND_STRUCTURES]: [container] });
+
+        let threw = null;
+        try { upgraderMod.run(creep); } catch (e) { threw = e; }
+        assert(!threw, "upgrader.run() never throws" +
+            (threw ? "\n      " + (threw.stack || threw) : ""));
+        return creep;
+    }
+
+    // real report: RCL8, ticksToDowngrade 194864 (out of 200000 - plenty of
+    // buffer, nowhere near critical), room starved (spawn/ext hungry)
+    {
+        const creep = runUpScenario({
+            ticksToDowngrade: 194864, energyAvailable: 0, energyCapacityAvailable: 550,
+        });
+        assert(!creep.memory.stack,
+            "room not stable (spawn/ext hungry) and controller not critical: the " +
+                "upgrader leaves the container alone instead of draining it (got " +
+                JSON.stringify(creep.memory.stack) + ")");
+    }
+
+    // room stable (spawn/ext topped off) - the container is fair game again,
+    // regardless of how safe the controller's downgrade timer is
+    {
+        const creep = runUpScenario({
+            ticksToDowngrade: 194864, energyAvailable: 550, energyCapacityAvailable: 550,
+        });
+        assert(
+            creep.memory.stack && creep.memory.stack[0] &&
+                creep.memory.stack[0][0] === "GetEnergy" &&
+                creep.memory.stack[0][1] === "up-cont",
+            "room stable: the upgrader draws from the container normally (got " +
+                JSON.stringify(creep.memory.stack) + ")"
+        );
+    }
+
+    // room NOT stable, but the controller is genuinely close to downgrading
+    // (below logistics.controllerCriticalDowngradeRatio, 10%, of
+    // CONTROLLER_DOWNGRADE[8]=200000) - the emergency overrides the reserve
+    {
+        const creep = runUpScenario({
+            ticksToDowngrade: 10000, energyAvailable: 0, energyCapacityAvailable: 550,
+        });
+        assert(
+            creep.memory.stack && creep.memory.stack[0] &&
+                creep.memory.stack[0][0] === "GetEnergy" &&
+                creep.memory.stack[0][1] === "up-cont",
+            "controller genuinely close to downgrading: the upgrader draws from the " +
+                "container even though the room isn't stable (got " +
+                JSON.stringify(creep.memory.stack) + ")"
+        );
+    }
+}
+
+// --- rooms/spawning.js under attack must consider BOTH shapes of defense
+// rooms/needs.js can want, not just "defender" (usuário reportou em
+// produção: sala com invasor não spawnava nada). Past
+// defender.pairEnergyThreshold (500 - trivially reached at RCL2 with a
+// handful of extensions) rooms/needs.js zeroes `defender` and wants
+// `defenderStriker`/`defenderMedic` instead (ROADMAP 0032 D2), but the
+// under-attack role list here only ever checked "defender"/"bootstrap" -
+// once a room crossed that threshold, NOTHING got queued for defense at
+// all -----------------------------------------------------------------
+{
+    const spawnCreeps = require(path.join(PROJECT, "src/rooms/spawning"));
+    Memory.rooms.AtkRoom = { defenseActive: true, enemies: 1 };
+
+    const atkController = Object.assign(new RoomObject(), {
+        id: "atk-ctrl", my: true, level: 2, ticksToDowngrade: 20000,
+        pos: new RoomPosition(25, 25, "AtkRoom"),
+    });
+
+    function atkFind(lists) {
+        return (type, opts) => {
+            let list = lists[type] || [];
+            if (opts && typeof opts.filter === "function") list = list.filter(opts.filter);
+            return list;
+        };
+    }
+
+    const atkSpawnCalls = [];
+    const atkSpawn = Object.assign(new Spawn(), {
+        id: "atk-spawn1", name: "AtkSpawn1", my: true, spawning: null,
+        pos: new RoomPosition(25, 26, "AtkRoom"),
+        spawnCreep: (body, name, opts) => {
+            if (!opts || !opts.dryRun) {
+                atkSpawnCalls.push({ name, role: opts && opts.memory && opts.memory.role });
+            }
+            return OK;
+        },
+    });
+
+    const atkRoom = Object.assign(new Room("AtkRoom"), {
+        controller: atkController, storage: null,
+        // RCL2 with a handful of extensions crosses defender.pairEnergyThreshold
+        // (500) easily - this is exactly the scenario that hit the bug
+        energyAvailable: 550, energyCapacityAvailable: 550,
+        find: atkFind({ [FIND_MY_SPAWNS]: [atkSpawn] }),
+    });
+
+    let threwAtk = null;
+    try { spawnCreeps(atkRoom); } catch (e) { threwAtk = e; }
+    assert(!threwAtk, "spawnCreeps() under attack in pair mode never throws" +
+        (threwAtk ? "\n      " + (threwAtk.stack || threwAtk) : ""));
+    assert(
+        atkSpawnCalls.some((c) => c.role === "defenderStriker" || c.role === "defenderMedic"),
+        "under attack past defender.pairEnergyThreshold, the room queues a " +
+            "defenderStriker/defenderMedic instead of nothing (real bug this fixes, got: " +
+            atkSpawnCalls.map((c) => c.role).join(", ") + ")"
+    );
+    assert(
+        atkSpawnCalls.every((c) =>
+            ["defender", "defenderStriker", "defenderMedic", "bootstrap"].includes(c.role)
+        ),
+        "under attack only defense-related roles (+ bootstrap) are ever queued (got: " +
+            atkSpawnCalls.map((c) => c.role).join(", ") + ")"
+    );
+}
+
+// --- rooms/spawning.js: pioneer only queues once every other role's own
+// minimum is satisfied (usuário pediu: prioridade de pioneer só depois do
+// mínimo dos outros creeps) - pioneer.js used to sit at its declared
+// position in roles/index.js (between hauler and upgrader), so its request
+// could out-rank upgrader/builder/reserver/etc whenever the room could only
+// afford one body this tick. It now shares the same "!requests.length"
+// luxury gate as scout/raider, checked last -----------------------------
+{
+    const spawnCreeps = require(path.join(PROJECT, "src/rooms/spawning"));
+    const roles = require(path.join(PROJECT, "src/roles"));
+    delete Memory.pendingSquad;
+
+    const savedRoleFns = {};
+    for (const name of Object.keys(roles)) {
+        savedRoleFns[name] = { spawn: roles[name].spawn, spawnData: roles[name].spawnData };
+    }
+    function stubAllRolesFalse() {
+        for (const name of Object.keys(roles)) {
+            roles[name].spawn = () => false;
+        }
+    }
+    function restoreRoleFns() {
+        for (const name of Object.keys(roles)) {
+            roles[name].spawn = savedRoleFns[name].spawn;
+            roles[name].spawnData = savedRoleFns[name].spawnData;
+        }
+    }
+
+    function mkPrioRoom(roomName) {
+        Memory.rooms[roomName] = {};
+        const calls = [];
+        const spawn = Object.assign(new Spawn(), {
+            id: roomName + "_spawn1", name: roomName + "Spawn1", my: true, spawning: null,
+            pos: new RoomPosition(25, 26, roomName),
+            spawnCreep: (body, name, opts) => {
+                if (!opts || !opts.dryRun) calls.push(opts && opts.memory && opts.memory.role);
+                return OK;
+            },
+        });
+        const room = Object.assign(new Room(roomName), {
+            controller: { my: true }, storage: null,
+            energyAvailable: 300, energyCapacityAvailable: 300,
+            find: (type) => (type === FIND_MY_SPAWNS ? [spawn] : []),
+        });
+        return { room, calls };
+    }
+
+    // Case A: upgrader (an ordinary, non-luxury role) still wants a creep -
+    // pioneer must NOT even be asked, let alone win the spawn.
+    stubAllRolesFalse();
+    roles.upgrader.spawn = () => true;
+    roles.upgrader.spawnData = () => ({ name: "PrioUp1", body: [WORK], memory: { role: "upgrader" } });
+    roles.pioneer.spawn = () => {
+        throw new Error("pioneer.spawn() must not be called while upgrader still wants one");
+    };
+    const caseA = mkPrioRoom("PrioRoomA");
+    let threwA = null;
+    try { spawnCreeps(caseA.room); } catch (e) { threwA = e; }
+    assert(!threwA, "pioneer.spawn() was called before upgrader's own minimum was satisfied" +
+        (threwA ? ": " + threwA.message : ""));
+    assert(caseA.calls.indexOf("upgrader") !== -1 && caseA.calls.indexOf("pioneer") === -1,
+        "with upgrader still unsatisfied, the room spawns the upgrader, never the pioneer (got: " +
+            caseA.calls.join(", ") + ")");
+
+    // Case B: every ordinary role is satisfied (spawn() -> false) but
+    // pioneer still wants one - now it's the pioneer's turn.
+    stubAllRolesFalse();
+    roles.pioneer.spawn = () => true;
+    roles.pioneer.spawnData = () => ({ name: "PrioPio1", body: [WORK, CARRY, MOVE], memory: { role: "pioneer" } });
+    const caseB = mkPrioRoom("PrioRoomB");
+    spawnCreeps(caseB.room);
+    assert(caseB.calls.indexOf("pioneer") !== -1,
+        "once every other role's minimum is satisfied, the pioneer is free to spawn (got: " +
+            caseB.calls.join(", ") + ")");
+
+    restoreRoleFns();
+    delete Memory.rooms.PrioRoomA;
+    delete Memory.rooms.PrioRoomB;
 }
 
 // --- ROADMAP 0052: notifyWhenAttacked(false) for routine-exposure roles --

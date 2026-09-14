@@ -7,6 +7,7 @@ const { takeCover } = require("../utils/combat");
 const { roomNeeds } = require("../rooms/needs");
 const reservations = require("../utils/reservations");
 const config = require("../utils/config");
+const resourceTiers = require("../utils/resourceTiers");
 const names = require("../utils/names");
 
 // Containers sitting next to an energy source - the piles a hauler drains.
@@ -17,54 +18,82 @@ function sourceContainers(room) {
     );
 }
 
-// A tower pickDeliver below would actually accept energy for right now:
-// either at/below its reserve (tier 1) or short of hauler.toppingOffThreshold
-// (tier 4). Reserve (<=50%) is always inside "short of 5%", so the union of
-// the two tiers collapses to the single, wider one - a tower has to be
-// missing MORE than the topping-off slice to count, not just any amount.
-// Matching this exactly (instead of any freeCapacity>0) matters: a tower
-// sitting in the dead zone between the two tiers (say 96-99% full) has some
-// free capacity but qualifies for NEITHER pickDeliver tier - counting it as
-// "essential" drained storage for a delivery that could never land there,
-// and the energy came right back to storage on the general fallback tier.
-// Towers spend a lot of their time in that near-full band (topped off
-// periodically, draining slowly), so this wasn't a rare race - it was a
-// routine, repeatable storage -> storage round trip (ROADMAP 0043
-// follow-up, real bug this fixes).
-function towerDeliverable(s) {
+// ROADMAP 0054: the tower's 3-tier delivery bands, as a fraction of its own
+// capacity - critical/satisfactory shift up together under defenseActive
+// (a tower nearly full going into a fight is worth more than the same
+// energy idle in storage).
+function towerCriticalRatio(room) {
+    const roomMem = Memory.rooms[room.name] || {};
+    return roomMem.defenseActive
+        ? config.get("tower.criticalRatioUnderAttack", 0.8)
+        : config.get("tower.criticalRatio", 0.5);
+}
+
+function towerSatisfactoryRatio(room) {
+    const roomMem = Memory.rooms[room.name] || {};
+    return roomMem.defenseActive
+        ? config.get("tower.satisfactoryRatioUnderAttack", 0.95)
+        : config.get("tower.satisfactoryRatio", 0.8);
+}
+
+// Below criticalRatio: the room's real emergency tier, resolved with
+// whatever energy is available - never gated by the reserve (mirrors
+// essentialConsumer's spawn/extension case, same urgency).
+function isTowerCritical(s, room) {
     return (
         s.structureType === STRUCTURE_TOWER &&
         !isSourceDefenseTower(s) &&
+        s.store[RESOURCE_ENERGY] <
+            s.store.getCapacity(RESOURCE_ENERGY) * towerCriticalRatio(room)
+    );
+}
+
+// At/above satisfactoryRatio (the ideal band): still worth topping off
+// further, but only up to hauler.toppingOffThreshold free capacity - a
+// tower nearer to full than that isn't worth another trip. Between
+// criticalRatio and satisfactoryRatio (satisfactory) a tower matches
+// NEITHER this nor isTowerCritical above - not urgent, not worth topping,
+// simply left alone (ROADMAP 0054 - used to be a single reserve threshold
+// with "anything above it is incondicionally toppable forever").
+function towerDeliverable(s, room) {
+    return (
+        s.structureType === STRUCTURE_TOWER &&
+        !isSourceDefenseTower(s) &&
+        s.store[RESOURCE_ENERGY] >=
+            s.store.getCapacity(RESOURCE_ENERGY) * towerSatisfactoryRatio(room) &&
         s.store.getFreeCapacity(RESOURCE_ENERGY) >
             s.store.getCapacity(RESOURCE_ENERGY) *
                 config.get("hauler.toppingOffThreshold", 0.05)
     );
 }
 
-// Spawn / extension / tower missing energy - keeping the room able to spawn
-// and defend itself always outranks the storage reserve floor. This is the
-// original (pre-floor) rule, deliberately kept unconditional: a young room's
-// storage often never even reaches a modest floor, and gating the room's own
-// creep production on that would starve it over a buffer nobody asked to
-// protect that hard (ROADMAP 0043 follow-up - the floor below blocked this
-// use case by accident when it was introduced).
+// Spawn / extension / a CRITICAL tower missing energy - keeping the room
+// able to spawn and defend itself always outranks the storage reserve.
+// This is the original (pre-floor) rule, deliberately kept unconditional: a
+// young room's storage often never even reaches a modest floor, and gating
+// the room's own creep production on that would starve it over a buffer
+// nobody asked to protect that hard (ROADMAP 0043 follow-up - the floor
+// below blocked this use case by accident when it was introduced). A
+// satisfactory or ideal-band tower is NOT essential (ROADMAP 0054) - see
+// toppableTower below for the ideal-band case.
 function essentialConsumer(creep) {
     return creep.pos.findClosestByRange(roomCache.myStructures(creep.room), {
         filter: (s) =>
             ((s.structureType === STRUCTURE_SPAWN ||
                 s.structureType === STRUCTURE_EXTENSION) &&
                 s.store.getFreeCapacity(RESOURCE_ENERGY) > 0) ||
-            towerDeliverable(s),
+            isTowerCritical(s, creep.room),
     });
 }
 
 // Lab / factory / power spawn / controller container - genuinely optional,
-// so unlike essentialConsumer above these DO respect the storage reserve
-// floor (storageAboveFloor below) before pulling. Factory/power spawn added
-// alongside lab (ROADMAP 0051) - same reasoning, pure RESOURCE_ENERGY need,
-// no different from a lab's. Non-energy resources for these three (mineral
-// reagents/components, Power) are a separate concern - see pickMineralJob()
-// below, never mixed into this energy-only cascade.
+// so unlike essentialConsumer above these DO respect the room's reserve
+// (resourceTiers.aboveReserve, checked by the caller) before pulling.
+// Factory/power spawn added alongside lab (ROADMAP 0051) - same reasoning,
+// pure RESOURCE_ENERGY need, no different from a lab's. Non-energy
+// resources for these three (mineral reagents/components, Power) are a
+// separate concern - see pickMineralJob() below, never mixed into this
+// energy-only cascade.
 function optionalConsumer(creep) {
     const lab = creep.pos.findClosestByRange(roomCache.myStructures(creep.room), {
         filter: (s) =>
@@ -83,19 +112,13 @@ function optionalConsumer(creep) {
     })[0];
 }
 
-// Storage is only a valid pickup source for the OPTIONAL consumers above
-// once it's above its own reserve floor (hauler.storageReserveFloor, 5%) -
-// below that it needs filling itself (pickDeliver's own storage-floor tier),
-// not draining further for a lab/controller-container's convenience.
-// essentialConsumer above is never gated by this.
-function storageAboveFloor(room) {
-    if (!room.storage) return false;
-    const cap = room.storage.store.getCapacity(RESOURCE_ENERGY);
-    if (!cap) return false;
-    return (
-        room.storage.store[RESOURCE_ENERGY] / cap >
-        config.get("hauler.storageReserveFloor", 0.05)
-    );
+// A tower still in its ideal band worth topping off (towerDeliverable) -
+// also genuinely optional, gated the same way as optionalConsumer above by
+// the caller (resourceTiers.aboveReserve).
+function toppableTower(creep) {
+    return creep.pos.findClosestByRange(roomCache.myStructures(creep.room), {
+        filter: (s) => towerDeliverable(s, creep.room),
+    });
 }
 
 // Energy that arrived in the terminal since we last looked, backed by a
@@ -191,7 +214,19 @@ function terminalWithdrawable(room) {
         };
     }
 
-    return Memory.rooms[room.name].terminalLedger.withdrawable;
+    // The ledger above tracks what's withdrawable IN THEORY (its own
+    // bookkeeping, ROADMAP 0043); this floor controls how much of that can
+    // actually be drawn out right now, on top - never enough to leave the
+    // terminal below logistics.terminalReserveRatio of its own capacity
+    // (ROADMAP 0054). Applied at read time, not baked into the persisted
+    // ledger value, so the ledger's own history stays accurate regardless
+    // of what the floor happens to be at any given moment.
+    const ledgerWithdrawable = Memory.rooms[room.name].terminalLedger.withdrawable;
+    const capacity = terminal.store.getCapacity(RESOURCE_ENERGY);
+    if (!capacity) return ledgerWithdrawable;
+    const floor = capacity * config.get("logistics.terminalReserveRatio", 0.1);
+    const current = terminal.store[RESOURCE_ENERGY] || 0;
+    return Math.max(0, Math.min(ledgerWithdrawable, current - floor));
 }
 
 // Dropped energy decays roughly 1/1000 of its amount per tick - a pile that
@@ -218,12 +253,14 @@ function estimatedDropAmount(creep, resource) {
 // estimatedDropAmount) - then tombstones/ruins (one-shot piles same as
 // drops, just not decaying per-tick) - then the base link (it bottlenecks
 // the whole link network) - then storage: unconditionally when spawn/ext/
-// tower need it (essentialConsumer - keeping the room able to spawn and
-// defend itself always outranks the reserve floor), or, once above the
-// floor, when a lab/controller-container needs it (optionalConsumer) -
-// never storage -> storage either way - then the closest source container
-// built up past hauler.minContainerLoad (not the fullest one - a far
-// container isn't worth the trip when a closer one already qualifies).
+// a critical tower need it (essentialConsumer - keeping the room able to
+// spawn and defend itself always outranks the reserve), or, once above the
+// reserve (resourceTiers.aboveReserve, ROADMAP 0054), when a
+// lab/controller-container (optionalConsumer) or an ideal-band tower
+// (toppableTower) needs it - never storage -> storage either way - then the
+// closest source container built up past hauler.minContainerLoad (not the
+// fullest one - a far container isn't worth the trip when a closer one
+// already qualifies).
 function pickLoad(creep) {
     if (creep.room.terminal) {
         const minTerminal = config.get("hauler.minTerminalLoad", 100);
@@ -279,7 +316,8 @@ function pickLoad(creep) {
     if (creep.room.storage && creep.room.storage.store[RESOURCE_ENERGY] > 0) {
         if (
             essentialConsumer(creep) ||
-            (storageAboveFloor(creep.room) && optionalConsumer(creep))
+            (resourceTiers.aboveReserve(creep.room) &&
+                (optionalConsumer(creep) || toppableTower(creep)))
         ) {
             return { id: creep.room.storage.id, act: "withdraw" };
         }
@@ -304,11 +342,11 @@ function pickLoad(creep) {
     return null;
 }
 
-// Where to drop it off: towers below reserve first (defense), then
-// spawn/ext, then storage if it's below its own reserve floor (an empty
-// emergency buffer outranks topping anything off further), then topping
-// towers off, then labs, then storage (general, whatever's left), then the
-// controller upgrade container. Source-defense towers (tagged
+// Where to drop it off: a critical tower first (defense), then spawn/ext,
+// then storage if it's below its own reserve (an empty emergency buffer
+// outranks topping anything off further), then an ideal-band tower still
+// worth topping off, then labs, then storage (general, whatever's left),
+// then the controller upgrade container. Source-defense towers (tagged
 // `sourceDefense` in the plan - the one right next to a source's container)
 // are never a hauler target, in either branch: the miner sitting right
 // there already keeps it fed (miner.js distribute()), and a hauler
@@ -329,17 +367,8 @@ function isSourceDefenseTower(structure) {
 }
 
 function pickDeliver(creep) {
-    const roomMem = Memory.rooms[creep.room.name] || {};
-    const reserve = roomMem.defenseActive
-        ? config.get("hauler.deliverReserveUnderAttack", 0.8)
-        : config.get("hauler.deliverReserve", 0.5);
-
     let target = creep.pos.findClosestByRange(roomCache.myStructures(creep.room), {
-        filter: (s) =>
-            s.structureType === STRUCTURE_TOWER &&
-            !isSourceDefenseTower(s) &&
-            s.store[RESOURCE_ENERGY] <=
-                s.store.getCapacity(RESOURCE_ENERGY) * reserve,
+        filter: (s) => isTowerCritical(s, creep.room),
     });
     if (target) return target.id;
 
@@ -351,15 +380,18 @@ function pickDeliver(creep) {
     });
     if (target) return target.id;
 
-    // keep a minimum emergency buffer in storage - below the reserve floor
-    // it outranks topping towers/labs beyond their own reserve, since an
-    // empty storage means the room has nothing to fall back on
-    if (creep.room.storage && !storageAboveFloor(creep.room)) {
+    // keep a minimum emergency buffer in storage - below the reserve it
+    // outranks topping towers/labs beyond their own satisfactory band,
+    // since an empty storage means the room has nothing to fall back on
+    if (creep.room.storage && !resourceTiers.aboveReserve(creep.room)) {
         return creep.room.storage.id;
     }
 
+    // ideal-band tower still worth topping off - only while the reserve
+    // above is intact (resourceTiers.aboveReserve, checked just above -
+    // ROADMAP 0054, this used to be unconditional)
     target = creep.pos.findClosestByRange(roomCache.myStructures(creep.room), {
-        filter: towerDeliverable,
+        filter: (s) => towerDeliverable(s, creep.room),
     });
     if (target) return target.id;
 
@@ -389,6 +421,21 @@ function pickDeliver(creep) {
         )[0];
         if (upContainer) return upContainer.id;
     }
+
+    // Last resort - nothing else in the cascade above wants this energy
+    // (spawn/ext full, storage at/above its reserve or full, no lab/
+    // controller-container need it). A tower sitting in the satisfactory
+    // dead zone (between criticalRatio and satisfactoryRatio - see
+    // towerDeliverable's comment) was deliberately skipped above because
+    // something better might come along, but with nothing else to do,
+    // topping it off beats a hauler idling full nearby.
+    target = creep.pos.findClosestByRange(roomCache.myStructures(creep.room), {
+        filter: (s) =>
+            s.structureType === STRUCTURE_TOWER &&
+            !isSourceDefenseTower(s) &&
+            s.store.getFreeCapacity(RESOURCE_ENERGY) > 0,
+    });
+    if (target) return target.id;
 
     return null;
 }
@@ -447,7 +494,7 @@ function mineralWithdrawSource(room, resourceType) {
 // Whatever the mineral container is holding - always wins, a full
 // container stalls roles/mineralMiner.js from harvesting further.
 function mineralContainerJob(room) {
-    const mineral = room.find(FIND_MINERALS)[0];
+    const mineral = roomCache.minerals(room)[0];
     if (!mineral) return null;
     const container = mineral.pos.findInRange(FIND_STRUCTURES, 1, {
         filter: (s) => s.structureType === STRUCTURE_CONTAINER,
@@ -549,6 +596,19 @@ function powerFeedJob(room) {
     return { resourceType: RESOURCE_POWER, from, to: powerSpawn };
 }
 
+// Gate for the whole non-energy cascade below: spawns/extensions still
+// wanting energy always outrank a mineral/lab/factory errand, so a hauler
+// never gets pulled off energy distribution to chase mineral work while the
+// room itself is still hungry.
+function spawnsAndExtensionsFull(room) {
+    return !roomCache.myStructures(room).some(
+        (s) =>
+            (s.structureType === STRUCTURE_SPAWN ||
+                s.structureType === STRUCTURE_EXTENSION) &&
+            s.store.getFreeCapacity(RESOURCE_ENERGY) > 0
+    );
+}
+
 function pickMineralJob(room) {
     return (
         mineralContainerJob(room) ||
@@ -605,9 +665,21 @@ var hauler = {
 
         // ROADMAP 0051: finish an in-progress non-energy job before
         // touching energy logic again - see the block's own comment above.
+        // Exception: if the creep hasn't picked the resource up yet (nothing
+        // carried, so nothing to waste by bailing) and a spawn/extension has
+        // since gone hungry, drop the errand now rather than spending several
+        // more ticks on it while the room can't spawn - the gate on picking a
+        // NEW job (spawnsAndExtensionsFull, below) only stops the job from
+        // being assigned in the first place, it doesn't get re-checked once
+        // one is already in flight.
         if (creep.memory.mineralJob) {
-            runMineralJob(creep);
-            return;
+            const job = creep.memory.mineralJob;
+            const carryingJobResource = creep.store[job.resourceType] > 0;
+            if (carryingJobResource || spawnsAndExtensionsFull(creep.room)) {
+                runMineralJob(creep);
+                return;
+            }
+            delete creep.memory.mineralJob;
         }
 
         const carrying = creep.store[RESOURCE_ENERGY];
@@ -651,7 +723,9 @@ var hauler = {
             // link - but try a non-energy job first (ROADMAP 0051), this is
             // the ONLY place memory.mineralJob ever gets set
             if (carrying === 0) {
-                const mineralJob = pickMineralJob(creep.room);
+                const mineralJob = spawnsAndExtensionsFull(creep.room)
+                    ? pickMineralJob(creep.room)
+                    : null;
                 if (mineralJob) {
                     creep.memory.mineralJob = {
                         resourceType: mineralJob.resourceType,
@@ -711,6 +785,7 @@ var hauler = {
     // exposed for the offline smoke test only
     pickMineralJob,
     optionalConsumer,
+    spawnsAndExtensionsFull,
 };
 
 module.exports = hauler;

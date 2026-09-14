@@ -14,6 +14,16 @@
 // last seen there, so a room under heavy military presence gets
 // re-observed far more often - but every room's score still grows
 // unboundedly with staleness alone, so nothing goes permanently unwatched.
+//
+// ROADMAP 0056: with 2+ observers, the whole empire still only observes ONE
+// room per tick, chosen considering every room any observer can reach - not
+// one room per observer. main.js calls run(structure) once per observer
+// (same generic per-structure loop as every other structure type), so the
+// serve*/explore helpers below take the full observer list (utils/observer's
+// myObservers()) instead of a single structure, and a Game.time-scoped guard
+// makes every call after the first one in a given tick a no-op. With exactly
+// one observer the guard never engages - same single-structure decision as
+// before ROADMAP 0056.
 
 const observerUtil = require("../utils/observer");
 const config = require("../utils/config");
@@ -54,14 +64,21 @@ function xyToRoomName(x, y) {
     return h + (x < 0 ? -x - 1 : x) + v + (y < 0 ? -y - 1 : y);
 }
 
-function serveLayoutRequests(structure) {
-    for (const roomName in Memory.layoutRequests || {}) {
-        if (
-            Game.map.getRoomLinearDistance(structure.room.name, roomName) >
-            OBSERVER_RANGE
-        ) {
-            continue;
+// The first observer (in list order) within OBSERVER_RANGE of roomName, or
+// null - lets the serve*/explore helpers below pick whichever observer can
+// actually reach a candidate room instead of only the one whose run() call
+// triggered the decision (ROADMAP 0056).
+function observerInRangeOf(observers, roomName) {
+    for (const obs of observers) {
+        if (Game.map.getRoomLinearDistance(obs.room.name, roomName) <= OBSERVER_RANGE) {
+            return obs;
         }
+    }
+    return null;
+}
+
+function serveLayoutRequests(observers) {
+    for (const roomName in Memory.layoutRequests || {}) {
         const mem = Memory.rooms[roomName];
         if (mem && mem.planned) {
             // already finished (this observer, or another one, saw it
@@ -70,13 +87,15 @@ function serveLayoutRequests(structure) {
             console.log(`[layout] ${roomName}: plan ready`);
             continue;
         }
-        structure.observeRoom(roomName);
+        const obs = observerInRangeOf(observers, roomName);
+        if (!obs) continue;
+        obs.observeRoom(roomName);
         return true;
     }
     return false;
 }
 
-function serveObserveRequests(structure) {
+function serveObserveRequests(observers) {
     for (const roomName in Memory.observeRequests || {}) {
         // expire first, regardless of range - an observe() request nobody
         // ever comes into range for must still self-clean instead of
@@ -85,13 +104,9 @@ function serveObserveRequests(structure) {
             delete Memory.observeRequests[roomName];
             continue;
         }
-        if (
-            Game.map.getRoomLinearDistance(structure.room.name, roomName) >
-            OBSERVER_RANGE
-        ) {
-            continue;
-        }
-        structure.observeRoom(roomName);
+        const obs = observerInRangeOf(observers, roomName);
+        if (!obs) continue;
+        obs.observeRoom(roomName);
         return true;
     }
     return false;
@@ -99,40 +114,72 @@ function serveObserveRequests(structure) {
 
 // score = staleness * (1 + enemies * militaryWeight) - see the file-level
 // comment. militaryWeight = 0 collapses this back to plain
-// least-recently-seen.
-function explorePriority(structure) {
-    const [ox, oy] = roomNameToXY(structure.room.name);
+// least-recently-seen. Scans the union of every observer's square (deduped
+// via `seen`) so a two-observer empire picks the single best room across
+// both ranges, not just whoever's square is scanned first (ROADMAP 0056).
+function explorePriority(observers) {
     const militaryWeight = config.get("observer.militaryWeight", 1);
     let best = null;
     let bestScore = -Infinity;
+    let bestObserver = null;
+    const seen = {};
 
-    for (let dx = -OBSERVER_RANGE; dx <= OBSERVER_RANGE; dx++) {
-        for (let dy = -OBSERVER_RANGE; dy <= OBSERVER_RANGE; dy++) {
-            const roomName = xyToRoomName(ox + dx, oy + dy);
-            const mem = Memory.rooms[roomName];
-            if (!mem || !mem.lastVisit) {
-                structure.observeRoom(roomName);
-                return true; // never seen - highest priority, stop here
-            }
-            const staleness = Game.time - mem.lastVisit;
-            const score = staleness * (1 + (mem.enemies || 0) * militaryWeight);
-            if (score > bestScore) {
-                bestScore = score;
-                best = roomName;
+    for (const obs of observers) {
+        const [ox, oy] = roomNameToXY(obs.room.name);
+        for (let dx = -OBSERVER_RANGE; dx <= OBSERVER_RANGE; dx++) {
+            for (let dy = -OBSERVER_RANGE; dy <= OBSERVER_RANGE; dy++) {
+                const roomName = xyToRoomName(ox + dx, oy + dy);
+                if (seen[roomName]) continue;
+                seen[roomName] = true;
+                const mem = Memory.rooms[roomName];
+                if (!mem || !mem.lastVisit) {
+                    obs.observeRoom(roomName);
+                    return true; // never seen - highest priority, stop here
+                }
+                const staleness = Game.time - mem.lastVisit;
+                const score = staleness * (1 + (mem.enemies || 0) * militaryWeight);
+                if (score > bestScore) {
+                    bestScore = score;
+                    best = roomName;
+                    bestObserver = obs;
+                }
             }
         }
     }
     if (!best) return false;
-    structure.observeRoom(best);
+    bestObserver.observeRoom(best);
     return true;
 }
+
+// module-heap only (constitution §3: derived/transient, never Memory) -
+// tracks whether some observer already acted this tick, so a second (third,
+// ...) observer's run() call in the same tick is a no-op (ROADMAP 0056).
+let coordTick = -1;
+let observedThisTick = false;
 
 var observer = {
     /** @param {StructureObserver} structure **/
     run: function (structure) {
-        if (serveLayoutRequests(structure)) return;
-        if (serveObserveRequests(structure)) return;
-        explorePriority(structure);
+        const observers = observerUtil.myObservers();
+        if (observers.length <= 1) {
+            // solo observer (or `structure` isn't currently tracked in
+            // Game.structures, e.g. a direct unit-test call) - decide alone,
+            // exactly as before ROADMAP 0056, no coordination overhead.
+            if (serveLayoutRequests([structure])) return;
+            if (serveObserveRequests([structure])) return;
+            explorePriority([structure]);
+            return;
+        }
+
+        if (Game.time !== coordTick) {
+            coordTick = Game.time;
+            observedThisTick = false;
+        }
+        if (observedThisTick) return;
+        observedThisTick =
+            serveLayoutRequests(observers) ||
+            serveObserveRequests(observers) ||
+            explorePriority(observers);
     },
 };
 

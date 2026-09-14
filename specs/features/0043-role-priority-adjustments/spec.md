@@ -234,3 +234,21 @@ credita o saldo atual como baseline nova.
 `test/smoke.js`: terminal com saldo existente, visto pela primeira vez,
 já é retirável de cara; `resetTerminalLedger()` existe, limpa a Memory,
 e o próximo tick credita o saldo atual.
+
+### Follow-up: pioneer só entra na fila de spawn depois do mínimo de todo mundo
+
+A pedido do usuário: `pioneer` estava na posição declarada em
+`roles/index.js` (entre `hauler` e `upgrader`), então em `rooms/spawning.js`
+seu request entrava na lista antes de `upgrader`/`builder`/`reserver`/
+`remoteMiner`/`remoteHauler` — se a energia da sala só desse pra um corpo
+por tick, o pioneer vencia a disputa mesmo com esses papéis ainda abaixo do
+próprio mínimo (`wanted()`).
+
+Corrigido em `rooms/spawning.js`: `pioneer` sai do loop principal (junto de
+`scout`/`raider`/`squadDismantler`, que já eram tratados como luxo) e ganha
+seu próprio bloco condicional a `!requests.length`, depois do de `raider` —
+só é considerado quando nenhum outro papel (incluindo scout e raider) ainda
+quer um creep neste tick. Sem mudança em `roles/pioneer.js` nem em
+`rooms/needs.js`: `wanted()`/`spawn()` continuam os mesmos, só a ordem da
+fila de spawn muda. Sala sob ataque não muda (pioneer já não entra na
+lista `types` desse modo).

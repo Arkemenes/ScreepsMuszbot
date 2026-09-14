@@ -39,6 +39,35 @@ function threats(room) {
     );
 }
 
+// Per-tick damage of one body part, boost multiplier read live from the
+// native BOOSTS table - never hardcoded, same principle already used for
+// REACTIONS/COMMODITIES (structures/lab.js|factory.js, ROADMAP 0051) - so a
+// real boosted rush is weighed correctly instead of assumed unboosted.
+function partDamage(part) {
+    const base =
+        part.type === ATTACK
+            ? ATTACK_POWER
+            : part.type === RANGED_ATTACK
+            ? RANGED_ATTACK_POWER
+            : 0;
+    if (!base || !part.boost) return base;
+    const key = part.type === ATTACK ? "attack" : "rangedAttack";
+    const boostTable = BOOSTS[part.type] && BOOSTS[part.type][part.boost];
+    const mult = boostTable && boostTable[key];
+    return base * (mult || 1);
+}
+
+// Rough total damage/tick `hostiles` can inflict on whatever they're each
+// attacking - used by rooms/defense.js's checkSafeMode() (ROADMAP 0036
+// revision) to project time-to-kill instead of reacting to raw proximity.
+function incomingDps(hostiles) {
+    let total = 0;
+    for (const h of hostiles) {
+        for (const part of h.body) total += partDamage(part);
+    }
+    return total;
+}
+
 // CostMatrix that keeps paths off walls / blocking structures and prefers our
 // roads and ramparts. Memoised per room per tick.
 let matTick = -1;
@@ -255,6 +284,7 @@ module.exports = {
     isArmed,
     hasMelee,
     threats,
+    incomingDps,
     safeRange,
     KITE_RANGE,
     threatPriority,

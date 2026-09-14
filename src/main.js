@@ -7,10 +7,60 @@ let config = require("./utils/config");
 
 // Profiler wraps every prototype method, which is not free even when idle -
 // only pay for it when explicitly switched on from the console:
-//   Memory.settings = { profiler: true }
-if (Memory.settings && Memory.settings.profiler) {
-    utils.profiler.enable();
+//   Memory.settings.profiler = true
+// Checked every tick (not just at module load) so flipping the flag from the
+// console takes effect on the next tick instead of requiring a global reset.
+let profilerEnabled = false;
+function maybeEnableProfiler() {
+    if (!profilerEnabled && Memory.settings && Memory.settings.profiler) {
+        profilerEnabled = true;
+        utils.profiler.enable();
+    }
 }
+
+// Once a `profile(ticks)` session's window has fully closed (the report
+// already printed on the disableTick itself, inside utils.profiler.wrap),
+// turn the setting back off so a future global reset doesn't re-wrap every
+// prototype method for a session nobody asked for anymore.
+function maybeAutoDisableProfiler() {
+    if (
+        Memory.settings &&
+        Memory.settings.profiler &&
+        Memory.profiler &&
+        Memory.profiler.type === "profile" &&
+        Number.isInteger(Memory.profiler.disableTick) &&
+        Game.time > Memory.profiler.disableTick
+    ) {
+        Memory.settings.profiler = false;
+        Memory.profiler = null;
+    }
+}
+
+// --- console: profile(ticks=100) ----------------------------------------
+// Turns on Game.profiler for `ticks` ticks, lets it print its own report on
+// the last tick (screeps-profiler's usual behavior), then flips
+// Memory.settings.profiler back off by itself - see
+// maybeAutoDisableProfiler() above. Writes Memory.profiler directly instead
+// of calling Game.profiler.profile() because Game.profiler may not exist
+// yet the very first time this runs (it's only built by utils.profiler.wrap
+// on a tick where the setting is already on).
+global.profile = function (ticks) {
+    ticks = Number.isInteger(ticks) && ticks > 0 ? ticks : 100;
+    Memory.settings = Memory.settings || {};
+    Memory.settings.profiler = true;
+    Memory.profiler = {
+        map: {},
+        totalTime: 0,
+        enabledTick: Game.time + 1,
+        disableTick: Game.time + ticks,
+        type: "profile",
+        filter: undefined,
+    };
+    console.log(
+        `[profile] profiling ${ticks} ticks (until tick ${Game.time + ticks}); ` +
+            "report prints automatically, then the profiler turns itself off"
+    );
+};
 
 // Run `fn`, but never let one subsystem's exception abort the whole tick.
 function guard(label, fn) {
@@ -22,6 +72,8 @@ function guard(label, fn) {
 }
 
 module.exports.loop = function () {
+    maybeEnableProfiler();
+    maybeAutoDisableProfiler();
     utils.profiler.wrap(function () {
         utils.memory.wrap(function () {
             // make a list of all of our rooms

@@ -87,3 +87,32 @@ aceitação) antes da implementação. O spec é a fonte da verdade — o códig
 testes derivam dele e não podem divergir em silêncio. Mudanças triviais (typo,
 rename, um guard de uma linha) podem pular o spec, mas ainda obedecem os
 princípios 1–7.
+
+## 9. Spending cascade: crítico → saudável → ótimo, sempre com fallback
+
+Toda decisão de "onde gastar um recurso" (energia de um hauler, reparo de uma
+torre/rampart, energia de um link, fila de spawn) resolve em três faixas,
+nessa ordem: **crítico** (precisa agora, incondicional), **saudável /
+satisfatório** (vale a pena, sem gate de reserva) e **ótimo / ideal** (só
+topar mais enquanto sobra reserva). Ver `rampartRepair.worthHardening`,
+`hauler.pickDeliver`, `structures/link.js`'s `pickTarget`,
+`structures/tower.js`, `roles/builder.js`, `rooms/spawning.js` — o padrão já
+existia espalhado por specs anteriores (0032, 0043, 0054) antes de virar
+princípio (0059).
+
+- Uma faixa pode ser propositalmente pulada num tick em favor de algo mais
+  urgente que ainda não se sabe se vai aparecer — mas nunca fica sem um
+  caminho de volta: se nada mais reivindicar o recurso naquele tick, a
+  unidade cai pro alvo preterido em vez de ficar ociosa com capacidade
+  sobrando. Bug real motivador (usuário reportou em produção, 2026-09-13,
+  ROADMAP 0059): `hauler.pickDeliver` deixava uma torre entre
+  `criticalRatio` e `satisfactoryRatio` fora das duas faixas de propósito,
+  sem fallback nenhum — um hauler cheio ficava parado do lado dela sempre
+  que mais nada no cascade também precisasse da energia.
+- **A coleta é isenta.** Harvest, regen de source/mineral, cooldown de
+  lab/link já têm limite físico próprio (uma fonte só regenera tanto por
+  tick) — não é escassez artificial de uma cascata mal desenhada, então não
+  precisa (nem deveria) ser forçada nessa mesma disciplina de 3 faixas.
+- Toda spec nova que introduz uma cascata de gasto é checada contra este
+  princípio na revisão: existe um fallback de última instância, ou alguma
+  faixa pode deixar a unidade ociosa com capacidade real disponível?
