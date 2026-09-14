@@ -1,11 +1,11 @@
 const { getHostiles, isHostile } = require("../utils/hostiles");
 const { isPlanned } = require("../utils/plan");
 const traffic = require("../utils/traffic");
-const config = require("../utils/config");
 const rampartRepair = require("../utils/rampartRepair");
 let cacheTick;
 let hostileTargets = {};
-let repairTargets = {};
+let repairLists = {};
+let claimedRepairTargets = {};
 
 const hostilePartPriority = {
     [HEAL]: 0,
@@ -42,7 +42,8 @@ function resetCache() {
     if (cacheTick !== Game.time) {
         cacheTick = Game.time;
         hostileTargets = {};
-        repairTargets = {};
+        repairLists = {};
+        claimedRepairTargets = {};
     }
 }
 
@@ -114,61 +115,73 @@ function findHealingTarget(tower) {
     )[0];
 }
 
-function findRepairTarget(tower) {
-    resetCache();
-    if (Object.prototype.hasOwnProperty.call(repairTargets, tower.room.name)) {
-        return repairTargets[tower.room.name];
+// The expensive part (the one room.find/tick, constitution §1) - computed
+// once per room per tick regardless of how many towers call findRepairTarget
+// below, cached the same way findHostileTarget already is. A single
+// tier+type+ratio-sorted list (utils/rampartRepair.priority, ROADMAP 0072 -
+// user-specified: tower and builder now share the exact same ordering
+// logic) - critical/satisfactory/optimal, normal-before-rampart-before-wall
+// within a tier, ratio ascending as the finest tiebreak. Replaces the old
+// two SEQUENTIAL pools (ROADMAP 0070 already fixed the worst symptom of
+// that split - any trivial normal-structure damage permanently starving a
+// critical rampart - but a single unified list is the cleaner fix the
+// tier system was always meant to enable).
+function computeRepairCandidates(room) {
+    if (Object.prototype.hasOwnProperty.call(repairLists, room.name)) {
+        return repairLists[room.name];
     }
 
-    const damagedStructures = tower.room.find(FIND_STRUCTURES, {
+    const damagedStructures = room.find(FIND_STRUCTURES, {
         filter: (structure) =>
             structure.hits < structure.hitsMax &&
             isPlanned(structure) &&
             traffic.worthRepairing(structure),
     });
 
-    const normalStructures = damagedStructures.filter(
-        (structure) =>
-            structure.structureType !== STRUCTURE_WALL &&
-            structure.structureType !== STRUCTURE_RAMPART
+    repairLists[room.name] = _.sortBy(damagedStructures, rampartRepair.priority);
+    return repairLists[room.name];
+}
+
+// ROADMAP 0071 (review finding): with 2+ towers in the same room, all of
+// them used to share the exact same single cached target - never a bug in
+// the sense of picking the WRONG structure, but a room with two
+// simultaneously-critical ramparts always had every tower pile onto
+// whichever sorted first, leaving the other completely unattended that
+// tick. Each tower now claims the target it picks (per room, per tick,
+// cleared by resetCache) and skips anything already claimed by an earlier
+// tower this tick - spreading attention across distinct urgent targets
+// first, and only doubling up once every one of them already has a tower
+// on it (at which point piling on the single worst remaining target is
+// exactly what you want).
+//
+// ROADMAP 0072: eligibility (utils/rampartRepair.towerMayRepair) now
+// depends on THIS tower's own energy ratio, which can differ between
+// towers in the same room - so a candidate that one tower can't yet
+// afford might still be skippable in favor of one it can, rather than
+// blocking on the single most-urgent target across the board.
+function findRepairTarget(tower) {
+    resetCache();
+    const candidates = computeRepairCandidates(tower.room);
+    if (!candidates.length) return null;
+
+    const claimed =
+        claimedRepairTargets[tower.room.name] ||
+        (claimedRepairTargets[tower.room.name] = new Set());
+
+    let target = candidates.find(
+        (s) => !claimed.has(s.id) && rampartRepair.towerMayRepair(s, tower)
     );
 
-    if (normalStructures.length) {
-        repairTargets[tower.room.name] = _.sortBy(
-            normalStructures,
-            (structure) => structure.hits
-        )[0];
-        return repairTargets[tower.room.name];
+    // nothing new to claim (or affordable) - double up on the single most
+    // urgent target overall, but only if THIS tower can actually afford
+    // it; never fall back to something less urgent it happens to be able
+    // to pay for instead.
+    if (!target && rampartRepair.towerMayRepair(candidates[0], tower)) {
+        target = candidates[0];
     }
 
-    const defensiveStructures = damagedStructures.filter(
-        (structure) =>
-            structure.structureType === STRUCTURE_WALL ||
-            structure.structureType === STRUCTURE_RAMPART
-    );
-
-    // utils/rampartRepair.js is the single source of truth for the
-    // critical/healthy/surplus-only tiers (ROADMAP 0032 D4 + follow-up) -
-    // shared with roles/builder.js so the two never disagree on it.
-    const eligible = defensiveStructures.filter((structure) =>
-        rampartRepair.worthHardening(structure, tower.room)
-    );
-
-    const criticalRampart = _.sortBy(
-        eligible.filter(rampartRepair.isCritical),
-        (structure) => structure.hits
-    )[0];
-
-    if (criticalRampart) {
-        repairTargets[tower.room.name] = criticalRampart;
-        return criticalRampart;
-    }
-
-    repairTargets[tower.room.name] = _.sortBy(
-        eligible,
-        (structure) => structure.hits
-    )[0];
-    return repairTargets[tower.room.name];
+    if (target) claimed.add(target.id);
+    return target;
 }
 
 var tower = {
@@ -190,11 +203,11 @@ var tower = {
             return;
         }
 
-        const energyCapacity = tower.store.getCapacity(RESOURCE_ENERGY);
-        const energyRatio = tower.store.energy / energyCapacity;
+        // the tower's own energy-ratio gate is tier-dependent now
+        // (utils/rampartRepair.towerMayRepair, ROADMAP 0072) - already
+        // checked by findRepairTarget above, nothing left to gate here.
         const repairTarget = findRepairTarget(tower);
-
-        if (repairTarget && energyRatio >= config.get("tower.repairEnergyRatio", 0.7)) {
+        if (repairTarget) {
             tower.repair(repairTarget);
         }
     },

@@ -475,6 +475,60 @@ validação já feita, com a MESMA liberdade que permitiu achá-la.
 fallback de `findRoute()` puro (uma rota nunca checada contra terreno,
 onde manter perto do palpite de grafo ainda faz sentido).
 
+## Correção no mesmo dia (segunda metade da causa raiz): sair da sequência gravada não podia mais significar "descarta a rota real"
+
+Build do `avoidCostCallback` deployado, usuário testou de novo — MESMO
+padrão: entra em `E1N46`, recua sala por sala (`E0N46`, `E0N47`, `W0N47`,
+...) até a cascata. Trace completo dessa vez (não só o momento da falha):
+
+```
+tryComputeRealRoute W3N51->E1N45 avoid=[]: found 11 hop(s):
+  W3N50 -> W2N50 -> W1N50 -> W1N49 -> W0N49 -> W0N48 -> W0N47 ->
+  E0N47 -> E0N46 -> E1N46 -> E1N45
+...
+retreatFrom: E1N46 confirmed a dead end (_routeStack was
+  [W3N51,W2N51,W2N50,W1N50,W0N50,W0N49,W0N48,W0N47,E0N47,E0N46,E1N46])
+ERR_NO_PATH in E1N46 ... usingRealRoute=false
+```
+
+O `_routeStack` real (`W2N51`, `W0N50`) diverge do `_realRoute` gravado
+(`W3N50`, `W1N49`) já nos dois primeiros saltos — o creep NUNCA andou pela
+sequência exata que `computeRealRoute` validou. Isso é esperado e correto:
+`avoidCostCallback` (a correção anterior) é uma lista de **bloqueio**, não
+uma lista de permissão — o `PathFinder` nativo tem total liberdade pra
+escolher qualquer caminho mais barato entre as salas não bloqueadas, e
+frequentemente escolhe um diferente da sequência gravada por
+`computeRealRoute` (que também é só uma entre várias rotas válidas
+possíveis, não A ÚNICA).
+
+O bug: o código de seleção de `route` dentro de `moveToRoom()` ainda tinha
+a lógica antiga (pré-`avoidCostCallback`) de "se a sala atual do creep não
+está na sequência gravada (`idx === -1`), a rota real não vale mais —
+descarta `_realRoute` e cai pro `findRoute()`/`routeCostCallback`". Ou
+seja: no instante em que o creep saía (de forma legítima, graças à própria
+liberdade do `avoidCostCallback`) da sequência exata gravada, o código
+jogava fora TODA a validação e voltava pro mecanismo de lista de permissão
+antigo — reproduzindo exatamente a cascata de culpa sala-por-sala que a
+correção anterior devia ter eliminado. O fix de `avoidCostCallback` tornou
+a *execução* permissiva sem tornar o *rastreamento da rota* permissivo do
+mesmo jeito — os dois lados precisavam da mesma filosofia.
+
+Fix: `idx === -1` não descarta mais `_realRoute`. Recebe o mesmo tratamento
+que "ainda parado na sala de origem da busca" (que também sempre dá
+`idx === -1`, já que `computeRealRoute` exclui de propósito a sala de onde
+partiu, mesma convenção do `Game.map.findRoute`) — usa a sequência
+gravada inteira como contexto de log, e mantém `usingRealRoute = true`.
+Isso é seguro porque `avoidCostCallback` nunca lê `route`/a sequência
+gravada pra decidir o que é andável — só lê `avoid` (sempre lido fresco a
+cada tick de `creep.memory._routeAvoid`) — então não há nada
+funcionalmente desatualizado, só o texto do log fica menos preciso quando
+o creep está fora da sequência (mostra a lista inteira, não o "resto"
+exato — aceitável, é só diagnóstico). `test/smoke.js` ganhou um teste
+novo simulando exatamente esse cenário (creep migra pra uma sala nunca
+mencionada na sequência gravada, sem passar por `retreatFrom`) confirmando
+que `_realRoute` permanece em cache e que o `costCallback` continua sendo
+o de bloqueio, não a lista de permissão antiga.
+
 ## Estado atual (2026-09-14): o que é sabido, suposto e não-sabido
 
 Depois de cinco correções no mesmo dia (recuo real, gatilho por

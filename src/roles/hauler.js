@@ -18,6 +18,20 @@ function sourceContainers(room) {
     );
 }
 
+// ROADMAP 0065 follow-up: any source container built up past this bar is a
+// throughput ("vazão") symptom, not just an underused container - the miner
+// is spilling overflow it couldn't unload into its collector link. A
+// separate config key from hauler.minContainerLoad on purpose even though
+// both default to 1000 today - they mean different things (this is "the
+// pipeline is jammed", that one is "worth a hauler's trip") and tuning one
+// shouldn't silently move the other.
+function containersBackedUp(room) {
+    const threshold = config.get("hauler.containerBackedUpThreshold", 1000);
+    return sourceContainers(room).some(
+        (c) => c.store[RESOURCE_ENERGY] >= threshold
+    );
+}
+
 // ROADMAP 0054: the tower's 3-tier delivery bands, as a fraction of its own
 // capacity - critical/satisfactory shift up together under defenseActive
 // (a tower nearly full going into a fight is worth more than the same
@@ -33,7 +47,7 @@ function towerSatisfactoryRatio(room) {
     const roomMem = Memory.rooms[room.name] || {};
     return roomMem.defenseActive
         ? config.get("tower.satisfactoryRatioUnderAttack", 0.95)
-        : config.get("tower.satisfactoryRatio", 0.8);
+        : config.get("tower.satisfactoryRatio", 0.7);
 }
 
 // Below criticalRatio: the room's real emergency tier, resolved with
@@ -278,6 +292,68 @@ function pickLoad(creep) {
                 ),
                 dest: "storage",
             };
+        }
+    }
+
+    // ROADMAP 0065 follow-up: a source container backed up past
+    // hauler.containerBackedUpThreshold (1000, same number as
+    // minContainerLoad's own "worth a trip" bar, but a separate config key -
+    // this one means something different, a throughput ("vazão") symptom,
+    // not a pickup-worthiness bar) means the miner can't unload into its
+    // collector link fast enough and is spilling the overflow into the
+    // container instead - which in turn means the collector link itself is
+    // full and can't send, almost always because nothing has been draining
+    // the RECEIVING link on the other end. Pull straight from that receiving
+    // link and force the delivery to storage (`dest: "storage"`, same
+    // mechanism the terminal load above uses) - not to spawn/ext even if
+    // they're hungry (essentialConsumer's own concern, checked next) -
+    // because feeding spawn instead would leave the jam in place and this
+    // same container backed-up check would just fire again next load,
+    // spilling more energy at the source in the meantime. Checked before
+    // essentialConsumer on purpose (user's call): unclogging the room's own
+    // energy pipeline outranks a single delivery cycle to spawn/ext.
+    if (containersBackedUp(creep.room)) {
+        const backedUpLink = creep.pos.findClosestByRange(
+            roomCache.myStructures(creep.room),
+            {
+                filter: (s) =>
+                    s.structureType === STRUCTURE_LINK &&
+                    !s.isCollector() &&
+                    s.store[RESOURCE_ENERGY] > 0 &&
+                    reservations.available(creep, s) >= 50,
+            }
+        );
+        if (backedUpLink) {
+            return { id: backedUpLink.id, act: "withdraw", dest: "storage" };
+        }
+    }
+
+    // ROADMAP 0065: spawn/extension/a critical tower going hungry outranks
+    // opportunistic ground energy - go straight for the reliable, usually
+    // close-to-base sources (receiving link, then storage) instead of
+    // chasing whatever dropped pile happens to be closest-by-path, which can
+    // sit clear across the room and stall the room's own spawning while the
+    // hauler treks out to it. Unconditional, same as essentialConsumer's use
+    // below - keeping the room able to spawn/defend always outranks the
+    // reserve. Only fires while essential need exists; once it doesn't, the
+    // cascade below (which still tries link/storage, just later) is
+    // unchanged - dropped/tombstone/ruin energy decaying away is worth
+    // grabbing first when nothing is actually urgent.
+    if (essentialConsumer(creep)) {
+        const urgentLink = creep.pos.findClosestByRange(
+            roomCache.myStructures(creep.room),
+            {
+                filter: (s) =>
+                    s.structureType === STRUCTURE_LINK &&
+                    !s.isCollector() &&
+                    s.store[RESOURCE_ENERGY] > 0 &&
+                    reservations.available(creep, s) >= 50,
+            }
+        );
+        if (urgentLink) return { id: urgentLink.id, act: "withdraw" };
+
+        if (creep.room.storage && creep.room.storage.store[RESOURCE_ENERGY] > 0) {
+            return { id: creep.room.storage.id, act: "withdraw" };
         }
     }
 

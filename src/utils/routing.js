@@ -8,6 +8,7 @@
 
 const remotes = require("../rooms/remotes");
 const config = require("./config");
+const roomCache = require("./roomCache");
 
 // Highway rooms sit on the map's coordinate grid (either axis a multiple of
 // 10) - open, sourceless, usually ownerless space that forms natural travel
@@ -270,6 +271,18 @@ function computeRealRoute(fromPos, toRoomName, opts) {
             },
         }
     );
+    // ROADMAP 0064 same-day, third root cause: the only way to actually
+    // CONFIRM (not guess) whether moveMaxOps is sized correctly relative to
+    // this search - the two became mechanically equivalent once
+    // avoidCostCallback replaced routeCostCallback's narrow allowlist for
+    // native moveTo() execution - is to see how many ops THIS search
+    // actually spent. Always-on, not gated: this only ever runs once per
+    // leg (opt-in, trip start + each completed retreat), so the volume is
+    // inherently tiny, same reasoning as tryComputeRealRoute's own log.
+    console.log(
+        `[routing] computeRealRoute ${fromPos.roomName}->${toRoomName}: ` +
+            (result ? `ops=${result.ops} incomplete=${result.incomplete}` : "search returned nothing")
+    );
     if (!result || result.incomplete || !result.path.length) return null;
 
     const rooms = [];
@@ -344,6 +357,30 @@ function retreatFrom(creep) {
         `[routing] retreatFrom ${creep.name}: ${creep.room.name} confirmed a dead end ` +
             `(_routeStack was [${(creep.memory._routeStack || []).join(",")}])`
     );
+    // ROADMAP 0064 same-day - diagnostic ONLY, no behavior change: the
+    // maxOps ceiling was just RULED OUT by live evidence (computeRealRoute
+    // succeeded at 803 and 29770 ops, both comfortably under even the old
+    // 20000 ceiling, right where native moveTo() still failed) - so
+    // whatever's actually blocking native moveTo() here but not
+    // computeRealRoute()'s own PathFinder.search must be something
+    // computeRealRoute() structurally never looks at: real, currently-
+    // visible obstacles. Unlike computeRealRoute() (deliberately
+    // terrain-only, roomCallback never touches the matrix), native
+    // moveTo()'s own internal search bakes in whatever structures the
+    // engine can currently see in THIS room (creep.room always has vision
+    // of its own room) - some structure types (invader core, keeper lair,
+    // power bank, spawn, etc.) always block regardless of any option;
+    // player ramparts/walls block too unless ignoreDestructibleStructures
+    // is explicitly set (never has been, here). Dumping exactly what's
+    // physically in this room at the moment of the confirmed failure turns
+    // that from a guess into a fact for the very next live test.
+    if (typeof creep.room.find === "function") {
+        console.log(
+            `[routing] retreatFrom ${creep.name}: ${creep.room.name} structures=[` +
+                roomCache.structures(creep.room).map((s) => `${s.structureType}@${s.pos.x},${s.pos.y}`).join(",") +
+                `] creeps=${creep.room.find(FIND_CREEPS).length}`
+        );
+    }
 
     // ROADMAP 0064: a cached real-route (opts.realRoute) that still led
     // to this dead end was wrong about something (new construction, most
@@ -625,33 +662,40 @@ function moveToRoom(creep, toRoomName, opts) {
 
     const routeOpts = Object.assign({}, opts, { avoid });
 
-    // ROADMAP 0064: a validated real route takes over from findRoute()
-    // entirely while it lasts - it's a CONFIRMED walkable sequence, not a
-    // room-graph guess. Sliced from wherever the creep currently stands in
-    // that sequence (same shape findRoute() returns: {room}[]).
+    // ROADMAP 0064 same-day follow-up, second root cause: a validated real
+    // route takes over from findRoute() entirely while it lasts - it's a
+    // CONFIRMED walkable sequence, not a room-graph guess. Confirmed live
+    // (a fresh trace right after the avoidCostCallback fix shipped): this
+    // used to discard the ENTIRE cached _realRoute - falling all the way
+    // back to findRoute()/routeCostCallback's narrow allowlist, the exact
+    // mechanism this whole spec exists to route around - the instant the
+    // creep's ACTUAL room wasn't found in the recorded sequence (idx===-1).
+    // But avoidCostCallback is a deliberate BLOCKLIST, not an allowlist - it
+    // never constrains the native search to the recorded sequence, only to
+    // "not avoided/hostile". So the native PathFinder is completely free to
+    // (and regularly does) choose a cheaper path through rooms outside that
+    // exact list - confirmed live via _routeStack diverging from the
+    // recorded _realRoute within the very first couple of hops (W2N51/
+    // W0N50 walked, neither one in the cached sequence). That deviation is
+    // NOT evidence the terrain validation was wrong - it's the blocklist
+    // freedom working as designed - but the old code treated it as "stop
+    // trusting this route", re-triggering the identical cascade of
+    // wrongful one-room-at-a-time blaming the avoidCostCallback fix was
+    // supposed to end. Fix: idx===-1 no longer invalidates _realRoute -
+    // same treatment as "still standing at the search's own origin room"
+    // (also always idx===-1, since computeRealRoute excludes the room it
+    // started from) - just fall back to the whole cached sequence as a
+    // best-effort logging aid; avoidCostCallback itself never reads `route`
+    // at all, only the always-fresh `avoid` list below, so there's nothing
+    // stale to worry about functionally, only for the diagnostic log line.
     let route;
     let usingRealRoute = false;
     if (creep.memory._realRoute && creep.memory._realRouteDest === toRoomName) {
-        if (creep.room.name === creep.memory._realRouteFrom) {
-            // still standing in the room the search started from (excluded
-            // from the cached sequence, same as Game.map.findRoute's own
-            // convention) - hasn't left yet, so the WHOLE thing is ahead
-            route = creep.memory._realRoute.map((r) => ({ room: r }));
-            usingRealRoute = true;
-        } else {
-            const idx = creep.memory._realRoute.indexOf(creep.room.name);
-            if (idx === -1) {
-                // fell off the validated sequence somehow - stop trusting
-                // it, fall back to the normal findRoute()-based flow below
-                delete creep.memory._realRoute;
-                delete creep.memory._realRouteDest;
-                delete creep.memory._realRouteFrom;
-                route = findRoute(creep.room.name, toRoomName, routeOpts);
-            } else {
-                route = creep.memory._realRoute.slice(idx + 1).map((r) => ({ room: r }));
-                usingRealRoute = true;
-            }
-        }
+        usingRealRoute = true;
+        const idx = creep.memory._realRoute.indexOf(creep.room.name);
+        route = (idx === -1 ? creep.memory._realRoute : creep.memory._realRoute.slice(idx + 1)).map(
+            (r) => ({ room: r })
+        );
     } else {
         route = findRoute(creep.room.name, toRoomName, routeOpts);
     }
@@ -663,11 +707,61 @@ function moveToRoom(creep, toRoomName, opts) {
     // narrower allowlist is reserved for the findRoute()-only fallback,
     // which was never checked against real terrain and still benefits from
     // being kept roughly on the room-graph path findRoute() chose.
-    const costCallback = usingRealRoute
+    const baseCostCallback = usingRealRoute
         ? avoidCostCallback(avoid, routeOpts)
         : routeCostCallback(route, creep.room.name, toRoomName, routeOpts);
-    const status = creep.moveTo(new RoomPosition(25, 25, toRoomName), {
-        range,
+    // ROADMAP 0064 same-day, diagnostic ONLY - no decision here changes,
+    // only records what baseCostCallback already decided. Live evidence so
+    // far has ruled out every guess tried (maxOps - computeRealRoute
+    // succeeded at 136-29770 ops where native moveTo() still failed;
+    // structures/vision - E0N46 confirmed genuinely empty, zero structures,
+    // and native moveTo() still failed there too). The one thing left
+    // unobserved is what ROOMS native moveTo()'s own internal search
+    // actually asks this callback about, and what it's told for each - the
+    // only way to see that is to record it as it happens, since moveTo()
+    // never exposes its own search internals otherwise. `queriedRooms`
+    // only ever gets logged below on a tick that actually fails.
+    const queriedRooms = [];
+    const costCallback = (roomName, matrix) => {
+        const result = baseCostCallback(roomName, matrix);
+        queriedRooms.push(`${roomName}:${result === false ? "BLOCKED" : "open"}`);
+        return result;
+    };
+    costCallback.allowedRooms = baseCostCallback.allowedRooms;
+
+    // ROADMAP 0064 same-day, the actual root cause (found via queriedRooms
+    // above, live, across 3 separate legs - W0N47/W0N48/W0N50): native
+    // moveTo()'s OWN internal multi-room search is measurably less capable
+    // than computeRealRoute()'s raw PathFinder.search() under IDENTICAL
+    // constraints (same avoid, same costs, same generous maxOps/maxRooms).
+    // Confirmed live: computeRealRoute found a real, cheap (803-29770 ops)
+    // route requiring an initial move AWAY from the goal before doubling
+    // back (a detour, forced once enough rooms sit in _routeAvoid) every
+    // time - and native moveTo(), given the exact same room-level answers
+    // (queriedRooms showed it asking about and correctly being told open/
+    // blocked for exactly the right rooms), still gave up early, sometimes
+    // without even exploring the room the correct detour starts in
+    // (W0N49 - immediately adjacent, unblocked, never queried at all).
+    // Two independent multi-room searches that can silently disagree is
+    // exactly the "2 filtros" the user suspected - not our costCallback
+    // logic (proven correct every time), but running a SECOND, less
+    // reliable search on top of the first at all. Fix: once
+    // computeRealRoute has already decided the room sequence, never ask
+    // native moveTo() to re-solve the WHOLE multi-room trip again - only
+    // ever hand it the NEXT single hop as its target. Room geometry makes
+    // this safe without a smaller range: two adjacent rooms' centers are
+    // always >= 25 tiles apart in world coordinates, so satisfying
+    // `range` (<=20 in every realRoute caller today) against a neighboring
+    // room's center requires having actually crossed into it - capped at
+    // 20 defensively regardless of what a future caller passes, so a
+    // larger opts.range can never let the engine call the hop "reached"
+    // while the creep is still in the room behind it.
+    const nextHop = usingRealRoute && route.length ? route[0].room : null;
+    const singleHop = nextHop !== null && nextHop !== toRoomName;
+    const moveTarget = singleHop ? nextHop : toRoomName;
+    const moveRange = singleHop ? Math.min(range, 20) : range;
+    const status = creep.moveTo(new RoomPosition(25, 25, moveTarget), {
+        range: moveRange,
         reusePath: moveOpts.reusePath,
         maxOps: moveOpts.maxOps,
         maxRooms: moveOpts.maxRooms,
@@ -690,11 +784,13 @@ function moveToRoom(creep, toRoomName, opts) {
     // this leg was trusting a validated route instead of guessing).
     console.log(
         `[routing] ${creep.name} ERR_NO_PATH in ${creep.room.name} (tick ${creep.memory._routeNoPathTicks}/` +
-            `${config.get("routing.noPathTicks", 2)}) - route=[${route ? route.map((s) => s.room).join(",") : "null"}], ` +
+            `${config.get("routing.noPathTicks", 2)}) - moveTarget=${moveTarget} (range ${moveRange}), ` +
+            `route=[${route ? route.map((s) => s.room).join(",") : "null"}], ` +
             (costCallback.allowedRooms
                 ? `allowedRooms(${costCallback.allowedRooms.size})=[${Array.from(costCallback.allowedRooms).join(",")}], `
                 : "allowedRooms=N/A (blocklist), ") +
-            `avoid=[${avoid.join(",")}], usingRealRoute=${usingRealRoute}`
+            `avoid=[${avoid.join(",")}], usingRealRoute=${usingRealRoute}, ` +
+            `queriedRooms=[${queriedRooms.join(",") || "NONE - native moveTo() never called costCallback at all"}]`
     );
     if (creep.memory._routeNoPathTicks >= config.get("routing.noPathTicks", 2)) {
         retreatFrom(creep);

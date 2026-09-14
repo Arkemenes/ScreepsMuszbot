@@ -949,6 +949,163 @@ function withFindLookup(pos, lists) {
         "the same pile close enough to still clear 100 by arrival is picked up (ROADMAP 0043)");
 }
 
+// --- ROADMAP 0065: spawn/extension hunger (essentialConsumer) skips
+// opportunistic ground energy and goes straight for a reliable nearby source
+// (receiving link, then storage) instead of chasing whatever dropped pile
+// happens to be closest-by-path - a distant one can stall the room's own
+// spawning while the hauler treks out to fetch it. tower1 is permanently
+// tagged source-defense by this point in the file (see the planStore.mutate
+// above), so it never counts toward essentialConsumer here - only spawn does.
+{
+    const savedSpawnStoreUrgent = spawn.store;
+    spawn.store = Object.assign(store(0, 300), { getFreeCapacity: () => 300 });
+
+    // right next to the hauler - would win findClosestByPath outright
+    const urgentDrop = Object.assign(new Resource(), {
+        id: "urgentdrop", resourceType: RESOURCE_ENERGY, amount: 200,
+        pos: new RoomPosition(20, 21, "W1N1"),
+    });
+    REG[urgentDrop.id] = urgentDrop;
+
+    const urgentLink = Object.assign(new StructureLink(), {
+        id: "urgentlink", structureType: STRUCTURE_LINK, room, my: true,
+        pos: new RoomPosition(21, 20, "W1N1"),
+        store: store(400, 800), isCollector: () => false,
+    });
+    REG.urgentlink = urgentLink;
+    findMap[FIND_MY_STRUCTURES].push(urgentLink);
+
+    room.storage = Object.assign(new Structure(), {
+        id: "urgentstor", structureType: STRUCTURE_STORAGE, room,
+        pos: new RoomPosition(40, 40, "W1N1"), store: store(50000, 100000),
+    });
+    REG.urgentstor = room.storage;
+
+    Game.time++;
+    const hUrgentLink = makeCreep("HUrgentLink", "hauler", {
+        store: store(0, 200),
+        pos: withFindLookup(new RoomPosition(20, 20, "W1N1"),
+            { [FIND_DROPPED_RESOURCES]: [urgentDrop] }),
+    });
+    hUrgentLink.pickup = (t) => { hUrgentLink._picked = t && t.id; return OK; };
+    hUrgentLink.withdraw = (t) => { hUrgentLink._from = t && t.id; return OK; };
+    hUrgentLink.memory.job = "load";
+    hauler.run(hUrgentLink);
+    assert(hUrgentLink._from === "urgentlink" && !hUrgentLink._picked,
+        "spawn hungry (essentialConsumer): hauler pulls from the receiving link " +
+            "instead of a closer dropped pile (ROADMAP 0065, got from=" +
+            hUrgentLink._from + " picked=" + hUrgentLink._picked + ")");
+
+    // link now dry - storage is next, still ahead of the dropped pile
+    findMap[FIND_MY_STRUCTURES] =
+        findMap[FIND_MY_STRUCTURES].filter((s) => s.id !== "urgentlink");
+    Game.time++;
+    const hUrgentStor = makeCreep("HUrgentStor", "hauler", {
+        store: store(0, 200),
+        pos: withFindLookup(new RoomPosition(20, 20, "W1N1"),
+            { [FIND_DROPPED_RESOURCES]: [urgentDrop] }),
+    });
+    hUrgentStor.pickup = (t) => { hUrgentStor._picked = t && t.id; return OK; };
+    hUrgentStor.withdraw = (t) => { hUrgentStor._from = t && t.id; return OK; };
+    hUrgentStor.memory.job = "load";
+    hauler.run(hUrgentStor);
+    assert(hUrgentStor._from === "urgentstor" && !hUrgentStor._picked,
+        "spawn hungry, no link: hauler pulls from storage instead of a closer " +
+            "dropped pile (ROADMAP 0065, got from=" + hUrgentStor._from +
+            " picked=" + hUrgentStor._picked + ")");
+
+    // control: same dropped pile, but spawn is satisfied again (no essential
+    // consumer) - the old opportunistic behavior (closest dropped pile wins
+    // over storage) is unchanged
+    spawn.store = savedSpawnStoreUrgent;
+    Game.time++;
+    const hNotUrgent = makeCreep("HNotUrgent", "hauler", {
+        store: store(0, 200),
+        pos: withFindLookup(new RoomPosition(20, 20, "W1N1"),
+            { [FIND_DROPPED_RESOURCES]: [urgentDrop] }),
+    });
+    hNotUrgent.pickup = (t) => { hNotUrgent._picked = t && t.id; return OK; };
+    hNotUrgent.withdraw = (t) => { hNotUrgent._from = t && t.id; return OK; };
+    hNotUrgent.memory.job = "load";
+    hauler.run(hNotUrgent);
+    assert(hNotUrgent._picked === "urgentdrop",
+        "spawn satisfied: hauler still prefers the closer dropped pile over storage " +
+            "(unchanged opportunistic behavior, got picked=" + hNotUrgent._picked +
+            " from=" + hNotUrgent._from + ")");
+
+    room.storage = null;
+}
+
+// --- ROADMAP 0065 follow-up: a backed-up source container (throughput /
+// "vazão" problem) makes the hauler drain the receiving link straight into
+// storage, even overriding a hungry spawn (essentialConsumer) - draining the
+// receiving link is what lets the collector link (and the miner behind it)
+// unjam; feeding spawn instead would just leave the jam in place and the
+// same check would fire again next load.
+{
+    const savedSpawnStoreBackup = spawn.store;
+    spawn.store = Object.assign(store(0, 300), { getFreeCapacity: () => 300 });
+
+    const backedLink = Object.assign(new StructureLink(), {
+        id: "backedlink", structureType: STRUCTURE_LINK, room, my: true,
+        pos: new RoomPosition(21, 20, "W1N1"),
+        store: store(400, 800), isCollector: () => false,
+    });
+    REG.backedlink = backedLink;
+    findMap[FIND_MY_STRUCTURES].push(backedLink);
+
+    room.storage = Object.assign(new Structure(), {
+        id: "backedstor", structureType: STRUCTURE_STORAGE, room,
+        pos: new RoomPosition(40, 40, "W1N1"), store: store(50000, 100000),
+    });
+    REG.backedstor = room.storage;
+
+    // source container backed up right at the threshold (1000)
+    srcContainer.store = Object.assign(store(1000, 2000), { getFreeCapacity: () => 1000 });
+    Game.time++;
+    const hBackedUp = makeCreep("HBackedUp", "hauler", { store: store(0, 200) });
+    hBackedUp.withdraw = (t) => { hBackedUp._from = t && t.id; return OK; };
+    hBackedUp.memory.job = "load";
+    hauler.run(hBackedUp);
+    assert(hBackedUp._from === "backedlink" && hBackedUp.memory.forcedDeliver === "storage",
+        "a backed-up source container (>=1000) makes the hauler drain the receiving link " +
+            "and force delivery to storage, even with spawn hungry (ROADMAP 0065 follow-up, " +
+            "got from=" + hBackedUp._from + " forcedDeliver=" + hBackedUp.memory.forcedDeliver + ")");
+
+    // just below the threshold - not backed up, falls back to the plain
+    // essentialConsumer link grab (ROADMAP 0065), no forced delivery
+    srcContainer.store = Object.assign(store(999, 2000), { getFreeCapacity: () => 1001 });
+    Game.time++;
+    const hNotBackedUp = makeCreep("HNotBackedUp", "hauler", { store: store(0, 200) });
+    hNotBackedUp.withdraw = (t) => { hNotBackedUp._from = t && t.id; return OK; };
+    hNotBackedUp.memory.job = "load";
+    hauler.run(hNotBackedUp);
+    assert(hNotBackedUp._from === "backedlink" && !hNotBackedUp.memory.forcedDeliver,
+        "a source container just below the backed-up threshold does not force delivery to " +
+            "storage - falls back to the plain essentialConsumer link grab (got from=" +
+            hNotBackedUp._from + " forcedDeliver=" + hNotBackedUp.memory.forcedDeliver + ")");
+
+    // backed up, but the receiving link is dry - fails soft into the plain
+    // essentialConsumer cascade (storage, since spawn is still hungry)
+    srcContainer.store = Object.assign(store(1000, 2000), { getFreeCapacity: () => 1000 });
+    backedLink.store = store(0, 800);
+    Game.time++;
+    const hBackedUpDryLink = makeCreep("HBackedUpDryLink", "hauler", { store: store(0, 200) });
+    hBackedUpDryLink.withdraw = (t) => { hBackedUpDryLink._from = t && t.id; return OK; };
+    hBackedUpDryLink.memory.job = "load";
+    hauler.run(hBackedUpDryLink);
+    assert(hBackedUpDryLink._from === "backedstor" && !hBackedUpDryLink.memory.forcedDeliver,
+        "backed up but the receiving link is dry: falls back to the plain essentialConsumer " +
+            "cascade (storage, spawn still hungry), no forced delivery (got from=" +
+            hBackedUpDryLink._from + " forcedDeliver=" + hBackedUpDryLink.memory.forcedDeliver + ")");
+
+    findMap[FIND_MY_STRUCTURES] =
+        findMap[FIND_MY_STRUCTURES].filter((s) => s.id !== "backedlink");
+    room.storage = null;
+    spawn.store = savedSpawnStoreBackup;
+    srcContainer.store = Object.assign(store(0, 2000), { getFreeCapacity: () => 2000 });
+}
+
 {
     // storage above its reserve floor, with a genuine consumer (spawn needs
     // energy - tower1 is tagged source-defense by this point and no longer
@@ -2093,6 +2250,36 @@ assert(squatter._shoved === true,
     "a non-miner on the seat is shoved off when the miner arrives");
 mContainer.pos.lookFor = () => [];
 
+// 4. the container was destroyed (or never built) - the miner still parks on
+// the plan's container tile instead of wherever `harvest`'s ERR_NOT_IN_RANGE
+// fallback happens to walk it, so the energy pile stays on one predictable
+// tile for the hauler / the eventual rebuild. A dedicated source far from
+// the base plan's real source clusters ((4,4)/(43,7)/(39,39)) avoids one of
+// those unrelated containers coincidentally falling within its own 1-tile
+// search radius.
+const mSource3 = Object.assign(new Source(), {
+    id: "msrc3", energy: 3000, energyCapacity: 3000,
+    pos: new RoomPosition(20, 20, "W1N1"), room,
+});
+REG.msrc3 = mSource3;
+planStore.mutate("W1N1", (p) => {
+    p.buildings.push({ x: 21, y: 21, structureType: STRUCTURE_CONTAINER, minimalRCL: 1 });
+});
+const mNoContainer = Object.assign(Object.create(Creep.prototype), {
+    id: "mnocont", room, store: store(0, 50),
+    pos: new RoomPosition(22, 20, "W1N1"),
+    body: [{ type: MOVE }, { type: WORK }],
+    harvest: () => OK, transfer: () => OK, move: () => OK,
+});
+mNoContainer.memory = { role: "miner", target: "msrc3" };
+let mNoContainerTo = null;
+mNoContainer.moveTo = (t) => { mNoContainerTo = t; return OK; };
+miner.run(mNoContainer);
+assert(mNoContainerTo && mNoContainerTo.x === 21 && mNoContainerTo.y === 21,
+    "with the container destroyed, a miner without a seat heads for the plan's container tile instead of the bare source");
+assert(mNoContainer.memory.seat && mNoContainer.memory.seat[0] === 21 && mNoContainer.memory.seat[1] === 21,
+    "the plan's container tile becomes the miner's seat even without a built container");
+
 // --- traffic: per-tile footfall counter + road repair policy (0008) --
 {
     const traffic = require(path.join(PROJECT, "src/utils/traffic"));
@@ -2623,13 +2810,30 @@ findMap[FIND_HOSTILE_CREEPS] = [];
     const H = mkTestRampart("h", 5000, 1000000);
     const S = mkTestRampart("s", 50000, 1000000);
 
+    // ROADMAP 0069 (user, live observation): a tower with barely enough
+    // energy to not be critical itself kept spending it hardening a merely
+    // "healthy" rampart/wall while the room's storage had no reserve to
+    // spare - only the critical slice is unconditional now, healthy also
+    // needs utils/resourceTiers.aboveReserve(room), same gate builder.js's
+    // own past-healthy extension already used.
     {
         const { tower, getRepaired } = mkTestTower([H, S], null);
         Game.time++;
         towerMod.run(tower);
+        assert(getRepaired() === null,
+            "nothing critical, no storage at all: the merely-healthy " +
+                "structure (H) is NOT eligible without reserve (ROADMAP " +
+                "0069) - S (past 1%) still skipped as before");
+    }
+    {
+        const twentyPercentStorage = { store: store(200, 1000) }; // 20% fill, above the 1% reserve
+        const { tower, getRepaired } = mkTestTower([H, S], twentyPercentStorage);
+        Game.time++;
+        towerMod.run(tower);
         assert(getRepaired() === H,
-            "nothing critical, no storage surplus: only the healthy-tier " +
-                "structure (H) is eligible - S (past 1%) is skipped");
+            "nothing critical, storage above the 1% reserve: the " +
+                "healthy-tier structure (H) is eligible again - S (past 1%) " +
+                "still skipped regardless (ROADMAP 0068)");
     }
     {
         const { tower, getRepaired } = mkTestTower([C, H, S], null);
@@ -2637,7 +2841,8 @@ findMap[FIND_HOSTILE_CREEPS] = [];
         towerMod.run(tower);
         assert(getRepaired() === C,
             "the critical structure (C, <0.1%) wins over the merely-healthy " +
-                "one (H) - S still skipped");
+                "one (H) even with no storage at all - critical never needs " +
+                "reserve (ROADMAP 0069) - S still skipped");
     }
     {
         const { tower, getRepaired } = mkTestTower([S], null);
@@ -2655,29 +2860,111 @@ findMap[FIND_HOSTILE_CREEPS] = [];
             "past the healthy tier, storage fill at 0.5% (below the 1% " +
                 "reserve): still no repair");
     }
+    // ROADMAP 0068 (user request): a tower never pushes a rampart/wall past
+    // the 1% healthy tier, no matter how much storage reserve exists -
+    // worthHardeningByTower ignores the reserve entirely, unlike
+    // worthHardening (roles/builder.js's own predicate, still reserve-gated
+    // - see the BCapRoom fixture below for the builder side of this same
+    // structure). A tower has no natural brake on how often it fires at a
+    // target it's allowed to keep hardening, so "past 1%" stays a slower,
+    // self-limited builder job instead of an open-ended tower one.
     {
-        // ROADMAP 0054: the gate dropped from the old 50% fill down to a
-        // 1% reserve - 20% fill is well below the old gate but above the
-        // new one, so this is now eligible where it wasn't before
-        // (deliberate behavior change, acceptance criterion 3)
-        const twentyPercentStorage = { store: store(200, 1000) }; // 20% fill
+        const twentyPercentStorage = { store: store(200, 1000) }; // 20% fill, above the 1% reserve
         const { tower, getRepaired } = mkTestTower([S], twentyPercentStorage);
         Game.time++;
         towerMod.run(tower);
-        assert(getRepaired() === S,
-            "past the healthy tier, storage fill at 20% (above the new 1% " +
-                "reserve, below the old 50% gate): now eligible, gets repaired " +
-                "(ROADMAP 0054)");
+        assert(getRepaired() === null,
+            "past the healthy tier, storage fill at 20% (above the 1% " +
+                "reserve): still no repair from the tower (ROADMAP 0068 - " +
+                "past-healthy hardening is builder-only)");
     }
     {
         const fullEnoughStorage = { store: store(600, 1000) }; // 60% fill, well past the reserve
         const { tower, getRepaired } = mkTestTower([S], fullEnoughStorage);
         Game.time++;
         towerMod.run(tower);
-        assert(getRepaired() === S,
-            "past the healthy tier, storage fill at 60% (past the 1% " +
-                "reserve): eligible, gets repaired");
+        assert(getRepaired() === null,
+            "past the healthy tier, storage fill at 60%: still no repair " +
+                "from the tower, even with plenty of reserve (ROADMAP 0068)");
     }
+
+    // --- ROADMAP 0070 (real bug found in review): findRepairTarget used to
+    // check ALL normal structures unconditionally before EVER looking at
+    // rampart/wall, so any trivial decay (a road missing 1 hit) starved a
+    // critical rampart seconds from collapsing. Now both share one
+    // ratio-sorted pool, mirroring roles/builder.js.
+    function mkTestNormal(id, structureType, hits, hitsMax) {
+        return Object.assign(new OwnedStructure(), {
+            id, structureType, hits, hitsMax, my: true,
+            pos: new RoomPosition(11, 11, "TestRoom"),
+            room: { name: "TestRoom" },
+        });
+    }
+    {
+        // barely scratched (99.9% health) vs C (critical, 0.05% health) -
+        // the old code always picked the normal structure first, no matter
+        // how trivial the damage, because it never even looked at
+        // defensiveStructures while normalStructures was non-empty
+        const scratchedExtension = mkTestNormal("ext1", STRUCTURE_EXTENSION, 999, 1000);
+        const { tower, getRepaired } = mkTestTower([C, scratchedExtension], null);
+        Game.time++;
+        towerMod.run(tower);
+        assert(getRepaired() === C,
+            "a critical rampart (C) outranks a barely-scratched normal " +
+                "structure (999/1000) - repair priority is no longer " +
+                "unconditionally normal-structures-first (ROADMAP 0070)");
+    }
+    {
+        // among normal structures alone: a container proportionally far
+        // worse off (80% damaged) must still win over an extension that's
+        // barely touched (0.1% damaged), even though the extension's raw
+        // remaining hits (999) is far SMALLER than the container's
+        // (50000) - sorting by raw hits (the old bug) picked the
+        // extension here, which is exactly backwards
+        const scratchedExtension = mkTestNormal("ext2", STRUCTURE_EXTENSION, 999, 1000);
+        const hurtContainer = mkTestNormal("cont1", STRUCTURE_CONTAINER, 50000, 250000);
+        const { tower, getRepaired } = mkTestTower([scratchedExtension, hurtContainer], null);
+        Game.time++;
+        towerMod.run(tower);
+        assert(getRepaired() === hurtContainer,
+            "the proportionally-worse container (20% health) wins over a " +
+                "barely-scratched extension (99.9% health), even though the " +
+                "extension has far fewer raw hits remaining - ratio, not " +
+                "raw hits (ROADMAP 0070)");
+    }
+
+    // --- ROADMAP 0071 (review finding): 2+ towers in the same room used to
+    // always share the exact same single cached target - both piling onto
+    // whichever sorted first even with two DISTINCT urgent targets, leaving
+    // the other completely unattended that tick. Each tower now claims what
+    // it picks and skips anything an earlier tower this tick already
+    // claimed, falling back to doubling up only once nothing distinct is
+    // left.
+    {
+        const crit1 = mkTestRampart("crit1", 100, 1000000); // 0.01% - worse
+        const crit2 = mkTestRampart("crit2", 200, 1000000); // 0.02% - also critical
+        Game.time++;
+
+        const towerA = mkTestTower([crit1, crit2], null);
+        towerMod.run(towerA.tower);
+        assert(towerA.getRepaired() === crit1,
+            "first tower in the room picks the worst critical target (crit1)");
+
+        const towerB = mkTestTower([crit1, crit2], null);
+        towerMod.run(towerB.tower); // same Game.time -> same cached candidate list
+        assert(towerB.getRepaired() === crit2,
+            "a second tower in the same room/tick claims the OTHER urgent " +
+                "target instead of piling onto the one the first tower " +
+                "already claimed (ROADMAP 0071)");
+
+        const towerC = mkTestTower([crit1, crit2], null);
+        towerMod.run(towerC.tower);
+        assert(towerC.getRepaired() === crit1,
+            "a third tower, with every distinct urgent target already " +
+                "claimed, falls back to doubling up on the single worst " +
+                "one (crit1) instead of sitting idle");
+    }
+
     {
         // no storage at all must never throw (constitution §3)
         const { tower } = mkTestTower([H, S], null);
@@ -2763,7 +3050,51 @@ findMap[FIND_HOSTILE_CREEPS] = [];
                 (threw ? "\n      " + (threw.stack || threw) : ""));
             assert(getRepairs().includes(RCap),
                 "storage past the 1% reserve: the same rampart is fair game " +
-                    "again, matching structures/tower.js's rule exactly");
+                    "again for the builder (structures/tower.js would " +
+                    "refuse it past the healthy tier regardless of reserve " +
+                    "since ROADMAP 0068 - see the tower fixtures above)");
+        }
+
+        // ROADMAP 0068: builder.js previously never touched STRUCTURE_WALL
+        // at all (only rampart) - this fallback now covers wall too, since
+        // "past 1%, builder-only" is meaningless for a type builder.js
+        // never repaired in the first place.
+        function mkBCapWall(hits, hitsMax) {
+            const w = Object.assign(new OwnedStructure(), {
+                id: "bcap-wall", structureType: STRUCTURE_WALL,
+                hits, hitsMax, my: true,
+                pos: new RoomPosition(12, 10, "BCapRoom"),
+                room: { name: "BCapRoom" },
+            });
+            REG[w.id] = w;
+            return w;
+        }
+        const WCap = mkBCapWall(3000000, 300000000); // 1% - past the healthy tier
+
+        {
+            const { creep, getRepairs } = mkBCapCreep([WCap], null);
+            Game.time++;
+            let threw = null;
+            try { builder.run(creep); } catch (e) { threw = e; }
+            assert(!threw, "builder.run on a wall with no storage surplus never throws" +
+                (threw ? "\n      " + (threw.stack || threw) : ""));
+            assert(!getRepairs().includes(WCap),
+                "no storage surplus: a past-healthy-tier wall is left alone " +
+                    "same as a rampart would be");
+        }
+        {
+            const fullEnoughStorage = { store: store(600, 1000) }; // 60% fill
+            const { creep, getRepairs } = mkBCapCreep([WCap], fullEnoughStorage);
+            Game.time++;
+            let threw = null;
+            try { builder.run(creep); } catch (e) { threw = e; }
+            assert(!threw, "builder.run on a wall with storage surplus never throws" +
+                (threw ? "\n      " + (threw.stack || threw) : ""));
+            assert(getRepairs().includes(WCap),
+                "storage past the 1% reserve: builder now hardens a wall " +
+                    "past its healthy tier too, not just a rampart " +
+                    "(ROADMAP 0068 - previously builder.js never repaired " +
+                    "STRUCTURE_WALL at all)");
         }
     }
 
@@ -4577,7 +4908,7 @@ delete Game.creeps.Sc2;
             moveTo: (pos, o) => { seenMaxOps = o.maxOps; seenMaxRooms = o.maxRooms; return OK; },
         };
         routing.moveToRoom(opsCreep, "W9N9", { range: 20, realRoute: true });
-        assert(seenMaxOps === 20000,
+        assert(seenMaxOps === 200000,
             "with opts.realRoute, moveToRoom()'s main routed moveTo() call gets " +
                 "routing.moveMaxOps, not the engine's silent 2000 default");
         assert(seenMaxRooms === 64,
@@ -4793,6 +5124,145 @@ delete Game.creeps.Sc2;
                 "opts.avoid still excludes a room outright under the blocklist-based callback");
             assert(seenCostCallback2("WAnyOtherRoom", cm2) === cm2,
                 "any room NOT in avoid stays open");
+            PathFinder.search = realSearch;
+        }
+
+        // ROADMAP 0064 same-day follow-up, second root cause: the creep
+        // physically ending up in a room OUTSIDE the recorded _realRoute
+        // sequence is expected, not an error - avoidCostCallback is a
+        // blocklist, so native moveTo() is free to (and regularly does)
+        // wander onto a cheaper path through rooms that were never in the
+        // cached list. Confirmed live: this used to be read as "fell off
+        // the validated route", discarding _realRoute entirely and falling
+        // back to findRoute()/routeCostCallback's narrow allowlist - the
+        // exact mechanism avoidCostCallback exists to bypass - reproducing
+        // the same one-room-at-a-time blame cascade the fix was supposed to
+        // end. It must stay cached and still drive execution via the
+        // blocklist callback.
+        {
+            let findRouteCallsDetour = 0;
+            Game.map.findRoute = () => { findRouteCallsDetour++; return [{ exit: 1, room: "W9N9" }]; };
+            PathFinder.search = () => ({
+                path: [
+                    new RoomPosition(49, 25, "WDetourStart"),
+                    new RoomPosition(25, 25, "WDetourStepA"),
+                    new RoomPosition(25, 25, "WDetourStepB"),
+                ],
+                incomplete: false,
+            });
+            let seenCostCallback3 = null;
+            const detourCreep = {
+                pos: new RoomPosition(25, 25, "WDetourStart"),
+                room: { name: "WDetourStart" },
+                memory: {},
+                moveTo: (pos, o) => { seenCostCallback3 = o.costCallback; return OK; },
+            };
+            routing.moveToRoom(detourCreep, "W9N9", { range: 20, realRoute: true });
+            // now physically in a room the recorded sequence never named -
+            // the native search's own choice under the blocklist, not a
+            // dead end and not a retreat
+            detourCreep.room = { name: "WNeverRecorded" };
+            detourCreep.pos = new RoomPosition(25, 25, "WNeverRecorded");
+            routing.moveToRoom(detourCreep, "W9N9", { range: 20, realRoute: true });
+            assert(findRouteCallsDetour === 0,
+                "Game.map.findRoute is still never called - deviating off the recorded sequence " +
+                    "does not discard the validated real route");
+            assert(
+                detourCreep.memory._realRoute && detourCreep.memory._realRouteDest === "W9N9",
+                "_realRoute stays cached across the deviation instead of being deleted"
+            );
+            const cm3 = new PathFinder.CostMatrix();
+            assert(seenCostCallback3("WSomeRoomNeverInTheRoute", cm3) === cm3,
+                "the blocklist callback (not the old allowlist) is still what drives execution " +
+                    "after the deviation");
+            PathFinder.search = realSearch;
+            Game.map.findRoute = realFindRouteRR;
+        }
+
+        // ROADMAP 0064 same-day, the actual root cause: native moveTo()'s
+        // own internal multi-room search proved measurably less reliable
+        // than computeRealRoute()'s raw PathFinder.search() under identical
+        // constraints - confirmed live across 3 separate legs via the
+        // queriedRooms diagnostic (it asked about and was correctly told
+        // open/blocked for exactly the right rooms, and still gave up,
+        // sometimes without even trying the room the real detour needed).
+        // Fix: once a real route is cached, hand native moveTo() only the
+        // NEXT hop as its target, never the whole multi-room trip at once -
+        // so it only ever has to solve searches it's proven reliable at.
+        {
+            PathFinder.search = () => ({
+                path: [
+                    new RoomPosition(49, 25, "WHopStart"),
+                    new RoomPosition(25, 25, "WHop1"),
+                    new RoomPosition(25, 25, "WHop2"),
+                    new RoomPosition(25, 25, "WHopFinal"),
+                ],
+                incomplete: false,
+            });
+            let seenTarget = null, seenRange = null;
+            const hopCreep = {
+                pos: new RoomPosition(25, 25, "WHopStart"),
+                room: { name: "WHopStart" },
+                memory: {},
+                moveTo: (pos, o) => { seenTarget = pos.roomName; seenRange = o.range; return OK; },
+            };
+            routing.moveToRoom(hopCreep, "WHopFinal", { range: 20, realRoute: true });
+            assert(seenTarget === "WHop1",
+                "with a 3-hop cached real route, moveTo() targets only the NEXT hop, not the " +
+                    "final destination directly - live evidence across 3 legs showed native " +
+                    "moveTo()'s own multi-room search failing routes computeRealRoute solved fine");
+            assert(seenRange === 20, "the per-hop range is capped at the caller's own range here");
+
+            // creep physically enters WHop1 - the next call should aim at WHop2
+            hopCreep.room = { name: "WHop1" };
+            hopCreep.pos = new RoomPosition(25, 25, "WHop1");
+            routing.moveToRoom(hopCreep, "WHopFinal", { range: 20, realRoute: true });
+            assert(seenTarget === "WHop2",
+                "once the first hop is reached, the next call targets the hop after it");
+
+            // creep reaches WHop2 - the LAST intermediate hop before the
+            // real destination - the next call should target the true
+            // destination directly, same as before this fix for the final leg
+            hopCreep.room = { name: "WHop2" };
+            hopCreep.pos = new RoomPosition(25, 25, "WHop2");
+            routing.moveToRoom(hopCreep, "WHopFinal", { range: 20, realRoute: true });
+            assert(seenTarget === "WHopFinal",
+                "once only the final destination remains in the cached route, moveTo() targets " +
+                    "it directly again - single-hop targeting is only for intermediate hops");
+            PathFinder.search = realSearch;
+        }
+
+        // range capping: two adjacent rooms' centers are always >=25 tiles
+        // apart in world coordinates, so satisfying a larger range against
+        // an intermediate hop's center could let the engine call the hop
+        // "reached" before the creep actually crosses into it - capped at
+        // 20 defensively regardless of what opts.range a future caller
+        // passes; the final hop keeps the caller's own range unchanged
+        {
+            PathFinder.search = () => ({
+                path: [
+                    new RoomPosition(49, 25, "WHopStart2"),
+                    new RoomPosition(25, 25, "WHopA"),
+                    new RoomPosition(25, 25, "WHopFinal2"),
+                ],
+                incomplete: false,
+            });
+            let seenTarget2 = null, seenRange2 = null;
+            const hopCreep2 = {
+                pos: new RoomPosition(25, 25, "WHopStart2"),
+                room: { name: "WHopStart2" },
+                memory: {},
+                moveTo: (pos, o) => { seenTarget2 = pos.roomName; seenRange2 = o.range; return OK; },
+            };
+            routing.moveToRoom(hopCreep2, "WHopFinal2", { range: 30, realRoute: true });
+            assert(seenTarget2 === "WHopA" && seenRange2 === 20,
+                "an intermediate hop's range is capped at 20 regardless of a larger opts.range");
+
+            hopCreep2.room = { name: "WHopA" };
+            hopCreep2.pos = new RoomPosition(25, 25, "WHopA");
+            routing.moveToRoom(hopCreep2, "WHopFinal2", { range: 30, realRoute: true });
+            assert(seenTarget2 === "WHopFinal2" && seenRange2 === 30,
+                "the final hop uses the caller's own range unchanged, not the intermediate cap");
             PathFinder.search = realSearch;
         }
 

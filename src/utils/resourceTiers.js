@@ -19,6 +19,27 @@ function aboveReserve(room) {
     return room.storage.store.energy > reserveFloor(room);
 }
 
+// A much higher bar than aboveReserve's thin 1% floor - "the room has real
+// abundance to spare", not just "not literally empty". Reuses
+// logistics.storageSatisfactoryRatio (ROADMAP 0072, user request) - the
+// same 50% fill bar structures/link.js's collector already treats as
+// "storage is comfortable enough that the controller link can win by
+// default" - instead of inventing a second, differently-tuned "abundant"
+// number that answers a question this codebase already had a name for.
+// Used by structures/tower.js to gate the one genuinely unbounded spend
+// (hardening a rampart/wall past its 1% target, ROADMAP 0068/0069) behind
+// something stronger than the thin reserve floor - a tower reacts every
+// tick with no population cost to self-limit it, unlike roles/builder.js.
+function isStorageAbundant(room) {
+    if (!room.storage) return false;
+    const capacity = room.storage.store.getCapacity(RESOURCE_ENERGY);
+    if (!capacity) return false;
+    return (
+        room.storage.store.energy >=
+        capacity * config.get("logistics.storageSatisfactoryRatio", 0.5)
+    );
+}
+
 // The controller is genuinely at risk of downgrading - the one condition
 // that overrides every other reserve/stability gate in this module (losing
 // RCL always outranks a comfortable buffer). Shared by structures/link.js
@@ -41,4 +62,4 @@ function controllerCritical(room) {
     );
 }
 
-module.exports = { reserveFloor, aboveReserve, controllerCritical };
+module.exports = { reserveFloor, aboveReserve, isStorageAbundant, controllerCritical };

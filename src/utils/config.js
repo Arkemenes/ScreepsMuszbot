@@ -22,23 +22,37 @@ const defaults = {
         mopUpRange: 10,
     },
     tower: {
-        // repair only kicks in once the tower has this much energy or more
-        repairEnergyRatio: 0.7,
+        // ROADMAP 0072 (user-specified, unified tower/builder repair
+        // tiering): how much of the TOWER'S OWN energy is required before
+        // it'll spend on a repair target of a given tier - stricter for a
+        // less urgent tier, since a tower reacts every tick with no
+        // population cost to self-limit it (unlike roles/builder.js, always
+        // unconditional for critical/satisfactory - ROADMAP 0069).
+        //   critical target:            energyRatio >= repairEnergyRatio
+        //   satisfactory OR optimal:    energyRatio >= satisfactoryRepairEnergyRatio
+        //     (optimal also needs utils/resourceTiers.isStorageAbundant -
+        //     see rampartCriticalRatio/rampartSatisfactoryRatio below)
+        // repairEnergyRatio deliberately equals criticalRatio below
+        // (ROADMAP 0067) - a gap above it left the tower holding energy
+        // hauler.js had already stopped urgently delivering (no longer
+        // "critical") that it still couldn't spend (below the old, higher
+        // gate).
+        repairEnergyRatio: 0.5,
+        satisfactoryRepairEnergyRatio: 0.7,
         // rampart/wall repair tiers, as a FRACTION of the structure's own
-        // hitsMax (ROADMAP 0032 D4 + follow-up, utils/rampartRepair.js -
-        // the one place that reads these three) - hitsMax already scales
-        // with RCL via the engine (RAMPART_HITS_MAX / WALL_HITS_MAX
-        // tables), so a ratio keeps every tier meaningful at every RCL
-        // instead of a fixed number becoming a rounding error at RCL8 or
-        // overkill at RCL2. Below rampartHealthyRatio a structure is always
-        // fair game (rampartCriticalRatio just picks the worst of those
-        // first); at/above it, repair only continues while the room's
-        // storage still has its emergency reserve intact
-        // (logistics.reserveRatio, via utils/resourceTiers.aboveReserve) -
-        // otherwise that effort is better spent elsewhere (building,
-        // upgrading).
+        // hitsMax (ROADMAP 0032 D4 + follow-up, utils/rampartRepair.js).
+        // RAMPART_HITS_MAX (300k) and WALL_HITS_MAX (300M) are fixed engine
+        // constants - not RCL-scaled - but differ from each other by
+        // 1000x, so a ratio of each structure's own ceiling stays
+        // meaningful for both instead of picking one absolute number
+        // that's trivial for a wall or unreachable for a rampart.
+        // roles/builder.js and structures/tower.js share these two numbers
+        // (utils/rampartRepair.js is the single source of truth), but NOT
+        // the repair.normal* pair below - a normal structure's hitsMax is
+        // small enough that a tenth-of-a-percent bar would basically never
+        // fire, so it needs its own, much coarser pair (ROADMAP 0072).
         rampartCriticalRatio: 0.001,
-        rampartHealthyRatio: 0.01,
+        rampartSatisfactoryRatio: 0.01,
         // ROADMAP 0054: the tower's own 3-tier delivery bands - hauler.js
         // decides where to load/deliver energy from these. Critical is
         // pulled from storage unconditionally; satisfactory is left alone
@@ -46,11 +60,33 @@ const defaults = {
         // keeps being topped off while logistics.reserveRatio is intact.
         // Under defenseActive both bands shift up together - a tower nearly
         // full going into a fight is worth more than the same energy idle
-        // in storage.
+        // in storage. satisfactoryRatio deliberately equals
+        // satisfactoryRepairEnergyRatio above (ROADMAP 0072, user request -
+        // "rever a zona morta do hauler"): the old 0.8 sat OUTSIDE the
+        // 50%-70% band this repair gate actually needs, so a tower could
+        // idle for a long time right at 50%-55% - hauler.js's own
+        // "critical" cutoff - with nothing in the delivery cascade actively
+        // pushing it any higher (the old ideal-band top-off only started at
+        // 80%, and the one path below that, the very bottom of
+        // pickDeliver's cascade, only fires once literally nothing else in
+        // the room wants the energy). Aligning the two closes that gap: the
+        // moment hauler.js starts treating the tower as "ideal, worth
+        // topping off", the tower has ALSO just crossed the energy bar its
+        // own satisfactory-tier repair needs.
         criticalRatio: 0.5,
-        satisfactoryRatio: 0.8,
+        satisfactoryRatio: 0.7,
         criticalRatioUnderAttack: 0.8,
         satisfactoryRatioUnderAttack: 0.95,
+    },
+    // ROADMAP 0072: repair-tier ratios for every structure that ISN'T a
+    // rampart/wall (see tower.rampartCriticalRatio/rampartSatisfactoryRatio
+    // above for those) - a container/spawn/extension/road's hitsMax is
+    // small enough that the rampart/wall pair (0.1%/1%) would essentially
+    // never fire, so this pair is deliberately much coarser. Shared by
+    // structures/tower.js and roles/builder.js (utils/rampartRepair.js).
+    repair: {
+        normalCriticalRatio: 0.1,
+        normalSatisfactoryRatio: 0.5,
     },
     upgrader: {
         // rooms/needs.js + utils/autoscale.js: ABSOLUTE ceiling on the
@@ -75,12 +111,18 @@ const defaults = {
         // ROADMAP 0054: utils/resourceTiers.js's single reserve floor - a
         // fraction of the room's storage capacity kept off-limits to every
         // OPTIONAL energy spend (lab/factory/power spawn/controller
-        // container, rampart/wall past the healthy tier, a tower past its
-        // satisfactory band). Replaces two independently-tuned pisos that
-        // used to answer the same question differently (tower's old 50%
+        // container, and - roles/builder.js only since ROADMAP 0072 split
+        // the two workers apart - a rampart/wall past its satisfactory
+        // tier). Replaces two independently-tuned pisos that used to
+        // answer the same question differently (tower's old 50%
         // rampartStorageFillGate, hauler's old 5% storageReserveFloor).
         // Essential spends (spawn/extension, a critical tower) ignore this
-        // entirely, same as before.
+        // entirely, same as before. structures/tower.js uses the much
+        // higher storageSatisfactoryRatio bar below instead (via
+        // utils/resourceTiers.isStorageAbundant) for the equivalent
+        // optimal-tier rampart/wall spend - a tower has no population cost
+        // to self-limit it the way a builder does, so it needs real
+        // abundance, not just "not literally empty".
         reserveRatio: 0.01,
         // utils/resourceTiers.js's controllerCritical(room) - true once the
         // controller's ticksToDowngrade falls below this fraction of
@@ -94,7 +136,10 @@ const defaults = {
         // structures/link.js's collector: once the storage is at/above this
         // fill ratio AND the controller isn't RCL8 yet (still has real RCL
         // to gain), the controller link wins by default over a storage
-        // that's already comfortable.
+        // that's already comfortable. Reused by
+        // utils/resourceTiers.isStorageAbundant (ROADMAP 0072) - the same
+        // "storage is genuinely comfortable" bar, rather than inventing a
+        // second, differently-tuned number that answers the same question.
         storageSatisfactoryRatio: 0.5,
         // roles/hauler.js's terminalWithdrawable(): never let the
         // ledger-credited withdrawable slice drain the terminal below this
@@ -265,7 +310,29 @@ const defaults = {
         // within the old one, but only opts.realRoute callers (today, just
         // the claimer) have shown evidence of actually needing it -
         // scout/pioneer/raider/squad keep the engine's own defaults.
-        moveMaxOps: 20000,
+        //
+        // ROADMAP 0064 same-day, third root cause: 20000 was sized back
+        // when the native moveTo() search was still constrained by
+        // routeCostCallback's narrow ALLOWLIST (route + one neighbor layer,
+        // rarely more than ~20 rooms) - a small search space that 20000 ops
+        // covered comfortably. Once avoidCostCallback replaced that with
+        // the same open BLOCKLIST computeRealRoute() itself searches under
+        // (every room open except avoid/hostile), the two became the SAME
+        // kind of search - confirmed live: tryComputeRealRoute (200000 ops)
+        // kept finding a valid route from the exact room native moveTo()
+        // (20000 ops) then immediately failed ERR_NO_PATH from, every
+        // single retreat, four legs in a row - a search that only ever
+        // fails with a 10x smaller ops ceiling than an equivalent search
+        // that succeeds is the signature of ops exhaustion, not a genuine
+        // dead end (PathFinder.search's own `incomplete` when ops run out
+        // surfaces through moveTo() as the identical ERR_NO_PATH, no way to
+        // tell them apart from the return code alone). Raised to match
+        // realRouteMaxOps - there's no longer a principled reason for the
+        // two to differ, since avoidCostCallback is only ever in play (see
+        // moveToRoom()'s usingRealRoute) in exactly the tick right after
+        // computeRealRoute validated the same search under the same
+        // constraints.
+        moveMaxOps: 200000,
         moveMaxRooms: 64,
     },
     observer: {

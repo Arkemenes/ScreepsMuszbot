@@ -58,15 +58,15 @@ global.clearBuildPriority = function () {
 };
 
 // While carrying energy, do a repair on anything critical within work range
-// (3) - the same "critical" bar the main repair branch below uses (<30% for
-// most structures, rampart via the shared utils/rampartRepair.isCritical
-// tier instead of a flat ratio, since hitsMax for a rampart scales up to
-// 300M at RCL8) - without interrupting the trip to the real objective. Only
-// critical, so a passing-by builder never gets hijacked into topping off
-// something merely under 35%/healthy; that's opportunisticWork's whole job -
-// stop for what genuinely can't wait, keep walking for everything else. When
-// the creep is in range of its actual target the state machine's own
-// build/repair runs afterwards and takes over.
+// (3) - the exact same "critical" tier the main repair branch below uses
+// (utils/rampartRepair.tier, ROADMAP 0072 - one shared tier system for
+// every structure type, not just rampart/wall) - without interrupting the
+// trip to the real objective. Only critical, so a passing-by builder never
+// gets hijacked into topping off something merely satisfactory; that's
+// opportunisticWork's whole job - stop for what genuinely can't wait, keep
+// walking for everything else. When the creep is in range of its actual
+// target the state machine's own build/repair runs afterwards and takes
+// over.
 function opportunisticWork(creep) {
     if (creep.store[RESOURCE_ENERGY] === 0) return;
 
@@ -75,12 +75,9 @@ function opportunisticWork(creep) {
         creep.pos.findInRange(roomCache.structures(creep.room), 3, {
             filter: (s) =>
                 s.structureType !== STRUCTURE_CONTROLLER &&
-                s.structureType !== STRUCTURE_WALL &&
                 isPlanned(s) &&
                 traffic.worthRepairing(s) &&
-                (s.structureType === STRUCTURE_RAMPART
-                    ? rampartRepair.isCritical(s)
-                    : s.hits / s.hitsMax < 0.3),
+                rampartRepair.tier(s) === "critical",
         }),
         (s) => -(s.hits / s.hitsMax)
     )[0];
@@ -157,28 +154,34 @@ var builder = {
         // Spend Energy
         else {
             reservations.release(creep);
+            // ROADMAP 0072 (user-specified: tower and builder share the
+            // exact same repair logic now): one tier+type+ratio-sorted pool
+            // (utils/rampartRepair.priority) for every damaged structure -
+            // critical/satisfactory/optimal, normal-before-rampart-before-
+            // wall within a tier. builderMayRepair filters out an
+            // optimal-tier rampart/wall unless the room's storage reserve
+            // covers it (unchanged since ROADMAP 0054/0068 - builder is
+            // population-limited, self-throttling, so it keeps the looser
+            // gate tower.js no longer gets); a normal structure's optimal
+            // tier is always eligible regardless (bounded/cheap repair, no
+            // reserve concern).
             let repairTargets = _.filter(
                 roomCache.structures(creep.room),
                 (s) =>
                     s.structureType != STRUCTURE_CONTROLLER &&
-                    s.structureType != STRUCTURE_WALL &&
                     s.hits < s.hitsMax &&
-                    (s.structureType != STRUCTURE_RAMPART ||
-                        rampartRepair.isCritical(s)) &&
                     isPlanned(s) &&
-                    traffic.worthRepairing(s)
+                    traffic.worthRepairing(s) &&
+                    rampartRepair.builderMayRepair(s, creep.room)
             );
 
             var repairTarget;
             if (repairTargets.length) {
-                repairTargets = _.sortBy(
-                    repairTargets,
-                    (s) => s.hits / s.hitsMax
-                );
+                repairTargets = _.sortBy(repairTargets, rampartRepair.priority);
 
                 repairTarget = repairTargets[0];
 
-                if (repairTargets[0].hits / repairTargets[0].hitsMax < 0.3) {
+                if (rampartRepair.tier(repairTarget) === "critical") {
                     creep.pushState("Build", repairTarget.id);
                     if (!creep.invokeState()) {
                         creep.say("zzz");
@@ -208,33 +211,16 @@ var builder = {
                 return;
             }
 
+            // repairTarget (whatever tier it landed at - satisfactory or
+            // optimal, critical already returned above) is the dead-last
+            // fallback now: nothing left to build, and it's already the
+            // single most urgent thing worth repairing per the unified
+            // tier+type+ratio pool above. No separate rampart/wall-only
+            // pass needed anymore (ROADMAP 0072) - builderMayRepair already
+            // filtered out anything past-target that the room can't
+            // currently afford before this pool was ever built.
             if (repairTarget) {
                 creep.pushState("Build", repairTarget.id);
-                if (!creep.invokeState()) {
-                    creep.say("zzz");
-                }
-                return;
-            }
-
-            // dead-last fallback, reached only once there's nothing left to
-            // build or repair - same utils/rampartRepair tiers as the
-            // opportunistic check above and structures/tower.js, so all
-            // three agree on what "still worth hardening" means.
-            let damagedRamparts = _.filter(
-                roomCache.structures(creep.room),
-                (s) =>
-                    s.structureType == STRUCTURE_RAMPART &&
-                    isPlanned(s) &&
-                    rampartRepair.worthHardening(s, creep.room)
-            );
-
-            if (damagedRamparts.length) {
-                damagedRamparts = _.sortBy(
-                    damagedRamparts,
-                    (s) => s.hits / s.hitsMax
-                );
-
-                creep.pushState("Build", damagedRamparts[0].id);
                 if (!creep.invokeState()) {
                     creep.say("zzz");
                 }

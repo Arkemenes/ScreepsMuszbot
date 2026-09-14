@@ -5,6 +5,7 @@ const { takeCover } = require("../utils/combat");
 const { roomNeeds } = require("../rooms/needs");
 const config = require("../utils/config");
 const names = require("../utils/names");
+const planStore = require("../utils/planStore");
 
 // Containers adjacent to the source, and the first one no other miner sits on.
 function findContainerSeat(creep, source) {
@@ -32,6 +33,26 @@ function containerUnder(creep) {
     );
 }
 
+// The tile the source's container is planned to occupy, even when the
+// structure itself isn't there (destroyed, or not built yet) - the plan's
+// building list survives the container's death, so the miner still has a
+// single predictable tile to camp instead of wherever `harvest`'s
+// ERR_NOT_IN_RANGE fallback happens to walk it to.
+function plannedContainerPos(roomName, source) {
+    const plan = planStore.getPlan(roomName);
+    if (!plan) return null;
+    const building = _.find(
+        plan.buildings,
+        (b) =>
+            b.structureType === STRUCTURE_CONTAINER &&
+            Math.max(
+                Math.abs(b.x - source.pos.x),
+                Math.abs(b.y - source.pos.y)
+            ) <= 1
+    );
+    return building ? new RoomPosition(building.x, building.y, roomName) : null;
+}
+
 // Push a creep off its tile into the first free adjacent tile.
 function shoveAway(creep, avoidPos) {
     const terrain = creep.room.getTerrain();
@@ -47,6 +68,29 @@ function shoveAway(creep, avoidPos) {
             creep.move(creep.pos.getDirectionTo(x, y));
             return;
         }
+    }
+}
+
+// Walk onto `target` (the container structure, or its planned RoomPosition
+// while the structure is gone/not built yet), shoving off a non-miner
+// squatter in the way first. Shared by the real-container and
+// planned-position seat branches below.
+function moveToSeat(creep, target) {
+    const seatPos = target.pos || target;
+    const squatter = seatPos.lookFor(LOOK_CREEPS)[0];
+    const blocked = squatter && squatter.id !== creep.id;
+
+    // clear anyone off the seat as we approach; `travel` treats a creep on
+    // a container as "parked" and would route around it forever otherwise
+    if (blocked && creep.pos.getRangeTo(seatPos) <= 2) {
+        shoveAway(squatter, creep.pos);
+    }
+
+    if (blocked && creep.pos.isNearTo(seatPos)) {
+        // step straight in - the squatter is being shoved
+        creep.move(creep.pos.getDirectionTo(seatPos));
+    } else {
+        creep.moveTo(target, { range: 0, reusePath: 3 });
     }
 }
 
@@ -343,23 +387,7 @@ var miner = {
                         creep.memory.onContainer = true;
                     } else {
                         seekingSeat = true;
-                        const squatter = seat.pos.lookFor(LOOK_CREEPS)[0];
-                        const blocked =
-                            squatter && squatter.id !== creep.id;
-
-                        // clear anyone off the seat as we approach; `travel`
-                        // treats a creep on a container as "parked" and would
-                        // route around it forever otherwise
-                        if (blocked && creep.pos.getRangeTo(seat.pos) <= 2) {
-                            shoveAway(squatter, creep.pos);
-                        }
-
-                        if (blocked && creep.pos.isNearTo(seat.pos)) {
-                            // step straight in - the squatter is being shoved
-                            creep.move(creep.pos.getDirectionTo(seat.pos));
-                        } else {
-                            creep.moveTo(seat, { range: 0, reusePath: 3 });
-                        }
+                        moveToSeat(creep, seat);
                     }
                 } else if (containers.length) {
                     // seats all taken by other miners - wait next to one
@@ -369,9 +397,29 @@ var miner = {
                         reusePath: 5,
                     });
                 } else {
-                    // no container at this source - mine from the source tile
-                    creep.memory.onContainer = true;
-                    creep.memory.seat = null;
+                    // no container built at this source (destroyed, or not
+                    // built yet) - still park on the plan's container tile
+                    // when there is one, so the energy pile lands on one
+                    // predictable spot for a hauler/the eventual rebuild
+                    // instead of wherever the harvest fallback below happens
+                    // to walk to.
+                    const planned = plannedContainerPos(
+                        creep.room.name,
+                        source
+                    );
+                    if (planned) {
+                        creep.memory.seat = [planned.x, planned.y];
+                        if (creep.pos.isEqualTo(planned)) {
+                            creep.memory.onContainer = true;
+                        } else {
+                            seekingSeat = true;
+                            moveToSeat(creep, planned);
+                        }
+                    } else {
+                        // no plan either - mine from the source tile
+                        creep.memory.onContainer = true;
+                        creep.memory.seat = null;
+                    }
                 }
             }
         }
