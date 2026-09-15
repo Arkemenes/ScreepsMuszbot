@@ -1,3 +1,5 @@
+const energyLedger = require("../utils/energyLedger");
+
 /** Example state - goto location */
 Creep.prototype.runGoto = function (scope) {
     var { pos, range = 1 } = scope;
@@ -109,6 +111,9 @@ Creep.prototype.runUpgrade = function (scope) {
     let target = Game.getObjectById(scope);
 
     const status = this.upgradeController(target);
+    if (status === OK) {
+        energyLedger.creditUpgrade(this, target);
+    }
 
     if (status == ERR_NOT_IN_RANGE) {
         const moveStatus = this.moveTo(target);
@@ -133,6 +138,7 @@ Creep.prototype.runBuild = function (scope) {
 
         if (status == OK) {
             this.say("~Pew!~");
+            energyLedger.creditBuild(this, target);
         } else if (status == ERR_NOT_IN_RANGE) {
             this.moveTo(target);
         } else {
@@ -150,6 +156,7 @@ Creep.prototype.runBuild = function (scope) {
 
         if (status == OK) {
             this.say("~Pew!~");
+            energyLedger.creditRepair(this, target);
         } else if (status == ERR_NOT_IN_RANGE) {
             this.moveTo(target);
         } else {

@@ -444,6 +444,14 @@ const defaults = {
         // is otherwise unconditional whenever any Power sits in the store
         enabled: true,
     },
+    stats: {
+        // utils/stats.js (ROADMAP 0079): rooms.<room>.avgBarrierHits iterates
+        // every rampart/wall in the room (roomCache.myStructures, no new
+        // room.find, but still real work on a big base) - throttled to once
+        // per this many ticks instead of every tick, same value cached in
+        // between (utils/stats.js's own heap-resident barrierHitsCache).
+        barrierHitsInterval: 50,
+    },
 };
 
 function walk(node, segments) {

@@ -11,6 +11,7 @@ const config = require("../utils/config");
 const names = require("../utils/names");
 const bootstrap = require("./bootstrap");
 const { silenceAttackAlerts } = require("../utils/combat");
+const energyLedger = require("../utils/energyLedger");
 
 // Closest source in the target room that still has energy to give.
 function nearestMinableSource(creep) {
@@ -196,7 +197,10 @@ const pioneer = {
             return;
         }
         if (creep.pos.inRangeTo(site, 3)) {
-            creep.build(site);
+            const status = creep.build(site);
+            if (status === OK) {
+                energyLedger.creditBuild(creep, site);
+            }
         } else {
             creep.moveTo(site, { range: 3, reusePath: 5 });
         }

@@ -2,6 +2,7 @@ let creepLogic = require("../roles");
 let raiding = require("./raiding");
 const census = require("../utils/census");
 const config = require("../utils/config");
+const energyLedger = require("../utils/energyLedger");
 
 // Priority order: whatever order the roles are declared in roles/index.js
 // (bootstrap, defender, miner, hauler, upgrader, builder, scout).
@@ -41,7 +42,12 @@ function renewIdleSpawns(room, spawns) {
                 bodyCost(c.body) >= minBodyCost &&
                 spawn.pos.getRangeTo(c) <= 1
         );
-        if (candidate && spawn.renewCreep(candidate) === OK) continue;
+        if (candidate) {
+            if (spawn.renewCreep(candidate) === OK) {
+                energyLedger.record(room.name, "renew", energyLedger.renewCost(candidate.body));
+                continue;
+            }
+        }
         stillIdle.push(spawn);
     }
     return stillIdle;
@@ -162,6 +168,7 @@ function spawnCreeps(room) {
             );
             return;
         }
+        energyLedger.record(room.name, "spawn", bodyCost(picked.body));
 
         // consume the request so the next idle spawn builds something else
         requests.splice(requests.indexOf(picked), 1);

@@ -7,17 +7,23 @@ const observer = require("../utils/observer");
 const names = require("../utils/names");
 
 // --- console: queue a controller-sign request -------------------------------
-//   signRoom("W1N1", "my message")   -> queue it
-//   signRoom("W1N1")                 -> clear it
+//   signRoom("W1N1", "my message", "W2N2") -> queue it from W2N2
+//   signRoom("W1N1", "my message")         -> queue it
+//   signRoom("W1N1")                       -> clear it
 //   signQueue()                      -> print the queue
-global.signRoom = function (roomName, text) {
+global.signRoom = function (roomName, text, fromRoomName) {
     if (!Memory.signQueue) Memory.signQueue = {};
     if (text === undefined || text === null || text === "") {
         delete Memory.signQueue[roomName];
         console.log("[sign] cleared " + roomName);
     } else {
-        Memory.signQueue[roomName] = String(text);
-        console.log("[sign] queued " + roomName + ": " + Memory.signQueue[roomName]);
+        const message = String(text);
+        if (fromRoomName) {
+            Memory.signQueue[roomName] = { text: message, from: String(fromRoomName) };
+        } else {
+            Memory.signQueue[roomName] = message;
+        }
+        console.log("[sign] queued " + roomName + ": " + message);
     }
 };
 global.signQueue = function () {
@@ -28,6 +34,14 @@ function pendingSignRoom() {
     const q = Memory.signQueue || {};
     for (const rn in q) return rn; // first queued room
     return null;
+}
+
+function signRequest(roomName) {
+    const request = (Memory.signQueue || {})[roomName];
+    if (request && typeof request === "object") {
+        return { text: String(request.text || ""), from: request.from || null };
+    }
+    return { text: String(request || ""), from: null };
 }
 
 // --- console: queue a base-layout preview -----------------------------
@@ -134,6 +148,9 @@ var scout = {
         // highway rooms and steer around known hostiles where possible.
         const signRoom = pendingSignRoom();
         if (signRoom) {
+            const request = signRequest(signRoom);
+            const sourceRoom = request.from && request.from !== signRoom ? request.from : null;
+            const travelRoom = sourceRoom && creep.room.name !== sourceRoom ? sourceRoom : signRoom;
             if (creep.room.name !== signRoom) {
                 // stall guard: give up on this one-off request if it never
                 // gets there (e.g. the destination turned out unreachable -
@@ -141,8 +158,11 @@ var scout = {
                 // ROADMAP 0060, but that return value isn't checked here;
                 // this catches it either way) instead of camping on it with
                 // zero feedback for the life of the blacklist
-                if (creep.memory.signTravelTarget !== signRoom) {
-                    creep.memory.signTravelTarget = signRoom;
+                const travelPhase = sourceRoom && creep.room.name !== sourceRoom
+                    ? "from:" + sourceRoom
+                    : "to:" + signRoom;
+                if (creep.memory.signTravelTarget !== travelPhase) {
+                    creep.memory.signTravelTarget = travelPhase;
                     creep.memory.signTravelSince = Game.time;
                 }
                 const travelLimit = config.get("routing.travelStallLimit", 500);
@@ -151,12 +171,12 @@ var scout = {
                     creep.memory.signTravelSince = undefined;
                     creep.memory.signTravelTarget = undefined;
                     console.log(
-                        `[sign] ${signRoom}: gave up trying to reach it - ` +
+                        `[sign] ${signRoom}: gave up trying to reach ${travelRoom} - ` +
                             `run signRoom("${signRoom}", text) again if still needed`
                     );
                     return;
                 }
-                routing.moveToRoom(creep, signRoom, { range: 20, reusePath: 30 });
+                routing.moveToRoom(creep, travelRoom, { range: 20, reusePath: 30 });
                 return;
             }
             creep.memory.signTravelSince = undefined;
@@ -166,7 +186,7 @@ var scout = {
                 delete Memory.signQueue[signRoom]; // nothing to sign here
                 return;
             }
-            const res = creep.signController(ctrl, Memory.signQueue[signRoom]);
+            const res = creep.signController(ctrl, request.text);
             if (res === ERR_NOT_IN_RANGE) {
                 creep.moveTo(ctrl, { range: 1, reusePath: 20 });
             } else {

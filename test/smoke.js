@@ -45,6 +45,10 @@ const constants = {
         attack: 80, ranged_attack: 150, claim: 600 },
     CREEP_SPAWN_TIME: 3, CREEP_LIFE_TIME: 1500, CREEP_CLAIM_LIFE_TIME: 600,
     OBSERVER_RANGE: 10, HARVEST_POWER: 2, ATTACK_POWER: 30, RANGED_ATTACK_POWER: 10,
+    // ROADMAP 0081: real, unboosted per-WORK-part power for each action -
+    // used by utils/energyLedger.js's formula-based spend estimate
+    BUILD_POWER: 5, REPAIR_POWER: 100, UPGRADE_CONTROLLER_POWER: 1,
+    TOWER_ENERGY_COST: 10,
     // ROADMAP 0036 revision: BOOSTS is a genuine Screeps-provided global
     // constant (src/ never hardcodes boost multipliers, only consults this
     // live, same principle as REACTIONS/COMMODITIES below) - a small
@@ -55,6 +59,7 @@ const constants = {
         ranged_attack: {
             KO: { rangedAttack: 2 }, KHO2: { rangedAttack: 3 }, XKHO2: { rangedAttack: 4 },
         },
+        work: { LH: { build: 1.5, repair: 1.5 }, LH2O: { upgradeController: 1.5 } },
     },
     CONTROLLER_DOWNGRADE: { 1: 20000, 2: 10000, 3: 20000, 4: 50000, 5: 100000,
         6: 150000, 7: 150000, 8: 200000 },
@@ -243,6 +248,9 @@ global.RawMemory = {
     _parsed: null,
     segments: {},
     setActiveSegments: () => {},
+    // ROADMAP 0079: utils/stats.js's memory.used - real length isn't
+    // important, just that it's a positive number derived from Memory
+    get: () => JSON.stringify(Memory),
 };
 global.Memory = { creeps: {}, rooms: {}, structures: {} };
 
@@ -378,7 +386,16 @@ const Game = {
     spawns: { Spawn1: spawn },
     constructionSites: {},
     gcl: { progress: 1, progressTotal: 10, level: 1 },
-    cpu: { bucket: 10000, limit: 20, getUsed: () => 1.23 },
+    cpu: {
+        bucket: 10000, limit: 20, getUsed: () => 1.23,
+        // ROADMAP 0079: utils/stats.js's cpu.heap - values are arbitrary,
+        // just distinct enough to prove they made it through untouched
+        getHeapStatistics: () => ({
+            total_heap_size: 20000000, heap_size_limit: 200000000,
+            used_heap_size: 15000000, total_available_size: 5000000,
+            does_zap_garbage: 0,
+        }),
+    },
     map: {
         describeExits: () => ({ 1: "W1N2", 3: "W2N1" }),
         getRoomTerrain: () => new Terrain(),
@@ -445,6 +462,32 @@ assert(typeof global.Memory.rooms.W1N1 === "object", "intel populated Memory.roo
 assert(Game.creeps.Harv1.memory.role === "hauler",
     "legacy harvester creep was folded into the hauler role");
 assert(global.Memory.rooms.W1N1.numberOfHaulers >= 1, "census counted the migrated hauler");
+
+// --- ROADMAP 0079: Memory.stats fields collected on every tick ---------
+// (the throttled/dedicated ones - avgBarrierHits, market.credits,
+// totalEnergyAssets, hatcheryUptime - get their own block further down,
+// they need room/structure state this fixture doesn't have by default)
+assert(typeof global.Memory.stats.memory === "object" &&
+    global.Memory.stats.memory.used > 0,
+    "Memory.stats.memory.used is a positive number (got " +
+        (global.Memory.stats.memory && global.Memory.stats.memory.used) + ")");
+{
+    const heap = global.Memory.stats.cpu.heap;
+    assert(heap &&
+        heap.total_heap_size === 20000000 &&
+        heap.heap_size_limit === 200000000 &&
+        heap.used_heap_size === 15000000 &&
+        heap.total_available_size === undefined &&
+        heap.does_zap_garbage === undefined,
+        "Memory.stats.cpu.heap carries only the 3 fields the dashboard reads, " +
+            "not total_available_size/does_zap_garbage (got " + JSON.stringify(heap) + ")");
+}
+assert(global.Memory.stats.persistent &&
+    global.Memory.stats.persistent.lastGlobalReset === 1000,
+    "Memory.stats.persistent.lastGlobalReset is set once, on the first tick " +
+        "(module load = the only 'global reset' a single test process can see), " +
+        "and stays there across the other 59 ticks (got " +
+        (global.Memory.stats.persistent && global.Memory.stats.persistent.lastGlobalReset) + ")");
 
 // --- rampart / tower plan checks --------------------------------------
 // 0007: the plan lives in a RawMemory segment behind planStore, not in Memory
@@ -1655,10 +1698,8 @@ room.storage = Object.assign(new Structure(), {
     id: "bst2", structureType: STRUCTURE_STORAGE, store: store(500000, 1e6),
 });
 Game.time++;
-assert(needs.roomNeeds(room).builder === 2,
-    "builder tier alone would want 4 with a big backlog and a fat storage, " +
-    "but builder.autoscaleMaxCount (2, ROADMAP 0049) clamps the room's " +
-    "total builder count regardless of how the base tier got there");
+assert(needs.roomNeeds(room).builder === 1,
+    "builder never exceeds 1 with a big backlog and a fat storage");
 
 room.storage = Object.assign(new Structure(), {
     id: "bst3", structureType: STRUCTURE_STORAGE, store: store(800, 1e6),
@@ -1791,11 +1832,8 @@ room.energyAvailable = undefined;
 room.energyCapacityAvailable = undefined;
 delete Memory.rooms[room.name].autoscale;
 
-// --- builder: absolute autoscale cap (ROADMAP 0049) ---------------------
-// builder.autoscaleMaxCount (2) sits BELOW the base tier's own ceiling (4,
-// byBacklog/byEnergy) - a big backlog + fat storage alone already wants 4
-// (same setup as the ROADMAP 0015 assertion above), so the cap has to
-// clamp the tier itself down, not just block autoscale from adding more.
+// --- builder: absolute autoscale cap ---------------------
+// The builder base tier and autoscale must never request more than one.
 findMap[FIND_MY_CONSTRUCTION_SITES] = _.range(10).map((i) => ({
     structureType: "extension", progress: 0, progressTotal: 3000,
     pos: new RoomPosition(30 + i, 30, "W1N1"),
@@ -1805,14 +1843,14 @@ room.storage = Object.assign(new Structure(), {
 });
 Memory.rooms[room.name].autoscale = { delta: {}, lastAdjustTick: Game.time };
 Game.time++;
-assert(needs.roomNeeds(room).builder === 2,
-    "big backlog + fat storage alone would want 4 - the absolute cap clamps it to 2");
+assert(needs.roomNeeds(room).builder === 1,
+    "big backlog + fat storage still clamps the builder count to 1");
 
 // with the tier already at the cap, autoscale's own grow adds nothing on
 // top either, even though builderSurplusEligible is true this whole time
 // (backlog pending, pickable energy well above the surplus threshold)
 Game.time += 30000;
-assert(needs.roomNeeds(room).builder === 2,
+assert(needs.roomNeeds(room).builder === 1,
     "at the cap already -> autoscale grow does not add on top");
 assert((Memory.rooms[room.name].autoscale.delta.builder || 0) === 0,
     "...and doesn't accumulate a delta that would only matter if the cap were raised later");
@@ -1823,12 +1861,12 @@ assert((Memory.rooms[room.name].autoscale.delta.builder || 0) === 0,
 // for upgrader, no need to wait for shrink to drain it window by window
 Memory.rooms[room.name].autoscale.delta.builder = 3;
 Game.time++;
-assert(needs.roomNeeds(room).builder === 2,
+assert(needs.roomNeeds(room).builder === 1,
     "a stale delta from before the cap was lowered is clamped immediately too");
 
 // pickable energy drops scarce -> shrink still drains that stale delta by
 // 1 per cooldown window, same mechanism as always (checked directly on
-// the delta - the visible count was already clamped to 2 either way)
+// the delta - the visible count was already clamped to 1 either way)
 room.storage = Object.assign(new Structure(), {
     id: "bstCap2", structureType: STRUCTURE_STORAGE, store: store(500, 1000000),
 });
@@ -1849,8 +1887,8 @@ assert(needs.roomNeeds(room).upgrader === 4,
     "setWanted overrides the formula (upgrader would be 1 with no storage)");
 setWanted(room.name, "builder", 3);
 Game.time++;
-assert(needs.roomNeeds(room).upgrader === 4 && needs.roomNeeds(room).builder === 3,
-    "overrides on different roles in the same room coexist");
+assert(needs.roomNeeds(room).upgrader === 4 && needs.roomNeeds(room).builder === 1,
+    "overrides on different roles in the same room coexist, but builder stays capped at 1");
 
 setWanted(room.name, "bogusRole", 9);
 setWanted(room.name, "upgrader", "not-a-number");
@@ -1862,7 +1900,7 @@ clearWanted(room.name, "upgrader");
 Game.time++;
 assert(needs.roomNeeds(room).upgrader === 1,
     "clearWanted(room, role) reverts just that role to the formula");
-assert(needs.roomNeeds(room).builder === 3,
+assert(needs.roomNeeds(room).builder === 1,
     "clearing one role leaves the other override intact");
 
 clearWanted(room.name);
@@ -3792,6 +3830,64 @@ delete Game.creeps.Sc2;
     delete Game.creeps.ScSign;
 }
 
+// --- sign queue: optional source room (ROADMAP 0082) -----------------------
+{
+    const routing = require(path.join(PROJECT, "src/utils/routing"));
+    const originalMoveToRoom = routing.moveToRoom;
+    const routedTo = [];
+    routing.moveToRoom = (creep, roomName) => {
+        routedTo.push(roomName);
+        return OK;
+    };
+    const sourceRoom = Object.assign({}, room, { name: "W2N2" });
+    const targetRoom = Object.assign({}, room, {
+        name: "W3N3",
+        controller: {},
+    });
+    const sourceScout = Object.assign(new Creep(), {
+        id: "scSource", name: "ScSource", room,
+        memory: { role: "scout", home: "W1N1" },
+        ticksToLive: 500, pos: new RoomPosition(20, 20, "W1N1"),
+        signController: (controller, text) => {
+            sourceScout._signed = text;
+            return OK;
+        },
+        suicide: () => OK,
+    });
+    Game.creeps.ScSource = sourceScout;
+    global.signRoom("W3N3", "from home", "W2N2");
+    assert(
+        Memory.signQueue.W3N3.text === "from home" &&
+        Memory.signQueue.W3N3.from === "W2N2",
+        "signRoom stores the optional source room"
+    );
+    Game.time++;
+    scout.run(sourceScout);
+    assert(routedTo[0] === "W2N2",
+        "signRoom scout travels to the source room first");
+    sourceScout.room = sourceRoom;
+    sourceScout.pos = new RoomPosition(20, 20, "W2N2");
+    Game.time++;
+    scout.run(sourceScout);
+    assert(routedTo[1] === "W3N3",
+        "signRoom scout travels to the destination after reaching the source");
+    sourceScout.room = targetRoom;
+    sourceScout.pos = new RoomPosition(20, 20, "W3N3");
+    Game.time++;
+    scout.run(sourceScout);
+    assert(sourceScout._signed === "from home" && !Memory.signQueue.W3N3,
+        "signRoom scout signs and clears a request with a source room");
+
+    global.signRoom("W3N3", "legacy");
+    assert(Memory.signQueue.W3N3 === "legacy",
+        "signRoom without a source preserves the legacy queue format");
+    global.signRoom("W3N3");
+    assert(!Memory.signQueue.W3N3,
+        "signRoom cancellation removes both legacy and structured requests");
+    routing.moveToRoom = originalMoveToRoom;
+    delete Game.creeps.ScSource;
+}
+
 // --- scout: free-roam exploration actually crosses room borders, and an
 // unreachable target room gets blacklisted instead of retried forever
 // (ROADMAP 0009) -----------------------------------------------------
@@ -5044,13 +5140,30 @@ delete Game.creeps.Sc2;
     {
         const visibleRoomName = "WStructVision";
         const blockingWall = {
+            id: "struct-wall",
             structureType: STRUCTURE_WALL,
             pos: { x: 10, y: 10 },
             my: false,
             isPublic: false,
         };
+        const privateRampart = {
+            id: "struct-private-rampart",
+            structureType: STRUCTURE_RAMPART,
+            pos: { x: 11, y: 10 },
+            my: false,
+            isPublic: false,
+        };
+        const publicRampart = {
+            id: "struct-public-rampart",
+            structureType: STRUCTURE_RAMPART,
+            pos: { x: 12, y: 10 },
+            my: false,
+            isPublic: true,
+        };
         const visibleRoom = new Room(visibleRoomName);
-        visibleRoom.find = (type) => (type === FIND_STRUCTURES ? [blockingWall] : []);
+        visibleRoom.find = (type) => (type === FIND_STRUCTURES
+            ? [blockingWall, privateRampart, publicRampart]
+            : []);
         Game.rooms[visibleRoomName] = visibleRoom;
 
         // AC2
@@ -5061,6 +5174,10 @@ delete Game.creeps.Sc2;
         assert(outCm1 && outCm1.get(10, 10) === 255,
             "routeCostCallback layers a known-structure matrix over a room in vision, " +
                 "blocking the wall's tile (AC2)");
+        assert(outCm1.get(11, 10) === 255,
+            "routeCostCallback blocks a known private rampart in another player's room (AC2)");
+        assert(outCm1.get(12, 10) !== 255,
+            "routeCostCallback keeps another player's public rampart walkable (AC2)");
 
         // AC3
         const structAvoidCb = routing.avoidCostCallback([], {});
@@ -5068,6 +5185,10 @@ delete Game.creeps.Sc2;
         assert(outCm2 && outCm2.get(10, 10) === 255,
             "avoidCostCallback layers a known-structure matrix over a room in vision, " +
                 "blocking the wall's tile (AC3)");
+        assert(outCm2.get(11, 10) === 255,
+            "avoidCostCallback blocks a known private rampart in another player's room (AC3)");
+        assert(outCm2.get(12, 10) !== 255,
+            "avoidCostCallback keeps another player's public rampart walkable (AC3)");
 
         // AC1
         const realSearch2 = PathFinder.search;
@@ -5081,6 +5202,10 @@ delete Game.creeps.Sc2;
         assert(seenVisible && typeof seenVisible.get === "function" && seenVisible.get(10, 10) === 255,
             "computeRealRoute's roomCallback returns a known-structure matrix for a room in " +
                 "vision, blocking the wall's tile (AC1)");
+        assert(seenVisible.get(11, 10) === 255,
+            "computeRealRoute's roomCallback blocks a known private rampart (AC1)");
+        assert(seenVisible.get(12, 10) !== 255,
+            "computeRealRoute's roomCallback keeps a known public rampart walkable (AC1)");
 
         // AC4 - the exact same room, now WITHOUT vision, falls back to
         // today's terrain-only behavior in all three - nothing regresses.
@@ -7468,10 +7593,10 @@ delete Game.creeps.Sc2;
 
     const renewSpawn = Object.assign(new Spawn(), {
         id: "renewspawn1", structureType: STRUCTURE_SPAWN, my: true, spawning: null,
-        pos: new RoomPosition(25, 25, "W1N1"), room,
+        pos: new RoomPosition(25, 25, "W1N1"), room, store: store(900, 1000),
     });
     let renewedWith = null;
-    renewSpawn.renewCreep = (c) => { renewedWith = c; return OK; };
+    renewSpawn.renewCreep = (c) => { renewedWith = c; renewSpawn.store[RESOURCE_ENERGY] -= 50; return OK; };
 
     function mkRenewCandidate(id, body) {
         const name = "RenewCand_" + id;
@@ -7865,7 +7990,8 @@ delete Game.creeps.Sc2;
     REG.sayBuildSite1 = site;
     let said = null;
     const builderCreep = Object.assign(Object.create(Creep.prototype), {
-        id: "sayCreep1", store: { getUsedCapacity: () => 50 },
+        id: "sayCreep1", room: { name: "SayRoom" }, store: { [RESOURCE_ENERGY]: 50, getUsedCapacity: () => 50 },
+        body: [{ type: WORK, hits: 100 }],
         build: () => OK, say: (t) => { said = t; },
     });
     builderCreep.runBuild("sayBuildSite1");
@@ -7876,12 +8002,205 @@ delete Game.creeps.Sc2;
     REG.sayWall1 = wall;
     said = null;
     const repairerCreep = Object.assign(Object.create(Creep.prototype), {
-        id: "sayCreep2", store: { getUsedCapacity: () => 50 },
+        id: "sayCreep2", room: { name: "SayRoom" }, store: { [RESOURCE_ENERGY]: 50, getUsedCapacity: () => 50 },
+        body: [{ type: WORK, hits: 100 }],
         repair: () => OK, say: (t) => { said = t; },
     });
     repairerCreep.runBuild("sayWall1");
     assert(said === "~Pew!~", "runBuild says '~Pew!~' on a successful repair");
     delete REG.sayWall1;
+}
+
+// --- ROADMAP 0081: energy spend accounting ------------------------------
+{
+    const energyLedger = require(path.join(PROJECT, "src/utils/energyLedger"));
+
+    // (a) the ledger itself: accumulation, isolation per room, ignoring
+    // non-positive amounts, always the full category set on snapshot
+    Game.time++;
+    energyLedger.record("LedgerRoomA", "build", 40);
+    energyLedger.record("LedgerRoomA", "build", 15);
+    energyLedger.record("LedgerRoomA", "upgrade", 5);
+    energyLedger.record("LedgerRoomA", "build", 0);
+    energyLedger.record("LedgerRoomA", "build", -10);
+    energyLedger.record("LedgerRoomB", "spawn", 100);
+
+    const snapA = energyLedger.snapshot("LedgerRoomA");
+    assert(snapA.build === 55, "record() accumulates multiple calls in the same tick/room (got " + snapA.build + ")");
+    assert(snapA.upgrade === 5, "record() tracks a different category independently (got " + snapA.upgrade + ")");
+    assert(snapA.spawn === 0, "record() ignoring amount<=0 never creates a phantom category (got " + snapA.spawn + ")");
+    assert(
+        Object.keys(snapA).length === 10 &&
+            ["spawn", "renew", "build", "repairNormal", "repairRampart", "repairWall",
+                "upgrade", "towerAttack", "towerHeal", "towerRepair"].every((k) => typeof snapA[k] === "number"),
+        "snapshot() always returns all 10 categories, defaulted to 0 (got " + JSON.stringify(snapA) + ")"
+    );
+
+    const snapB = energyLedger.snapshot("LedgerRoomB");
+    assert(snapB.spawn === 100 && snapB.build === 0,
+        "snapshot() isolates rooms from each other (got " + JSON.stringify(snapB) + ")");
+
+    // ROADMAP 0081 follow-up (usuário pediu soma dos últimos 60 segundos):
+    // snapshot() sums a trailing WINDOW of ticks (energyLedger.windowTicks,
+    // "last N seconds" - the usual 1-tick-~1-second approximation, no real
+    // wall-clock signal is available), not just the current one - a room
+    // that goes quiet the very next tick still reports what it just spent.
+    Game.time++; // a fresh tick with no new record() calls
+    const snapACarried = energyLedger.snapshot("LedgerRoomA");
+    assert(snapACarried.build === 55,
+        "spend from a previous tick still counts while inside the trailing window (got " + snapACarried.build + ")");
+
+    // recordRepair() maps structure type to the right category
+    Game.time++;
+    energyLedger.recordRepair("LedgerRoomA", STRUCTURE_RAMPART, 10);
+    energyLedger.recordRepair("LedgerRoomA", STRUCTURE_WALL, 20);
+    energyLedger.recordRepair("LedgerRoomA", STRUCTURE_EXTENSION, 30);
+    const snapRepair = energyLedger.snapshot("LedgerRoomA");
+    assert(
+        snapRepair.repairRampart === 10 && snapRepair.repairWall === 20 && snapRepair.repairNormal === 30,
+        "recordRepair() maps rampart/wall/anything-else to their own category (got " + JSON.stringify(snapRepair) + ")"
+    );
+
+    // the window itself is configurable (Memory.settings.energyLedger.
+    // windowTicks) and spend genuinely drops off once it ages past it -
+    // isolated to its own room/override so it can't affect anything above
+    Memory.settings = Memory.settings || {};
+    Memory.settings.energyLedger = { windowTicks: 3 };
+    Game.time++;
+    energyLedger.record("LedgerWindowRoom", "build", 77);
+    assert(energyLedger.snapshot("LedgerWindowRoom").build === 77,
+        "a freshly recorded amount is inside its own configured window");
+    Game.time += 2; // still inside a 3-tick window (recorded tick + 2 more)
+    assert(energyLedger.snapshot("LedgerWindowRoom").build === 77,
+        "spend stays in the sum for the rest of the configured window");
+    Game.time += 1; // now outside the 3-tick window
+    assert(energyLedger.snapshot("LedgerWindowRoom").build === 0,
+        "spend drops out of the sum once it ages past energyLedger.windowTicks (got " +
+            energyLedger.snapshot("LedgerWindowRoom").build + ")");
+    delete Memory.settings.energyLedger;
+
+    // (b) creep.js's runBuild/runUpgrade estimate spend from WORK power
+    // (BUILD_POWER/REPAIR_POWER/UPGRADE_CONTROLLER_POWER, boost-aware),
+    // capped by the creep's own energy and the target's remaining need -
+    // NOT a store diff (ROADMAP 0081 bug real: the real server only
+    // applies build/repair/upgradeController intents after every player's
+    // script has run, so store never actually changes mid-tick from the
+    // script's own point of view - a diff always measured 0 in production
+    // even though towers/creeps/spawns were visibly acting). Only credits
+    // when the intent returns OK. Each sub-case uses its own room name so
+    // the trailing window can't mix one case's spend into the next.
+    Game.time++;
+    const buildSite1 = Object.assign(new ConstructionSite(), {
+        id: "energyBuildSite1", progress: 0, progressTotal: 1000,
+    });
+    REG.energyBuildSite1 = buildSite1;
+    const energyBuilder = Object.assign(Object.create(Creep.prototype), {
+        id: "energyCreep1", room: { name: "EnergyRoomBuild" },
+        store: { [RESOURCE_ENERGY]: 100, getUsedCapacity: () => 100 }, body: [{ type: WORK, hits: 100 }],
+        build: () => OK, say: noop,
+    });
+    energyBuilder.runBuild("energyBuildSite1");
+    assert(
+        energyLedger.snapshot("EnergyRoomBuild").build === BUILD_POWER,
+        "runBuild credits BUILD_POWER per WORK part, capped by energy/remaining progress (got " +
+            energyLedger.snapshot("EnergyRoomBuild").build + ")"
+    );
+    delete REG.energyBuildSite1;
+
+    Game.time++;
+    const rampartTarget1 = Object.assign(new OwnedStructure(), {
+        id: "energyRampart1", structureType: STRUCTURE_RAMPART, hits: 10, hitsMax: 10000,
+    });
+    REG.energyRampart1 = rampartTarget1;
+    const energyRepairer = Object.assign(Object.create(Creep.prototype), {
+        id: "energyCreep2", room: { name: "EnergyRoomRepair" },
+        store: { [RESOURCE_ENERGY]: 1000, getUsedCapacity: () => 1000 }, body: [{ type: WORK, hits: 100 }],
+        repair: () => OK, say: noop,
+    });
+    energyRepairer.runBuild("energyRampart1");
+    assert(
+        energyLedger.snapshot("EnergyRoomRepair").repairRampart === REPAIR_POWER,
+        "runBuild's repair branch credits REPAIR_POWER per WORK part to 'repairRampart' (got " +
+            energyLedger.snapshot("EnergyRoomRepair").repairRampart + ")"
+    );
+    delete REG.energyRampart1;
+
+    // a boosted WORK part multiplies its own contribution, read live from
+    // BOOSTS[WORK][boost] - never a hardcoded multiplier
+    Game.time++;
+    const rampartTarget2 = Object.assign(new OwnedStructure(), {
+        id: "energyRampart2", structureType: STRUCTURE_RAMPART, hits: 10, hitsMax: 10000,
+    });
+    REG.energyRampart2 = rampartTarget2;
+    const boostedRepairer = Object.assign(Object.create(Creep.prototype), {
+        id: "energyCreep2b", room: { name: "EnergyRoomRepairBoost" },
+        store: { [RESOURCE_ENERGY]: 1000, getUsedCapacity: () => 1000 }, body: [{ type: WORK, hits: 100, boost: "LH" }],
+        repair: () => OK, say: noop,
+    });
+    boostedRepairer.runBuild("energyRampart2");
+    assert(
+        energyLedger.snapshot("EnergyRoomRepairBoost").repairRampart === REPAIR_POWER * 1.5,
+        "a boosted WORK part's repair contribution is multiplied per BOOSTS[WORK][boost].repair (got " +
+            energyLedger.snapshot("EnergyRoomRepairBoost").repairRampart + ")"
+    );
+    delete REG.energyRampart2;
+
+    Game.time++;
+    const failingSite = Object.assign(new ConstructionSite(), {
+        id: "energyFailSite1", progress: 0, progressTotal: 1000,
+    });
+    REG.energyFailSite1 = failingSite;
+    const failingBuilder = Object.assign(Object.create(Creep.prototype), {
+        id: "energyCreep3", room: { name: "EnergyRoomFail" },
+        store: { [RESOURCE_ENERGY]: 100, getUsedCapacity: () => 100 }, body: [{ type: WORK, hits: 100 }],
+        build: () => ERR_NOT_ENOUGH_RESOURCES, say: noop, moveTo: noop, popState: noop,
+    });
+    failingBuilder.runBuild("energyFailSite1");
+    assert(
+        energyLedger.snapshot("EnergyRoomFail").build === 0,
+        "a failed build() (status !== OK) never credits the ledger (got " +
+            energyLedger.snapshot("EnergyRoomFail").build + ")"
+    );
+    delete REG.energyFailSite1;
+
+    Game.time++;
+    const upgradeTarget1 = Object.assign(new RoomObject(), { id: "energyCtrl1" });
+    REG.energyCtrl1 = upgradeTarget1;
+    const energyUpgrader = Object.assign(Object.create(Creep.prototype), {
+        id: "energyCreep4", room: { name: "EnergyRoomUpgrade" },
+        store: { [RESOURCE_ENERGY]: 100, getUsedCapacity: () => 100 }, body: [{ type: WORK, hits: 100 }],
+        upgradeController: () => OK,
+    });
+    energyUpgrader.runUpgrade("energyCtrl1");
+    assert(
+        energyLedger.snapshot("EnergyRoomUpgrade").upgrade === UPGRADE_CONTROLLER_POWER,
+        "runUpgrade credits UPGRADE_CONTROLLER_POWER per WORK part (got " +
+            energyLedger.snapshot("EnergyRoomUpgrade").upgrade + ")"
+    );
+    delete REG.energyCtrl1;
+
+    // (c) utils/stats.js wires the snapshot into Memory.stats.rooms[x].energySpent -
+    // diffed against a baseline snapshot so a shared, long-lived room (W1N1) still
+    // gives a deterministic assertion regardless of what's already in its window
+    const statsUtilForLedger = require(path.join(PROJECT, "src/utils/stats"));
+    Game.time++;
+    const beforeLedgerSnap = energyLedger.snapshot("W1N1");
+    energyLedger.record("W1N1", "spawn", 300);
+    energyLedger.recordRepair("W1N1", STRUCTURE_WALL, 40);
+    statsUtilForLedger();
+    const roomEnergySpent = Memory.stats.rooms.W1N1.energySpent;
+    assert(
+        roomEnergySpent &&
+            roomEnergySpent.spawn === beforeLedgerSnap.spawn + 300 &&
+            roomEnergySpent.repairWall === beforeLedgerSnap.repairWall + 40,
+        "exportStats() wires energyLedger.snapshot() into Memory.stats.rooms[x].energySpent (got " +
+            JSON.stringify(roomEnergySpent) + ")"
+    );
+    assert(
+        Object.keys(roomEnergySpent).length === 10,
+        "Memory.stats.rooms[x].energySpent always has all 10 categories (got " +
+            JSON.stringify(roomEnergySpent) + ")"
+    );
 }
 
 // --- ROADMAP 0051: mineral extraction, lab reactions/boost, factory (nível
@@ -8143,7 +8462,12 @@ function mineralStore(resources, freeCap) {
     delete Game.creeps.BoostTarget1;
     delete Memory.rooms.LabRoom;
     labRoomStructs.forEach((l) => delete REG[l.id]);
-    Game.rooms.LabRoom = realRoomsLabRoom;
+    // restore to "never set" (delete), not "set to undefined" - the latter
+    // leaves an enumerable Game.rooms.LabRoom key whose value is undefined,
+    // which crashes any later `for (let name in Game.rooms)` walk (e.g.
+    // utils/stats.js) the instant it dereferences Game.rooms[name].controller
+    if (realRoomsLabRoom === undefined) delete Game.rooms.LabRoom;
+    else Game.rooms.LabRoom = realRoomsLabRoom;
 }
 
 // --- Fase 3: setFactoryProduct()/cancelFactoryProduct() + structures/factory.js
@@ -8188,7 +8512,9 @@ function mineralStore(resources, freeCap) {
     factoryMod.run(factoryStruct);
     assert(produced === "widgetA", "structures/factory.js's run() produces once fully stocked");
 
-    Game.rooms.FactoryRoom = realFactoryRoom;
+    // same "restore to never-set, not set-to-undefined" fix as LabRoom above
+    if (realFactoryRoom === undefined) delete Game.rooms.FactoryRoom;
+    else Game.rooms.FactoryRoom = realFactoryRoom;
 
     // --- hauler.js's optionalConsumer() also feeds the factory energy -----
     const roomCacheMod = require(path.join(PROJECT, "src/utils/roomCache"));
@@ -8553,6 +8879,100 @@ function mineralStore(resources, freeCap) {
         !calledNotifyOff((c) => reserverMod3.run(c), mkBareCreep("nwaReserverClaim1", { role: "reserver", mission: "claim" })),
         "reserver on a 'claim' mission does NOT call notifyWhenAttacked(false)"
     );
+}
+
+// --- ROADMAP 0079: Memory.stats fields that need room/structure state ---
+// this fixture doesn't carry by default (market, storage+terminal energy,
+// a spawning spawn, a rampart/wall to average) - each sub-block sets up
+// just what it needs and restores the shared fixture afterward.
+{
+    const statsUtil = require(path.join(PROJECT, "src/utils/stats"));
+
+    // market.credits - Game.market is absent by default in this fixture
+    // (same as production before the bot ever calls into the real API);
+    // utils/stats.js must degrade to 0 rather than throw either way.
+    Game.market = { credits: 54321 };
+    statsUtil();
+    assert(Memory.stats.market.credits === 54321,
+        "Memory.stats.market.credits reflects Game.market.credits (got " +
+            Memory.stats.market.credits + ")");
+    assert(Memory.stats.market.transactions === undefined,
+        "no market.transactions is written - the bot never calls Game.market.deal() (ROADMAP 0079 out of scope)");
+    delete Game.market;
+    statsUtil();
+    assert(Memory.stats.market.credits === 0,
+        "Memory.stats.market.credits falls back to 0 without Game.market, instead of throwing (got " +
+            Memory.stats.market.credits + ")");
+
+    // totalEnergyAssets - trivial sum of the two fields already collected;
+    // minerals - storage+terminal summed per base mineral, sparse (only
+    // nonzero entries), same fixture doubles for both
+    room.storage = Object.assign(new Structure(), {
+        id: "statsStorage1",
+        store: mineralStore({ [RESOURCE_ENERGY]: 4000, [RESOURCE_HYDROGEN]: 300 }, 300000),
+    });
+    room.terminal = Object.assign(new Structure(), {
+        id: "statsTerminal1",
+        store: mineralStore({ [RESOURCE_ENERGY]: 1500, [RESOURCE_OXYGEN]: 50 }, 300000),
+    });
+    statsUtil();
+    assert(Memory.stats.rooms.W1N1.totalEnergyAssets === 5500,
+        "totalEnergyAssets is storageEnergy + terminalEnergy (got " +
+            Memory.stats.rooms.W1N1.totalEnergyAssets + ")");
+    assert(Memory.stats.rooms.W1N1.minerals[RESOURCE_HYDROGEN] === 300 &&
+        Memory.stats.rooms.W1N1.minerals[RESOURCE_OXYGEN] === 50 &&
+        Object.keys(Memory.stats.rooms.W1N1.minerals).length === 2,
+        "minerals sums storage+terminal per base mineral, only nonzero entries kept (got " +
+            JSON.stringify(Memory.stats.rooms.W1N1.minerals) + ")");
+    room.storage = null;
+    room.terminal = null;
+
+    // hatcheryUptime - fraction of spawns with .spawning truthy
+    statsUtil();
+    assert(Memory.stats.rooms.W1N1.hatcheryUptime === 0,
+        "hatcheryUptime is 0 with no spawn spawning (got " +
+            Memory.stats.rooms.W1N1.hatcheryUptime + ")");
+    spawn.spawning = { name: "SomeCreep" };
+    statsUtil();
+    assert(Memory.stats.rooms.W1N1.hatcheryUptime === 1,
+        "hatcheryUptime is 1 with the room's only spawn spawning (got " +
+            Memory.stats.rooms.W1N1.hatcheryUptime + ")");
+    spawn.spawning = null;
+
+    // avgBarrierHits - throttled by stats.barrierHitsInterval, keeps the
+    // last computed value in between recomputes instead of resetting
+    Memory.settings = Memory.settings || {};
+    Memory.settings.stats = { barrierHitsInterval: 50 };
+    const rampartStats1 = Object.assign(new OwnedStructure(), {
+        id: "rampartStats1", my: true, structureType: STRUCTURE_RAMPART,
+        hits: 100, hitsMax: 300000, pos: new RoomPosition(30, 30, "W1N1"), room,
+    });
+    REG[rampartStats1.id] = rampartStats1;
+    const savedMyStructures = findMap[FIND_MY_STRUCTURES];
+    findMap[FIND_MY_STRUCTURES] = [spawn, tower, rampartStats1];
+
+    Game.time += 1000; // clear of any throttle window left over from earlier ticks
+    statsUtil();
+    assert(Memory.stats.rooms.W1N1.avgBarrierHits === 100,
+        "avgBarrierHits is computed from the room's rampart/wall hits (got " +
+            Memory.stats.rooms.W1N1.avgBarrierHits + ")");
+
+    rampartStats1.hits = 9000;
+    Game.time += 1; // well inside the 50-tick throttle window
+    statsUtil();
+    assert(Memory.stats.rooms.W1N1.avgBarrierHits === 100,
+        "avgBarrierHits stays at its last computed value inside the throttle window, " +
+            "instead of disappearing/zeroing (got " + Memory.stats.rooms.W1N1.avgBarrierHits + ")");
+
+    Game.time += 50; // past the throttle window
+    statsUtil();
+    assert(Memory.stats.rooms.W1N1.avgBarrierHits === 9000,
+        "avgBarrierHits recomputes once the throttle window elapses (got " +
+            Memory.stats.rooms.W1N1.avgBarrierHits + ")");
+
+    findMap[FIND_MY_STRUCTURES] = savedMyStructures;
+    delete REG[rampartStats1.id];
+    delete Memory.settings.stats;
 }
 
 if (process.env.VERBOSE) origLog(logs.join("\n"));

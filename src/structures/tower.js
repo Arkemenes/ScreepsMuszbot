@@ -2,6 +2,7 @@ const { getHostiles, isHostile } = require("../utils/hostiles");
 const { isPlanned } = require("../utils/plan");
 const traffic = require("../utils/traffic");
 const rampartRepair = require("../utils/rampartRepair");
+const energyLedger = require("../utils/energyLedger");
 let cacheTick;
 let hostileTargets = {};
 let repairLists = {};
@@ -191,15 +192,17 @@ var tower = {
         if (hostileTarget) {
             if (countNearbyHostiles(tower) >= 2) {
                 tower.rangedMassAttack();
-                return;
+            } else {
+                tower.attack(hostileTarget);
             }
-            tower.attack(hostileTarget);
+            energyLedger.creditTower(tower, "towerAttack");
             return;
         }
 
         const healingTarget = findHealingTarget(tower);
         if (healingTarget) {
             tower.heal(healingTarget);
+            energyLedger.creditTower(tower, "towerHeal");
             return;
         }
 
@@ -209,6 +212,7 @@ var tower = {
         const repairTarget = findRepairTarget(tower);
         if (repairTarget) {
             tower.repair(repairTarget);
+            energyLedger.creditTower(tower, "towerRepair");
         }
     },
 };

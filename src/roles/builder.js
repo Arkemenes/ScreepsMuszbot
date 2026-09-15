@@ -9,6 +9,7 @@ const reservations = require("../utils/reservations");
 const traffic = require("../utils/traffic");
 const rampartRepair = require("../utils/rampartRepair");
 const names = require("../utils/names");
+const energyLedger = require("../utils/energyLedger");
 
 // --- console: force specific construction sites to the front of the queue -
 // prioritizeBuild(["id1", "id2", ...]) - builders finish these sites first,
@@ -82,7 +83,10 @@ function opportunisticWork(creep) {
         (s) => -(s.hits / s.hitsMax)
     )[0];
     if (hurt) {
-        creep.repair(hurt);
+        const status = creep.repair(hurt);
+        if (status === OK) {
+            energyLedger.creditRepair(creep, hurt);
+        }
         return;
     }
 
@@ -91,7 +95,10 @@ function opportunisticWork(creep) {
         (s) => -(s.progress / s.progressTotal)
     )[0];
     if (site) {
-        creep.build(site);
+        const status = creep.build(site);
+        if (status === OK) {
+            energyLedger.creditBuild(creep, site);
+        }
     }
 }
 

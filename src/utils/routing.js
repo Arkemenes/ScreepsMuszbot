@@ -8,7 +8,7 @@
 
 const remotes = require("../rooms/remotes");
 const config = require("./config");
-const move = require("./move");
+const roomCache = require("./roomCache");
 
 // Highway rooms sit on the map's coordinate grid (either axis a multiple of
 // 10) - open, sourceless, usually ownerless space that forms natural travel
@@ -117,23 +117,39 @@ function isDangerousRoom(roomName) {
     return remotes.hasHostiles(roomName) || remotes.isForeignOwned(roomName);
 }
 
-// ROADMAP 0077 - every passability function below (computeRealRoute's
-// roomCallback, routeCostCallback, avoidCostCallback) used to reason about
-// terrain only, never structure - the same gap utils/move.js's roomMatrix()
-// already closed for movement WITHIN a room (own/public rampart and
-// container walkable, everything else - including another player's or an
-// ally's private rampart/wall - impassable), just never reused across
-// rooms. Confirmed live twice (a claimer, then pioneers E1N47->E1N45): a
-// room already in vision this tick could still let a creep walk deep into
-// an ally's sealed interior before ERR_NO_PATH ever fired. roomMatrix() is
-// already cached per room on the heap (versioned by structure+site count,
-// utils/move.js) - this is pure reuse, no new room.find. Returns null for
-// any room with no vision this tick (Game.rooms[roomName] absent) - every
-// caller below falls back to its pre-0077 terrain-only behavior in that
-// case, unchanged.
+// ROADMAP 0077/0083 - multi-room routing needs a narrower structure policy
+// than movement within one room: walls and private ramparts block a route,
+// while public ramparts owned by another player remain valid tiles. Keep this
+// matrix separate from utils/move.js's intra-room matrix so the two policies
+// cannot change each other. The result is cached on the heap and uses the
+// roomCache slot already shared by the rest of the tick.
+const knownRoutingMatrices = {};
+
+function routingStructureMatrix(room) {
+    const structures = roomCache.structures(room);
+    const version = structures.map((structure) =>
+        [structure.id, structure.structureType, structure.my ? 1 : 0, structure.isPublic ? 1 : 0].join(":"))
+        .join("|");
+    const cached = knownRoutingMatrices[room.name];
+    if (cached && cached.version === version) return cached.matrix;
+
+    const matrix = new PathFinder.CostMatrix();
+    for (const structure of structures) {
+        if (
+            structure.structureType === STRUCTURE_WALL ||
+            (structure.structureType === STRUCTURE_RAMPART &&
+                !structure.my && !structure.isPublic)
+        ) {
+            matrix.set(structure.pos.x, structure.pos.y, 255);
+        }
+    }
+    knownRoutingMatrices[room.name] = { version, matrix };
+    return matrix;
+}
+
 function knownStructureMatrix(roomName) {
     const room = Game.rooms[roomName];
-    return room ? move.roomMatrix(room) : null;
+    return room ? routingStructureMatrix(room) : null;
 }
 
 // ROADMAP 0076 - a room retreatFrom() below CONFIRMS as a genuine dead end

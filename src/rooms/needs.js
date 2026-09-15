@@ -38,6 +38,7 @@ function applyOverride(name, wanted) {
             wanted[role] = value;
         }
     }
+    if (typeof wanted.builder === "number") wanted.builder = Math.min(wanted.builder, 1);
     return wanted;
 }
 
@@ -295,7 +296,7 @@ autoscale.register("hauler", {
 autoscale.register("builder", {
     grow(room, wanted, delta) {
         if (!builderSurplusEligible(room)) return 0;
-        const cap = config.get("builder.autoscaleMaxCount", 2);
+        const cap = 1;
         if (wanted.builder + delta >= cap) return 0;
         return 1;
     },
@@ -303,7 +304,7 @@ autoscale.register("builder", {
         return builderScarceEligible(room) ? 1 : 0;
     },
     maxCount() {
-        return config.get("builder.autoscaleMaxCount", 2);
+        return 1;
     },
 });
 
@@ -406,7 +407,7 @@ function compute(room) {
     else if (pickable > 200) byEnergy = 1;
     else byEnergy = 0;
 
-    let builder = Math.min(byBacklog, byEnergy);
+    let builder = Math.min(byBacklog, byEnergy, 1);
     if (rcl < 2) builder = Math.min(builder, 1);
 
     // --- defender: solo fallback, or a striker+medic pair per unit of

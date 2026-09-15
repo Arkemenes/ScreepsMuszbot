@@ -50,7 +50,7 @@ global.help = function () {
         {
             title: "Scout",
             commands: [
-                ["signRoom(roomName, text)", "enfileira uma assinatura de controller pro scout"],
+                ["signRoom(roomName, text, fromRoomName?)", "enfileira uma assinatura de controller; com origem, o scout retorna a essa sala antes de seguir ao destino"],
                 ["signRoom(roomName)", "cancela a assinatura pendente dessa sala"],
                 ["signQueue()", "mostra a fila de assinaturas pendentes"],
                 ["planLayout(roomName)", "prévia do plano de construção da sala (não constrói nada, sala não precisa ser nossa) - usa um observer em alcance se tiver, senão manda o scout"],
