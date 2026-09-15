@@ -32,22 +32,14 @@ function containersBackedUp(room) {
     );
 }
 
-// ROADMAP 0054: the tower's 3-tier delivery bands, as a fraction of its own
-// capacity - critical/satisfactory shift up together under defenseActive
-// (a tower nearly full going into a fight is worth more than the same
-// energy idle in storage).
+// ROADMAP 0054: the tower's critical delivery threshold, as a fraction of
+// its own capacity - shifts up under defenseActive (a tower nearly full
+// going into a fight is worth more than the same energy idle in storage).
 function towerCriticalRatio(room) {
     const roomMem = Memory.rooms[room.name] || {};
     return roomMem.defenseActive
         ? config.get("tower.criticalRatioUnderAttack", 0.8)
         : config.get("tower.criticalRatio", 0.5);
-}
-
-function towerSatisfactoryRatio(room) {
-    const roomMem = Memory.rooms[room.name] || {};
-    return roomMem.defenseActive
-        ? config.get("tower.satisfactoryRatioUnderAttack", 0.95)
-        : config.get("tower.satisfactoryRatio", 0.7);
 }
 
 // Below criticalRatio: the room's real emergency tier, resolved with
@@ -62,19 +54,27 @@ function isTowerCritical(s, room) {
     );
 }
 
-// At/above satisfactoryRatio (the ideal band): still worth topping off
-// further, but only up to hauler.toppingOffThreshold free capacity - a
-// tower nearer to full than that isn't worth another trip. Between
-// criticalRatio and satisfactoryRatio (satisfactory) a tower matches
-// NEITHER this nor isTowerCritical above - not urgent, not worth topping,
-// simply left alone (ROADMAP 0054 - used to be a single reserve threshold
-// with "anything above it is incondicionally toppable forever").
+// ROADMAP 0072 same-day follow-up (user: "vamos matar essa zona morta do
+// hauler"): any NON-critical tower with more than hauler.toppingOffThreshold
+// free capacity is a valid optional-tier delivery target - full stop, no
+// second floor in between. There used to be a separate satisfactoryRatio
+// bar here (originally 0.8, later 0.7 - ROADMAP 0054/0072): a tower between
+// criticalRatio and that bar matched NEITHER isTowerCritical above nor this
+// function, "not urgent, not worth topping" - a real, admitted dead zone,
+// with the only way out being pickDeliver's very last resort (fires only
+// once literally nothing else in the room wants the energy at all). That
+// gap never had to exist: everywhere else in this cascade, "not essential"
+// already means "optional, gated by resourceTiers.aboveReserve" (see
+// optionalConsumer below) - a non-critical tower deserves the exact same
+// treatment as a lab or a controller-container, not a third, stricter
+// bar of its own. Now it gets it: isTowerCritical and this function
+// partition every tower into exactly two states, essential or optional,
+// with nothing in between.
 function towerDeliverable(s, room) {
     return (
         s.structureType === STRUCTURE_TOWER &&
         !isSourceDefenseTower(s) &&
-        s.store[RESOURCE_ENERGY] >=
-            s.store.getCapacity(RESOURCE_ENERGY) * towerSatisfactoryRatio(room) &&
+        !isTowerCritical(s, room) &&
         s.store.getFreeCapacity(RESOURCE_ENERGY) >
             s.store.getCapacity(RESOURCE_ENERGY) *
                 config.get("hauler.toppingOffThreshold", 0.05)
@@ -88,8 +88,8 @@ function towerDeliverable(s, room) {
 // the room's own creep production on that would starve it over a buffer
 // nobody asked to protect that hard (ROADMAP 0043 follow-up - the floor
 // below blocked this use case by accident when it was introduced). A
-// satisfactory or ideal-band tower is NOT essential (ROADMAP 0054) - see
-// toppableTower below for the ideal-band case.
+// non-critical tower is NOT essential (ROADMAP 0054) - see toppableTower
+// below for that case.
 function essentialConsumer(creep) {
     return creep.pos.findClosestByRange(roomCache.myStructures(creep.room), {
         filter: (s) =>
@@ -126,13 +126,27 @@ function optionalConsumer(creep) {
     })[0];
 }
 
-// A tower still in its ideal band worth topping off (towerDeliverable) -
-// also genuinely optional, gated the same way as optionalConsumer above by
-// the caller (resourceTiers.aboveReserve).
+// A non-critical tower still worth topping off (towerDeliverable) - also
+// genuinely optional, gated the same way as optionalConsumer above by the
+// caller (resourceTiers.aboveReserve).
 function toppableTower(creep) {
     return creep.pos.findClosestByRange(roomCache.myStructures(creep.room), {
         filter: (s) => towerDeliverable(s, creep.room),
     });
+}
+
+// ROADMAP 0074 (user request, refined same-day): a non-critical tower
+// (50%-100% energy) is "satisfactory" priority - genuinely optional,
+// gated by resourceTiers.aboveReserve same as everything else here - but
+// STILL outranks lab/factory/power spawn/controller container within that
+// tier: defense readiness beats a lab/factory errand or a controller
+// upgrade buffer even when neither is essential yet. Any non-critical
+// tower needing energy wins outright; optionalConsumer is only consulted
+// once no tower does. (An earlier version of this function compared the
+// two by distance instead - user corrected that same-day: towers are
+// priority, not just equal footing.)
+function satisfactoryConsumer(creep) {
+    return toppableTower(creep) || optionalConsumer(creep);
 }
 
 // Energy that arrived in the terminal since we last looked, backed by a
@@ -269,9 +283,11 @@ function estimatedDropAmount(creep, resource) {
 // the whole link network) - then storage: unconditionally when spawn/ext/
 // a critical tower need it (essentialConsumer - keeping the room able to
 // spawn and defend itself always outranks the reserve), or, once above the
-// reserve (resourceTiers.aboveReserve, ROADMAP 0054), when a
-// lab/controller-container (optionalConsumer) or an ideal-band tower
-// (toppableTower) needs it - never storage -> storage either way - then the
+// reserve (resourceTiers.aboveReserve, ROADMAP 0054), when any optional
+// consumer needs it - a non-critical tower first, then a lab/factory/power
+// spawn/controller container (satisfactoryConsumer, ROADMAP 0074 - both
+// genuinely optional, but a tower still outranks the rest within that
+// tier) - never storage -> storage either way - then the
 // closest source container built up past hauler.minContainerLoad (not the
 // fullest one - a far container isn't worth the trip when a closer one
 // already qualifies).
@@ -393,7 +409,7 @@ function pickLoad(creep) {
         if (
             essentialConsumer(creep) ||
             (resourceTiers.aboveReserve(creep.room) &&
-                (optionalConsumer(creep) || toppableTower(creep)))
+                satisfactoryConsumer(creep))
         ) {
             return { id: creep.room.storage.id, act: "withdraw" };
         }
@@ -420,9 +436,11 @@ function pickLoad(creep) {
 
 // Where to drop it off: a critical tower first (defense), then spawn/ext,
 // then storage if it's below its own reserve (an empty emergency buffer
-// outranks topping anything off further), then an ideal-band tower still
-// worth topping off, then labs, then storage (general, whatever's left),
-// then the controller upgrade container. Source-defense towers (tagged
+// outranks topping anything off further), then the optional-tier
+// consumers - a non-critical tower first, then a lab/factory/power spawn
+// or the controller's upkeep container (satisfactoryConsumer, ROADMAP
+// 0074) - then storage (general, whatever's left). Source-defense towers
+// (tagged
 // `sourceDefense` in the plan - the one right next to a source's container)
 // are never a hauler target, in either branch: the miner sitting right
 // there already keeps it fed (miner.js distribute()), and a hauler
@@ -457,25 +475,20 @@ function pickDeliver(creep) {
     if (target) return target.id;
 
     // keep a minimum emergency buffer in storage - below the reserve it
-    // outranks topping towers/labs beyond their own satisfactory band,
-    // since an empty storage means the room has nothing to fall back on
+    // outranks topping towers/labs beyond their essential needs, since an
+    // empty storage means the room has nothing to fall back on
     if (creep.room.storage && !resourceTiers.aboveReserve(creep.room)) {
         return creep.room.storage.id;
     }
 
-    // ideal-band tower still worth topping off - only while the reserve
-    // above is intact (resourceTiers.aboveReserve, checked just above -
-    // ROADMAP 0054, this used to be unconditional)
-    target = creep.pos.findClosestByRange(roomCache.myStructures(creep.room), {
-        filter: (s) => towerDeliverable(s, creep.room),
-    });
-    if (target) return target.id;
-
-    target = creep.pos.findClosestByRange(roomCache.myStructures(creep.room), {
-        filter: (s) =>
-            s.structureType === STRUCTURE_LAB &&
-            s.store.getFreeCapacity(RESOURCE_ENERGY) > 0,
-    });
+    // ROADMAP 0074: a non-critical tower first, then whichever other
+    // optional consumer needs it - lab/factory/power spawn, or the
+    // controller's upkeep container (satisfactoryConsumer) - only while
+    // the reserve above is intact (resourceTiers.aboveReserve, checked
+    // just above - ROADMAP 0054). Defense readiness outranks a lab/
+    // factory errand or the controller's buffer even when neither is
+    // essential yet.
+    target = satisfactoryConsumer(creep);
     if (target) return target.id;
 
     if (
@@ -485,26 +498,15 @@ function pickDeliver(creep) {
         return creep.room.storage.id;
     }
 
-    if (creep.room.controller) {
-        const upContainer = creep.room.controller.pos.findInRange(
-            FIND_STRUCTURES,
-            3,
-            {
-                filter: (s) =>
-                    s.structureType === STRUCTURE_CONTAINER &&
-                    s.store.getFreeCapacity(RESOURCE_ENERGY) > 0,
-            }
-        )[0];
-        if (upContainer) return upContainer.id;
-    }
-
     // Last resort - nothing else in the cascade above wants this energy
-    // (spawn/ext full, storage at/above its reserve or full, no lab/
-    // controller-container need it). A tower sitting in the satisfactory
-    // dead zone (between criticalRatio and satisfactoryRatio - see
-    // towerDeliverable's comment) was deliberately skipped above because
-    // something better might come along, but with nothing else to do,
-    // topping it off beats a hauler idling full nearby.
+    // (spawn/ext full, storage at/above its reserve or full, no optional
+    // consumer needs it). satisfactoryConsumer above already covers the
+    // full non-critical range for a tower (ROADMAP 0072/0073 killed the
+    // old satisfactory-band dead zone), so the only towers left uncaught
+    // here are ones with LESS than hauler.toppingOffThreshold free
+    // capacity - not worth a dedicated trip, but with the hauler already
+    // idle and nothing else to do, topping one off anyway beats sitting
+    // full nearby.
     target = creep.pos.findClosestByRange(roomCache.myStructures(creep.room), {
         filter: (s) =>
             s.structureType === STRUCTURE_TOWER &&

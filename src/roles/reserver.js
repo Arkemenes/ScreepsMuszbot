@@ -74,12 +74,13 @@ var reserver = {
                 // before reaching the controller), widened to every mission
                 // (ROADMAP 0064 same-day) once the pioneer role hit the
                 // identical live symptom - a walled intermediate room
-                // needing a detour - proving the fix isn't claim-specific.
+                // needing a detour - proving the fix isn't claim-specific;
+                // now the default for every moveToRoom() caller (ROADMAP
+                // 0075), so the explicit flag is gone.
                 routing.moveToRoom(creep, targetRoomName, {
                     range: 20,
                     reusePath: 30,
                     blockHostiles: true,
-                    realRoute: true,
                 });
             }
 

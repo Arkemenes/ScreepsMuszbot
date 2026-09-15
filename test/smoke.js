@@ -1200,15 +1200,16 @@ function withFindLookup(pos, lists) {
     tower.store = savedTowerStoreTag;
 }
 
-// --- ROADMAP 0043 follow-up: a tower in the "dead zone" between
-// pickDeliver's two tiers (not low enough for the reserve tier, not high
-// enough to skip the topping-off tier - e.g. 98% full) does not count as
-// essential either, for the same reason as the source-defense tower above:
-// pickDeliver would never actually deliver to it, so treating it as needy
-// just drains storage for nothing and the energy comes right back on the
-// general fallback tier. Towers spend a lot of time in this band (topped
-// off periodically, draining slowly), so this was a routine, repeatable
-// bug, not a rare corner case -------------------------------------------
+// --- ROADMAP 0043 follow-up: a near-full tower (98%, well under
+// hauler.toppingOffThreshold free capacity - not the removed satisfactoryRatio
+// band, ROADMAP 0072 killed that one entirely) does not count as essential
+// either, for the same reason as the source-defense tower above: pickDeliver
+// would never actually deliver to it (not critical, and towerDeliverable
+// itself excludes anything this close to full), so treating it as needy just
+// drains storage for nothing and the energy comes right back on the general
+// fallback tier. Towers spend a lot of time near-full (topped off
+// periodically, draining slowly), so this was a routine, repeatable bug, not
+// a rare corner case -------------------------------------------
 {
     const deadZoneTower = Object.assign(new OwnedStructure(), {
         id: "towerdeadzone", structureType: STRUCTURE_TOWER, my: true,
@@ -1230,9 +1231,9 @@ function withFindLookup(pos, lists) {
     hDeadZone.memory.job = "load";
     hauler.run(hDeadZone);
     assert(hDeadZone._from !== "stordeadzone",
-        "a tower in the dead zone between the two delivery tiers (98% full) does not " +
-            "unlock storage as a pickup source (ROADMAP 0043 follow-up bug fix, got " +
-            hDeadZone._from + ")");
+        "a near-full tower (98%, under hauler.toppingOffThreshold free " +
+            "capacity) does not unlock storage as a pickup source " +
+            "(ROADMAP 0043 follow-up bug fix, got " + hDeadZone._from + ")");
     room.storage = null;
     spawn.store = savedSpawnStoreDZ;
     findMap[FIND_MY_STRUCTURES] = findMap[FIND_MY_STRUCTURES].filter(
@@ -1270,11 +1271,12 @@ function withFindLookup(pos, lists) {
     );
 }
 
-// --- a dead-zone tower (between criticalRatio and satisfactoryRatio) is
-// deliberately skipped by pickDeliver's normal cascade above - but only in
-// favor of something more urgent existing. With nothing else in the room
-// wanting energy (spawn/ext full, no storage to fall back to), a hauler
-// idling full right next to a tower that still has room helps nobody -----
+// --- a near-full tower (98%, under hauler.toppingOffThreshold free
+// capacity - towerDeliverable's own cutoff, ROADMAP 0072) is deliberately
+// skipped by pickDeliver's normal cascade above - not worth a DEDICATED
+// trip. With nothing else in the room wanting energy (spawn/ext full, no
+// storage to fall back to), a hauler idling full right next to a tower
+// that still has room helps nobody -----
 {
     const deadZoneTowerFallback = Object.assign(new OwnedStructure(), {
         id: "towerdeadzonefallback", structureType: STRUCTURE_TOWER, my: true,
@@ -1296,6 +1298,103 @@ function withFindLookup(pos, lists) {
     spawn.store = savedSpawnStoreFB;
     findMap[FIND_MY_STRUCTURES] = findMap[FIND_MY_STRUCTURES].filter(
         (s) => s.id !== "towerdeadzonefallback"
+    );
+}
+
+// --- ROADMAP 0072 same-day follow-up (user: "vamos matar essa zona morta
+// do hauler"): a tower at 55% energy - well past criticalRatio (50%) but
+// short of the OLD satisfactoryRatio floor (70%) - used to be invisible to
+// towerDeliverable entirely, reachable only via pickDeliver's very last
+// resort. Proven here by pitting it against a SECOND, farther tower that
+// was already eligible under the old rule (90% full) - if the old dead
+// zone still existed, towerDeliverable would only ever match the far one
+// (closer one excluded), and findClosestByRange would deliver there
+// instead, even though the near one is closer. With the dead zone killed,
+// both are equally valid optional-consumer targets and the closer one
+// wins, same as any other optionalConsumer tie-break -----------------------
+{
+    const towerNear = Object.assign(new OwnedStructure(), {
+        id: "towernear55", structureType: STRUCTURE_TOWER, my: true,
+        pos: new RoomPosition(21, 21, "W1N1"), room, // close to the hauler's (20,20)
+        store: Object.assign(store(550, 1000), { getFreeCapacity: () => 450 }), // 55%
+    });
+    const towerFar = Object.assign(new OwnedStructure(), {
+        id: "towerfar90", structureType: STRUCTURE_TOWER, my: true,
+        pos: new RoomPosition(45, 45, "W1N1"), room, // far from the hauler
+        store: Object.assign(store(900, 1000), { getFreeCapacity: () => 100 }), // 90%
+    });
+    REG.towernear55 = towerNear;
+    REG.towerfar90 = towerFar;
+    findMap[FIND_MY_STRUCTURES].push(towerNear, towerFar);
+    const savedSpawnStoreKZ = spawn.store;
+    spawn.store = Object.assign(store(300, 300), { getFreeCapacity: () => 0 }); // not essential
+    room.storage = Object.assign(new Structure(), {
+        id: "storkillzone", structureType: STRUCTURE_STORAGE, room,
+        pos: new RoomPosition(26, 24, "W1N1"),
+        store: Object.assign(store(99999, 100000), { getFreeCapacity: () => 0 }), // above reserve, but full
+    });
+    REG.storkillzone = room.storage;
+    Game.time++;
+    const hKillZone = makeCreep("HKillZone", "hauler", { store: store(200, 200) });
+    hKillZone.transfer = (t) => { hKillZone._to = t && t.id; return OK; };
+    hauler.run(hKillZone);
+    assert(hKillZone._to === "towernear55",
+        "a 55%-energy tower (above criticalRatio, below the OLD " +
+            "satisfactoryRatio floor) is now a valid optional-consumer " +
+            "delivery target and wins on proximity over a farther, " +
+            "already-toppable 90% tower - the dead zone between the two " +
+            "old bands is gone (ROADMAP 0072 same-day follow-up, got " +
+            hKillZone._to + ")");
+    room.storage = null;
+    spawn.store = savedSpawnStoreKZ;
+    findMap[FIND_MY_STRUCTURES] = findMap[FIND_MY_STRUCTURES].filter(
+        (s) => s.id !== "towernear55" && s.id !== "towerfar90"
+    );
+}
+
+// --- ROADMAP 0074 (user request, refined same-day): a non-critical tower
+// is "satisfactory" priority - genuinely optional, gated by
+// resourceTiers.aboveReserve like everything else here - but still
+// outranks lab/factory/power spawn/controller container within that tier;
+// an earlier version of this fix compared the two by distance instead,
+// corrected same-day ("torres devem ser prioritárias vs
+// lab/factory/container"). Proven here with a farther non-critical tower
+// pitted against a CLOSER lab - the tower wins anyway, not the nearer lab -
+{
+    const towerFarSC = Object.assign(new OwnedStructure(), {
+        id: "towerfarsc", structureType: STRUCTURE_TOWER, my: true,
+        pos: new RoomPosition(45, 45, "W1N1"), room, // far from the hauler
+        store: Object.assign(store(800, 1000), { getFreeCapacity: () => 200 }), // 80%, non-critical
+    });
+    const labNearSC = Object.assign(new OwnedStructure(), {
+        id: "labnearsc", structureType: STRUCTURE_LAB, my: true,
+        pos: new RoomPosition(21, 21, "W1N1"), room, // close to the hauler's (20,20)
+        store: Object.assign(store(0, 2000), { getFreeCapacity: () => 2000 }),
+    });
+    REG.towerfarsc = towerFarSC;
+    REG.labnearsc = labNearSC;
+    findMap[FIND_MY_STRUCTURES].push(towerFarSC, labNearSC);
+    const savedSpawnStoreSC = spawn.store;
+    spawn.store = Object.assign(store(300, 300), { getFreeCapacity: () => 0 }); // not essential
+    room.storage = Object.assign(new Structure(), {
+        id: "storsatcons", structureType: STRUCTURE_STORAGE, room,
+        pos: new RoomPosition(26, 24, "W1N1"),
+        store: Object.assign(store(99999, 100000), { getFreeCapacity: () => 0 }), // above reserve, but full
+    });
+    REG.storsatcons = room.storage;
+    Game.time++;
+    const hSatCons = makeCreep("HSatCons", "hauler", { store: store(200, 200) });
+    hSatCons.transfer = (t) => { hSatCons._to = t && t.id; return OK; };
+    hauler.run(hSatCons);
+    assert(hSatCons._to === "towerfarsc",
+        "a non-critical tower outranks a lab within the satisfactory tier " +
+            "even when the lab is closer - defense readiness beats a lab " +
+            "errand (satisfactoryConsumer, ROADMAP 0074, got " +
+            hSatCons._to + ")");
+    room.storage = null;
+    spawn.store = savedSpawnStoreSC;
+    findMap[FIND_MY_STRUCTURES] = findMap[FIND_MY_STRUCTURES].filter(
+        (s) => s.id !== "towerfarsc" && s.id !== "labnearsc"
     );
 }
 
@@ -2778,6 +2877,13 @@ findMap[FIND_HOSTILE_CREEPS] = [];
             room: { name: "TestRoom" },
         });
     }
+    function mkTestWall(id, hits, hitsMax) {
+        return Object.assign(new OwnedStructure(), {
+            id, structureType: STRUCTURE_WALL, hits, hitsMax, my: true,
+            pos: new RoomPosition(12, 10, "TestRoom"),
+            room: { name: "TestRoom" },
+        });
+    }
     function testFind(structures) {
         return (type, opts) => {
             let list = type === FIND_STRUCTURES ? structures : [];
@@ -2797,102 +2903,6 @@ findMap[FIND_HOSTILE_CREEPS] = [];
         });
         return { tower: t, getRepaired: () => repaired };
     }
-
-    // --- D4 + follow-up: tower rampart/wall repair uses the single shared
-    // 3-tier model in utils/rampartRepair.js (ROADMAP 0032 D4 follow-up,
-    // gate updated to the unified 1% reserve by ROADMAP 0054) - critical /
-    // healthy / reserve-gated, all as a FRACTION of hitsMax (which already
-    // scales with RCL), never a fixed number. C is critical (0.05% < 0.1%),
-    // H is healthy but not critical (0.5%, between 0.1% and 1%), S is past
-    // the healthy tier (5% > 1%) and only eligible while the room's storage
-    // reserve (logistics.reserveRatio, 1%) is intact.
-    const C = mkTestRampart("c", 500, 1000000);
-    const H = mkTestRampart("h", 5000, 1000000);
-    const S = mkTestRampart("s", 50000, 1000000);
-
-    // ROADMAP 0069 (user, live observation): a tower with barely enough
-    // energy to not be critical itself kept spending it hardening a merely
-    // "healthy" rampart/wall while the room's storage had no reserve to
-    // spare - only the critical slice is unconditional now, healthy also
-    // needs utils/resourceTiers.aboveReserve(room), same gate builder.js's
-    // own past-healthy extension already used.
-    {
-        const { tower, getRepaired } = mkTestTower([H, S], null);
-        Game.time++;
-        towerMod.run(tower);
-        assert(getRepaired() === null,
-            "nothing critical, no storage at all: the merely-healthy " +
-                "structure (H) is NOT eligible without reserve (ROADMAP " +
-                "0069) - S (past 1%) still skipped as before");
-    }
-    {
-        const twentyPercentStorage = { store: store(200, 1000) }; // 20% fill, above the 1% reserve
-        const { tower, getRepaired } = mkTestTower([H, S], twentyPercentStorage);
-        Game.time++;
-        towerMod.run(tower);
-        assert(getRepaired() === H,
-            "nothing critical, storage above the 1% reserve: the " +
-                "healthy-tier structure (H) is eligible again - S (past 1%) " +
-                "still skipped regardless (ROADMAP 0068)");
-    }
-    {
-        const { tower, getRepaired } = mkTestTower([C, H, S], null);
-        Game.time++;
-        towerMod.run(tower);
-        assert(getRepaired() === C,
-            "the critical structure (C, <0.1%) wins over the merely-healthy " +
-                "one (H) even with no storage at all - critical never needs " +
-                "reserve (ROADMAP 0069) - S still skipped");
-    }
-    {
-        const { tower, getRepaired } = mkTestTower([S], null);
-        Game.time++;
-        towerMod.run(tower);
-        assert(getRepaired() === null,
-            "past the healthy tier with no storage at all: nothing eligible, no repair");
-    }
-    {
-        const belowReserve = { store: store(5, 1000) }; // 0.5% fill, below the 1% reserve
-        const { tower, getRepaired } = mkTestTower([S], belowReserve);
-        Game.time++;
-        towerMod.run(tower);
-        assert(getRepaired() === null,
-            "past the healthy tier, storage fill at 0.5% (below the 1% " +
-                "reserve): still no repair");
-    }
-    // ROADMAP 0068 (user request): a tower never pushes a rampart/wall past
-    // the 1% healthy tier, no matter how much storage reserve exists -
-    // worthHardeningByTower ignores the reserve entirely, unlike
-    // worthHardening (roles/builder.js's own predicate, still reserve-gated
-    // - see the BCapRoom fixture below for the builder side of this same
-    // structure). A tower has no natural brake on how often it fires at a
-    // target it's allowed to keep hardening, so "past 1%" stays a slower,
-    // self-limited builder job instead of an open-ended tower one.
-    {
-        const twentyPercentStorage = { store: store(200, 1000) }; // 20% fill, above the 1% reserve
-        const { tower, getRepaired } = mkTestTower([S], twentyPercentStorage);
-        Game.time++;
-        towerMod.run(tower);
-        assert(getRepaired() === null,
-            "past the healthy tier, storage fill at 20% (above the 1% " +
-                "reserve): still no repair from the tower (ROADMAP 0068 - " +
-                "past-healthy hardening is builder-only)");
-    }
-    {
-        const fullEnoughStorage = { store: store(600, 1000) }; // 60% fill, well past the reserve
-        const { tower, getRepaired } = mkTestTower([S], fullEnoughStorage);
-        Game.time++;
-        towerMod.run(tower);
-        assert(getRepaired() === null,
-            "past the healthy tier, storage fill at 60%: still no repair " +
-                "from the tower, even with plenty of reserve (ROADMAP 0068)");
-    }
-
-    // --- ROADMAP 0070 (real bug found in review): findRepairTarget used to
-    // check ALL normal structures unconditionally before EVER looking at
-    // rampart/wall, so any trivial decay (a road missing 1 hit) starved a
-    // critical rampart seconds from collapsing. Now both share one
-    // ratio-sorted pool, mirroring roles/builder.js.
     function mkTestNormal(id, structureType, hits, hitsMax) {
         return Object.assign(new OwnedStructure(), {
             id, structureType, hits, hitsMax, my: true,
@@ -2900,6 +2910,165 @@ findMap[FIND_HOSTILE_CREEPS] = [];
             room: { name: "TestRoom" },
         });
     }
+
+    // --- D4 + follow-up + ROADMAP 0072 (user-specified, unified 3-tier
+    // repair system for both structures/tower.js and roles/builder.js): C
+    // is critical (0.05% < 0.1%), H is satisfactory (0.5%, between 0.1%
+    // and 1%), S is optimal (5% >= 1%). A tower's own eligibility
+    // (utils/rampartRepair.towerMayRepair) now depends on ITS OWN energy
+    // ratio, tier-dependent - critical needs tower.repairEnergyRatio
+    // (50%), satisfactory/optimal need
+    // tower.satisfactoryRepairEnergyRatio (70%) - PLUS, for a rampart/wall
+    // specifically in the optimal tier, the room's storage must be
+    // genuinely abundant (utils/resourceTiers.isStorageAbundant, 50% fill
+    // via logistics.storageSatisfactoryRatio) - replaces ROADMAP 0069's
+    // aboveReserve gate for the satisfactory tier entirely, and ROADMAP
+    // 0068's blanket "tower never touches optimal" rule for this one case.
+    const C = mkTestRampart("c", 500, 1000000);
+    const H = mkTestRampart("h", 5000, 1000000);
+    const S = mkTestRampart("s", 50000, 1000000);
+
+    {
+        const { tower, getRepaired } = mkTestTower([C], null, 500); // 50% energy - right at the critical gate
+        Game.time++;
+        towerMod.run(tower);
+        assert(getRepaired() === C,
+            "a critical target is repaired once the tower's own energy " +
+                "crosses the critical gate (50%) - no storage needed at all");
+    }
+    {
+        const { tower, getRepaired } = mkTestTower([C], null, 499); // just below 50%
+        Game.time++;
+        towerMod.run(tower);
+        assert(getRepaired() === null,
+            "a critical target is NOT repaired with tower energy just " +
+                "below the critical gate (49.9%)");
+    }
+    {
+        const { tower, getRepaired } = mkTestTower([H], null, 700); // 70% energy, NO storage at all
+        Game.time++;
+        towerMod.run(tower);
+        assert(getRepaired() === H,
+            "a satisfactory target is repaired once the tower's own " +
+                "energy crosses the satisfactory gate (70%) - no storage " +
+                "reserve needed anymore (ROADMAP 0072 replaces the old " +
+                "ROADMAP 0069 aboveReserve gate for this tier)");
+    }
+    {
+        const { tower, getRepaired } = mkTestTower([H], null, 600); // 60% - above critical, below satisfactory
+        Game.time++;
+        towerMod.run(tower);
+        assert(getRepaired() === null,
+            "a satisfactory target is NOT repaired with tower energy at " +
+                "60% - above the critical gate but below the satisfactory " +
+                "one; 50%-70% is a real, narrower dead zone now, entirely " +
+                "about the tower's own energy (ROADMAP 0072)");
+    }
+    {
+        const { tower, getRepaired } = mkTestTower([S], null, 1000); // full tower energy, NO storage at all
+        Game.time++;
+        towerMod.run(tower);
+        assert(getRepaired() === null,
+            "an optimal-tier rampart is NOT repaired by the tower even at " +
+                "full tower energy, without an abundant storage reserve " +
+                "(a tower has no natural brake on this spend, so it needs " +
+                "real abundance, not just critical/satisfactory energy)");
+    }
+    {
+        const belowAbundant = { store: store(400, 1000) }; // 40% fill - below the 50% abundance bar
+        const { tower, getRepaired } = mkTestTower([S], belowAbundant, 1000);
+        Game.time++;
+        towerMod.run(tower);
+        assert(getRepaired() === null,
+            "an optimal-tier rampart is still NOT repaired with storage " +
+                "at 40% fill - below the 50% abundance bar " +
+                "(logistics.storageSatisfactoryRatio)");
+    }
+    {
+        const abundant = { store: store(600, 1000) }; // 60% fill - above the 50% abundance bar
+        const { tower, getRepaired } = mkTestTower([S], abundant, 1000);
+        Game.time++;
+        towerMod.run(tower);
+        assert(getRepaired() === S,
+            "an optimal-tier rampart IS repaired once storage is " +
+                "genuinely abundant (>=50% fill) and the tower itself has " +
+                "at least the satisfactory energy floor - new since " +
+                "ROADMAP 0072; the old ROADMAP 0068 rule never let the " +
+                "tower touch the optimal tier at all, under any condition");
+    }
+    {
+        const abundant = { store: store(600, 1000) };
+        const { tower, getRepaired } = mkTestTower([C, H, S], abundant, 1000);
+        Game.time++;
+        towerMod.run(tower);
+        assert(getRepaired() === C,
+            "with all three tiers simultaneously eligible, critical (C) " +
+                "always wins over satisfactory (H) and optimal (S)");
+    }
+    {
+        const abundant = { store: store(600, 1000) };
+        const { tower, getRepaired } = mkTestTower([H, S], abundant, 1000);
+        Game.time++;
+        towerMod.run(tower);
+        assert(getRepaired() === H,
+            "with no critical target, satisfactory (H) wins over optimal " +
+                "(S) even though both are individually eligible");
+    }
+
+    // A normal structure's optimal tier (unlike rampart/wall's) never
+    // needs storage abundance - just the tower's own satisfactory energy
+    // floor, since a normal structure's hitsMax is small/bounded (no
+    // "sink energy forever" risk the way a 300M-hitsMax wall has).
+    {
+        const optimalContainer = mkTestNormal("opt-cont", STRUCTURE_CONTAINER, 200000, 250000); // 80% health -> optimal (>=50%)
+        const { tower, getRepaired } = mkTestTower([optimalContainer], null, 1000); // full energy, NO storage at all
+        Game.time++;
+        towerMod.run(tower);
+        assert(getRepaired() === optimalContainer,
+            "an optimal-tier NORMAL structure is repaired at the " +
+                "satisfactory energy floor alone, no storage abundance " +
+                "requirement at all - unlike a rampart/wall in the same tier");
+    }
+
+    // ROADMAP 0072 (user request): "caso tenha empate, rampart tem menor
+    // prioridade e wall menor ainda" - within the SAME tier, a normal
+    // structure always outranks a rampart, which always outranks a wall,
+    // regardless of exact ratio (a type-priority rule spanning the whole
+    // tier, not just a last-resort break for exact numeric ties).
+    {
+        const critNormal = mkTestNormal("crit-normal", STRUCTURE_EXTENSION, 5, 1000); // 0.5% -> critical (<10%)
+        const critRampart = mkTestRampart("crit-rampart-tb", 50, 1000000); // 0.005% -> critical, objectively WORSE ratio
+        const critWall = mkTestWall("crit-wall-tb", 1, 1000000); // 0.0001% -> critical, even worse ratio still
+        const { tower, getRepaired } = mkTestTower([critWall, critRampart, critNormal], null, 1000);
+        Game.time++;
+        towerMod.run(tower);
+        assert(getRepaired() === critNormal,
+            "within the same tier, a normal structure outranks a rampart " +
+                "and a wall even though both have objectively worse " +
+                "ratios (ROADMAP 0072 type tiebreak)");
+    }
+    {
+        // same shape, but the normal structure is already claimed by a
+        // first tower this same tick - the second tower should land on
+        // the rampart next, not the wall
+        const critNormal = mkTestNormal("crit-normal2", STRUCTURE_EXTENSION, 5, 1000);
+        const critRampart = mkTestRampart("crit-rampart-tb2", 50, 1000000);
+        const critWall = mkTestWall("crit-wall-tb2", 1, 1000000);
+        Game.time++;
+        const towerA = mkTestTower([critWall, critRampart, critNormal], null, 1000);
+        towerMod.run(towerA.tower);
+        const towerB = mkTestTower([critWall, critRampart, critNormal], null, 1000); // same Game.time
+        towerMod.run(towerB.tower);
+        assert(towerB.getRepaired() === critRampart,
+            "rampart outranks wall within the same tier, once the normal " +
+                "structure is already claimed this tick");
+    }
+
+    // --- ROADMAP 0070 (real bug found in review): findRepairTarget used to
+    // check ALL normal structures unconditionally before EVER looking at
+    // rampart/wall, so any trivial decay (a road missing 1 hit) starved a
+    // critical rampart seconds from collapsing. Now both share one
+    // ratio-sorted pool, mirroring roles/builder.js.
     {
         // barely scratched (99.9% health) vs C (critical, 0.05% health) -
         // the old code always picked the normal structure first, no matter
@@ -3095,6 +3264,42 @@ findMap[FIND_HOSTILE_CREEPS] = [];
                     "past its healthy tier too, not just a rampart " +
                     "(ROADMAP 0068 - previously builder.js never repaired " +
                     "STRUCTURE_WALL at all)");
+        }
+
+        // ROADMAP 0072 (user request): builder now shares the exact same
+        // tier+type priority as structures/tower.js
+        // (utils/rampartRepair.priority) for its own main repair pool, not
+        // just the dead-last defensive fallback above - "caso tenha
+        // empate, rampart tem menor prioridade e wall menor ainda" applies
+        // here too. Positions kept far from the creep (range > 3) so
+        // opportunisticWork's own separate in-passing check (range 3,
+        // ratio-only, no type tiebreak by design) never fires and
+        // interferes with what's being tested here.
+        function mkBCapFar(id, structureType, hits, hitsMax, y) {
+            const s = Object.assign(new OwnedStructure(), {
+                id, structureType, hits, hitsMax, my: true,
+                pos: new RoomPosition(40, y, "BCapRoom"),
+                room: { name: "BCapRoom" },
+            });
+            REG[s.id] = s;
+            return s;
+        }
+        {
+            const critNormal = mkBCapFar("bcap-normal", STRUCTURE_EXTENSION, 5, 1000, 40); // 0.5% -> critical
+            const rampartTb = mkBCapFar("bcap-rampart-tb", STRUCTURE_RAMPART, 50, 1000000, 41); // 0.005% -> critical
+            const wallTb = mkBCapFar("bcap-wall-tb", STRUCTURE_WALL, 1, 1000000, 42); // 0.0001% -> critical
+
+            const { creep, getRepairs } = mkBCapCreep([critNormal, rampartTb, wallTb], null);
+            Game.time++;
+            let threw = null;
+            try { builder.run(creep); } catch (e) { threw = e; }
+            assert(!threw, "builder.run with a same-tier type tiebreak never throws" +
+                (threw ? "\n      " + (threw.stack || threw) : ""));
+            assert(getRepairs().includes(critNormal),
+                "builder's main repair pool picks the normal structure " +
+                    "over an equally-critical rampart/wall, matching " +
+                    "structures/tower.js's own type tiebreak (got " +
+                    JSON.stringify(getRepairs().map((r) => r && r.id)) + ")");
         }
     }
 
@@ -4589,17 +4794,23 @@ delete Game.creeps.Sc2;
     const rsvCm = new PathFinder.CostMatrix();
     assert(rsvMoveOpts.costCallback("W1N2", rsvCm) === rsvCm,
         "the reserver's costCallback always allows the mission target");
-    assert(rsvMoveOpts.costCallback("W1N1", rsvCm) === rsvCm,
+    // ROADMAP 0077: W1N1 is in vision in this test (Game.rooms.W1N1), so the
+    // callback now layers move.roomMatrix()'s known-structure matrix over it
+    // instead of passing the empty rsvCm through unchanged - "allows" means
+    // "not blocked" (!== false), not "identical object" any more.
+    assert(rsvMoveOpts.costCallback("W1N1", rsvCm) !== false,
         "the reserver's costCallback always allows its own current room");
     assert(rsvMoveOpts.costCallback("SomeUnrelatedRoom", rsvCm) === false,
         "the reserver's costCallback blocks a room outside the computed route");
 
+    let rmMinerMoveOpts = null;
     const rmMiner = Object.assign(Object.create(Creep.prototype), {
         id: "rm1", room, pos: new RoomPosition(20, 20, "W1N1"),
         store: store(0, 100),
         body: [{ type: MOVE }, { type: WORK }],
         memory: { role: "remoteMiner", home: "W1N1", targetRoom: "W1N2" },
-        moveTo: () => OK, harvest: () => OK, build: () => OK, repair: () => OK,
+        moveTo: (pos, opts) => { rmMinerMoveOpts = opts; return OK; },
+        harvest: () => OK, build: () => OK, repair: () => OK,
         suicide: () => OK,
     });
     threw = null;
@@ -4607,18 +4818,50 @@ delete Game.creeps.Sc2;
     assert(!threw, "remoteMiner.run does not throw while travelling" +
         (threw ? "\n      " + (threw.stack || threw) : ""));
 
+    // ROADMAP 0075: remoteMiner now routes through utils/routing.moveToRoom()
+    // (a raw creep.moveTo() + remotes.roomCallback() before this - no upfront
+    // terrain validation, no retreat/backtrack) with opts.allowRoom keeping
+    // the exact same "never cross a room that isn't mine/reserved/the target"
+    // guarantee remotes.roomCallback used to enforce on its own.
+    assert(rmMinerMoveOpts && typeof rmMinerMoveOpts.costCallback === "function",
+        "remoteMiner travels with a route-aware costCallback now");
+    const rmMinerCm = new PathFinder.CostMatrix();
+    assert(rmMinerMoveOpts.costCallback("W1N2", rmMinerCm) === rmMinerCm,
+        "remoteMiner's costCallback always allows the assigned remote (its own mission target)");
+    // ROADMAP 0077 - see the reserver's own W1N1 assertion above.
+    assert(rmMinerMoveOpts.costCallback("W1N1", rmMinerCm) !== false,
+        "remoteMiner's costCallback always allows its own home room");
+    assert(rmMinerMoveOpts.costCallback("SomeUnrelatedRoom", rmMinerCm) === false,
+        "remoteMiner's costCallback blocks a room that's neither mine, reserved, nor the target " +
+            "(AC4 - same guarantee remotes.roomCallback used to give directly)");
+
+    let rmHaulerMoveOpts = null;
     const rmHauler = Object.assign(Object.create(Creep.prototype), {
         id: "rh1", room, pos: new RoomPosition(20, 20, "W1N1"),
         store: store(0, 100),
         body: [{ type: CARRY }, { type: MOVE }],
         memory: { role: "remoteHauler", home: "W1N1", targetRoom: "W1N2", job: "load" },
-        moveTo: () => OK, withdraw: () => OK, pickup: () => OK, transfer: () => OK,
+        moveTo: (pos, opts) => { rmHaulerMoveOpts = opts; return OK; },
+        withdraw: () => OK, pickup: () => OK, transfer: () => OK,
         suicide: () => OK,
     });
     threw = null;
     try { remoteHauler.run(rmHauler); } catch (e) { threw = e; }
     assert(!threw, "remoteHauler.run does not throw while travelling" +
         (threw ? "\n      " + (threw.stack || threw) : ""));
+
+    // ROADMAP 0075 - same migration as remoteMiner above.
+    assert(rmHaulerMoveOpts && typeof rmHaulerMoveOpts.costCallback === "function",
+        "remoteHauler travels with a route-aware costCallback now");
+    const rmHaulerCm = new PathFinder.CostMatrix();
+    assert(rmHaulerMoveOpts.costCallback("W1N2", rmHaulerCm) === rmHaulerCm,
+        "remoteHauler's costCallback always allows the assigned remote (its own mission target)");
+    // ROADMAP 0077 - see the reserver's own W1N1 assertion above.
+    assert(rmHaulerMoveOpts.costCallback("W1N1", rmHaulerCm) !== false,
+        "remoteHauler's costCallback always allows its own home room");
+    assert(rmHaulerMoveOpts.costCallback("SomeUnrelatedRoom", rmHaulerCm) === false,
+        "remoteHauler's costCallback blocks a room that's neither mine, reserved, nor the target " +
+            "(AC4 - same guarantee remotes.roomCallback used to give directly)");
 
     // and now "on site" (creep.room.name === targetRoom)
     const remoteRoom = { name: "W1N2", controller: { my: false }, find: room.find };
@@ -4719,7 +4962,8 @@ delete Game.creeps.Sc2;
         [{ exit: 1, room: "E10N10" }, { exit: 1, room: "E10N20" }],
         "W1N1", "E10N20"
     );
-    assert(routingCb("W1N1", routingCm) === routingCm,
+    // ROADMAP 0077 - see the reserver's own W1N1 assertion above.
+    assert(routingCb("W1N1", routingCm) !== false,
         "routeCostCallback allows the creep's own room");
     assert(routingCb("E10N10", routingCm) === routingCm,
         "routeCostCallback allows a room on the chosen route");
@@ -4727,10 +4971,6 @@ delete Game.creeps.Sc2;
         "routeCostCallback always allows the destination");
     assert(routingCb("E15N15", routingCm) === false,
         "routeCostCallback blocks a room that's neither current, destination, nor on the route");
-    assert(routingCb.allowedRooms instanceof Set && routingCb.allowedRooms.has("W1N1"),
-        "routeCostCallback exposes its own allowed-room Set for diagnostics (ROADMAP 0064 " +
-            "live follow-up) - moveToRoom() logs its size on every ERR_NO_PATH tick to confirm " +
-            "or rule out the engine's own maxRooms ceiling directly instead of guessing");
 
     // ROADMAP 0061 (researched from screeps-cartographer's findRoute
     // enhancement): routeCostCallback also allows each route hop's known
@@ -4794,6 +5034,82 @@ delete Game.creeps.Sc2;
             "avoidCostCallback is safe to call with no avoid list/opts at all - never throws");
     }
 
+    // --- ROADMAP 0077: computeRealRoute/routeCostCallback/avoidCostCallback
+    // now layer utils/move.js's roomMatrix() (already cached, structure-
+    // aware) over a room that's currently in vision, instead of reasoning
+    // about terrain alone - closes the ROADMAP.md "Later" gap where an
+    // ally's own interior rampart/wall (isDangerousRoom exempts ally
+    // ownership on purpose, ROADMAP 0064) went undetected even in a room
+    // the creep already had vision of that same tick.
+    {
+        const visibleRoomName = "WStructVision";
+        const blockingWall = {
+            structureType: STRUCTURE_WALL,
+            pos: { x: 10, y: 10 },
+            my: false,
+            isPublic: false,
+        };
+        const visibleRoom = new Room(visibleRoomName);
+        visibleRoom.find = (type) => (type === FIND_STRUCTURES ? [blockingWall] : []);
+        Game.rooms[visibleRoomName] = visibleRoom;
+
+        // AC2
+        const structRouteCb = routing.routeCostCallback(
+            [{ exit: 1, room: visibleRoomName }], "W1N1", visibleRoomName
+        );
+        const outCm1 = structRouteCb(visibleRoomName, new PathFinder.CostMatrix());
+        assert(outCm1 && outCm1.get(10, 10) === 255,
+            "routeCostCallback layers a known-structure matrix over a room in vision, " +
+                "blocking the wall's tile (AC2)");
+
+        // AC3
+        const structAvoidCb = routing.avoidCostCallback([], {});
+        const outCm2 = structAvoidCb(visibleRoomName, new PathFinder.CostMatrix());
+        assert(outCm2 && outCm2.get(10, 10) === 255,
+            "avoidCostCallback layers a known-structure matrix over a room in vision, " +
+                "blocking the wall's tile (AC3)");
+
+        // AC1
+        const realSearch2 = PathFinder.search;
+        let seenVisible;
+        PathFinder.search = (origin, goal, o) => {
+            seenVisible = o.roomCallback(visibleRoomName);
+            return { path: [], incomplete: true };
+        };
+        routing.computeRealRoute(new RoomPosition(25, 25, "W1N1"), "W9N9", {});
+        PathFinder.search = realSearch2;
+        assert(seenVisible && typeof seenVisible.get === "function" && seenVisible.get(10, 10) === 255,
+            "computeRealRoute's roomCallback returns a known-structure matrix for a room in " +
+                "vision, blocking the wall's tile (AC1)");
+
+        // AC4 - the exact same room, now WITHOUT vision, falls back to
+        // today's terrain-only behavior in all three - nothing regresses.
+        delete Game.rooms[visibleRoomName];
+
+        const noVisRouteCb = routing.routeCostCallback(
+            [{ exit: 1, room: visibleRoomName }], "W1N1", visibleRoomName
+        );
+        const emptyCm3 = new PathFinder.CostMatrix();
+        assert(noVisRouteCb(visibleRoomName, emptyCm3) === emptyCm3,
+            "routeCostCallback passes the matrix through unchanged for a room with no vision (AC4)");
+
+        const noVisAvoidCb = routing.avoidCostCallback([], {});
+        const emptyCm4 = new PathFinder.CostMatrix();
+        assert(noVisAvoidCb(visibleRoomName, emptyCm4) === emptyCm4,
+            "avoidCostCallback passes the matrix through unchanged for a room with no vision (AC4)");
+
+        let seenNoVis;
+        PathFinder.search = (origin, goal, o) => {
+            seenNoVis = o.roomCallback(visibleRoomName);
+            return { path: [], incomplete: true };
+        };
+        routing.computeRealRoute(new RoomPosition(25, 25, "W1N1"), "W9N9", {});
+        PathFinder.search = realSearch2;
+        assert(seenNoVis === undefined,
+            "computeRealRoute's roomCallback falls back to terrain-only (undefined) for a room " +
+                "with no vision (AC4)");
+    }
+
     // findRoute(): highway rooms are cheapened, hostile rooms are
     // penalized - or, with blockHostiles, excluded outright (Infinity)
     function routeCostFor(probeRoomName, opts) {
@@ -4845,6 +5161,18 @@ delete Game.creeps.Sc2;
     assert(routeCostFor("Wavoided", {}) === 1 + 2,
         "a room NOT in opts.avoid is never excluded just because some other room's avoid list exists");
 
+    // ROADMAP 0075: opts.allowRoom - an extra restriction ON TOP of
+    // avoid/hostile, letting a caller (remoteHauler/remoteMiner) confine the
+    // whole trip to a subset of rooms it decides (mine/reserved-by-me), the
+    // same rule remotes.roomCallback used to enforce on its own narrower
+    // costCallback.
+    assert(routeCostFor("WNotAllowed", { allowRoom: (n) => n === "WOk" }) === Infinity,
+        "a room allowRoom rejects is excluded outright, just like opts.avoid");
+    assert(routeCostFor("WOk", { allowRoom: (n) => n === "WOk" }) === 1 + 2,
+        "a room allowRoom accepts is never excluded just because allowRoom is set");
+    assert(routeCostFor("WAnyRoom", {}) === 1 + 2,
+        "without opts.allowRoom at all, no room is excluded by it (nothing to opt into)");
+
     // findRoute() itself returns null when the engine can't find a route
     // under those constraints (a stand-in for "the only path crosses a
     // blocked room" - the default test-harness findRoute stub always
@@ -4858,15 +5186,15 @@ delete Game.creeps.Sc2;
     }
     delete Memory.rooms.Whostile;
 
-    // moveToRoom() never runs a PathFinder.search of its own BY DEFAULT - a
-    // reachability pre-check (PathFinder.search once per room entered) was
-    // tried here and reverted: a scout cycling through several dead-end
-    // candidate rooms in a row (blacklisting its way out of a trap, picking
-    // a new target each tick) meant several fresh, uncached searches in a
-    // hurry, and that was enough in practice to drain the CPU bucket.
-    // Without opts.realRoute, moveToRoom is just findRoute() + the native
-    // moveTo, full stop (opts.realRoute's very different, ONE-TIME-per-trip
-    // cost profile is covered separately below - ROADMAP 0064).
+    // ROADMAP 0075: moveToRoom() now runs computeRealRoute()'s
+    // PathFinder.search on a fresh trip's first leg BY DEFAULT - opts.realRoute
+    // flipped from opt-in to opt-out. Only the reachability pre-check that
+    // was tried and reverted (PathFinder.search once per room ENTERED, no
+    // caching) is still off the table - a scout cycling through several
+    // dead-end candidate rooms in a row meant several fresh searches in a
+    // hurry, enough in practice to drain the CPU bucket. This is a
+    // completely different cost profile (once per trip leg, not once per
+    // room), which is exactly why it can now be the default.
     {
         const realSearch = PathFinder.search;
         let searches = 0;
@@ -4879,8 +5207,29 @@ delete Game.creeps.Sc2;
             moveTo: () => "moved",
         };
         const result = routing.moveToRoom(plainCreep, "W9N9", { range: 20 });
-        assert(result === "moved" && searches === 0,
-            "moveToRoom() never calls PathFinder.search - it's just findRoute() + the native moveTo");
+        assert(result === "moved" && searches === 1,
+            "moveToRoom() calls computeRealRoute's PathFinder.search by default now (ROADMAP 0075)");
+        PathFinder.search = realSearch;
+    }
+
+    // ROADMAP 0075: the one deliberate opt-out - roles/scout.js's own
+    // free-roam exploration (no fixed destination, always a direct
+    // neighbor, a fresh target picked every cycle) passes `realRoute: false`
+    // to keep the old zero-PathFinder.search behavior.
+    {
+        const realSearch = PathFinder.search;
+        let searches = 0;
+        PathFinder.search = () => { searches++; return { path: [], incomplete: true }; };
+
+        const optOutCreep = {
+            pos: new RoomPosition(25, 25, "W1N1"),
+            room: { name: "W1N1" },
+            memory: {},
+            moveTo: () => "moved",
+        };
+        routing.moveToRoom(optOutCreep, "W9N9", { range: 20, realRoute: false });
+        assert(searches === 0,
+            "realRoute: false still skips computeRealRoute entirely, for scout's free-roam exploration");
         PathFinder.search = realSearch;
     }
 
@@ -4891,11 +5240,13 @@ delete Game.creeps.Sc2;
     // maxOps/maxRooms, so it silently fell back to the engine's own defaults
     // (2000 ops, 16 rooms), nowhere near enough once routeCostCallback's
     // "allowed" room set spans a long validated route with real natural-wall
-    // clutter in it. Scoped to opts.realRoute callers only (same-day follow-
-    // up, at the user's request) - scout/pioneer/raider/squad have never
-    // shown this symptom, and a wider budget isn't free CPU-wise for a
-    // search that fails cheap and fast for a genuine reason (constitution
-    // §1) - so they keep the engine's own defaults exactly as before.
+    // clutter in it. ROADMAP 0075: this bump now tracks the same opt-out
+    // default as computeRealRoute itself - every caller that reaches this
+    // branch already ran computeRealRoute, so the budgets stay matched;
+    // only realRoute:false (scout's free-roam exploration) keeps the
+    // engine's own silent defaults, since it never runs computeRealRoute
+    // to validate anything the native search would need the bigger budget
+    // for in the first place.
     {
         const realSearch = PathFinder.search;
         PathFinder.search = () => ({ path: [], incomplete: true });
@@ -4907,12 +5258,12 @@ delete Game.creeps.Sc2;
             memory: {},
             moveTo: (pos, o) => { seenMaxOps = o.maxOps; seenMaxRooms = o.maxRooms; return OK; },
         };
-        routing.moveToRoom(opsCreep, "W9N9", { range: 20, realRoute: true });
+        routing.moveToRoom(opsCreep, "W9N9", { range: 20 }); // realRoute defaults on now
         assert(seenMaxOps === 200000,
-            "with opts.realRoute, moveToRoom()'s main routed moveTo() call gets " +
+            "by default now, moveToRoom()'s main routed moveTo() call gets " +
                 "routing.moveMaxOps, not the engine's silent 2000 default");
         assert(seenMaxRooms === 64,
-            "with opts.realRoute, moveToRoom()'s main routed moveTo() call gets " +
+            "by default now, moveToRoom()'s main routed moveTo() call gets " +
                 "routing.moveMaxRooms, not the engine's silent 16 default - a validated route " +
                 "longer than 16 hops (confirmed live) could never complete otherwise, no matter " +
                 "how many ops it's allowed");
@@ -4924,11 +5275,10 @@ delete Game.creeps.Sc2;
             memory: {},
             moveTo: (pos, o) => { seenMaxOps2 = o.maxOps; seenMaxRooms2 = o.maxRooms; return OK; },
         };
-        routing.moveToRoom(noOpsCreep, "W9N9", { range: 20 }); // no realRoute - scout/pioneer/raider/squad shape
+        routing.moveToRoom(noOpsCreep, "W9N9", { range: 20, realRoute: false }); // scout free-roam shape
         assert(seenMaxOps2 === undefined && seenMaxRooms2 === undefined,
-            "without opts.realRoute, maxOps/maxRooms are never set at all - every other caller " +
-                "(scout, pioneer, raider, squad) keeps the engine's own defaults, unchanged from " +
-                "before today");
+            "with realRoute:false, maxOps/maxRooms are never set at all - scout's free-roam " +
+                "exploration keeps the engine's own defaults");
 
         PathFinder.search = realSearch;
     }
@@ -4984,6 +5334,26 @@ delete Game.creeps.Sc2;
             delete Memory.rooms.WRealHostile;
             delete Memory.rooms.WRealEnemyOwned;
             delete Memory.rooms.WRealAllyOwned;
+            PathFinder.search = realSearch;
+        }
+
+        // ROADMAP 0075: opts.allowRoom - same extra restriction as
+        // findRoute()'s own allowRoom test above, here for computeRealRoute's
+        // roomCallback (remoteHauler/remoteMiner's actual code path).
+        {
+            let seenNotAllowed = null, seenAllowed = null;
+            PathFinder.search = (origin, goal, o) => {
+                seenNotAllowed = o.roomCallback("WNotAllowed");
+                seenAllowed = o.roomCallback("WOk");
+                return { path: [], incomplete: true };
+            };
+            routing.computeRealRoute(new RoomPosition(25, 25, "W1N1"), "W9N9", {
+                allowRoom: (n) => n === "WOk",
+            });
+            assert(seenNotAllowed === false,
+                "computeRealRoute excludes a room opts.allowRoom rejects (AC3)");
+            assert(seenAllowed !== false,
+                "computeRealRoute never excludes a room opts.allowRoom accepts (AC3)");
             PathFinder.search = realSearch;
         }
 
@@ -5746,6 +6116,156 @@ delete Game.creeps.Sc2;
         assert(moveCalls3 === 2,
             "moveTo() is called every tick including the confirming one - the cached path " +
                 "is dropped, not the movement intent itself");
+
+        // ROADMAP 0076: the same confirmed dead end also gets shared -
+        // Memory.rooms[x].routeDeadEndUntil, not just this one creep's own
+        // _routeAvoid - so every OTHER creep skips discovering it too.
+        assert(routing.isKnownDeadEnd("WMazeRoom"),
+            "retreatFrom() also marks the confirmed room as a shared dead end (AC1)");
+        assert(
+            Memory.rooms.WMazeRoom && Memory.rooms.WMazeRoom.routeDeadEndUntil > Game.time,
+            "the shared mark has a future TTL (routing.deadEndTicks), not permanent"
+        );
+
+        // A completely fresh, independent creep (no _routeAvoid history of
+        // its own) heading the same way must never be routed through the
+        // shared dead end - checked directly against the cost-callback
+        // layer (moveToRoom()'s own choice between real-route/findRoute
+        // internals isn't relevant here, only that whichever one is in
+        // play excludes it).
+        {
+            const cm = new PathFinder.CostMatrix();
+            const cb = routing.routeCostCallback(
+                [{ exit: 1, room: "WMazeRoom" }, { exit: 1, room: "W9N9" }],
+                "WMazeHub", "W9N9", {}
+            );
+            assert(cb("WMazeRoom", cm) === false,
+                "routeCostCallback excludes a shared dead end even though findRoute() itself " +
+                    "picked it as part of the route (AC3)");
+        }
+        {
+            const cbAvoid = routing.avoidCostCallback([], {});
+            assert(cbAvoid("WMazeRoom", new PathFinder.CostMatrix()) === false,
+                "avoidCostCallback excludes a shared dead end too (AC3)");
+        }
+
+        // AC2 - findRoute() itself refuses to route through a shared dead
+        // end, before routeCostCallback ever gets involved
+        {
+            let probedCost = null;
+            const realFindRoute = Game.map.findRoute;
+            Game.map.findRoute = (from, to, o) => {
+                probedCost = o.routeCallback("WMazeRoom");
+                return [{ exit: 1, room: "W9N9" }];
+            };
+            routing.findRoute("WMazeHub", "W9N9", {});
+            Game.map.findRoute = realFindRoute;
+            assert(probedCost === Infinity,
+                "findRoute() gives a shared dead end an infinite (fully excluded) cost (AC2)");
+        }
+
+        // AC4 - moveToRoom() refuses outright when the DESTINATION itself
+        // is the shared dead end, even for a creep with zero history of
+        // its own ever having been there
+        {
+            let refusedMoveCalls = 0;
+            const targetIsDeadEndCreep = {
+                pos: new RoomPosition(25, 25, "WMazeHub"),
+                room: { name: "WMazeHub" },
+                memory: {},
+                moveTo: () => { refusedMoveCalls++; return OK; },
+            };
+            const result = routing.moveToRoom(targetIsDeadEndCreep, "WMazeRoom", { range: 20 });
+            assert(result === ERR_NO_PATH && refusedMoveCalls === 0,
+                "moveToRoom() refuses outright when the destination itself is a shared dead " +
+                    "end, without this creep ever having tried it (AC4)");
+        }
+
+        // AC5 - clearRouteDeadEnd() console command resets the mark early
+        global.clearRouteDeadEnd("WMazeRoom");
+        assert(!routing.isKnownDeadEnd("WMazeRoom"),
+            "clearRouteDeadEnd() clears a shared dead-end mark before its TTL expires (AC5)");
+
+        // TTL actually expires on its own too, not just via the console
+        // command
+        routing.markDeadEnd("WMazeRoom");
+        const beforeExpiry = Memory.rooms.WMazeRoom.routeDeadEndUntil;
+        Memory.rooms.WMazeRoom.routeDeadEndUntil = Game.time - 1; // simulate TTL elapsed
+        assert(!routing.isKnownDeadEnd("WMazeRoom"),
+            "a dead-end mark past its own TTL is no longer honored (got until=" +
+                beforeExpiry + ", now=" + Game.time + ")");
+        delete Memory.rooms.WMazeRoom;
+    }
+
+    // ROADMAP 0078 - confirmed live: a pioneer's own OWNED home room got
+    // blamed and shared as a route dead end. Root cause: a SECOND-OR-LATER
+    // retreat cycle landing back on ground with nothing earlier to retreat
+    // to (the exact "accumulated avoid list over-constrained the search"
+    // pattern retreatWithoutBlame() already exists for) still fell through
+    // to the ordinary retreatFrom() blame path once native moveTo() failed
+    // again from there. Fix: retreatFrom() now delegates to
+    // retreatWithoutBlame() itself instead of blaming, but ONLY when this
+    // creep already confirmed another dead end this trip (_routeAvoid
+    // non-empty) AND has nowhere earlier to go now either - never for a
+    // creep's genuine FIRST stall (that case is covered by the mazeCreep/
+    // parkedCreep tests above, which must keep blaming normally).
+    {
+        let moveCallsSecondCycle = 0;
+        const secondCycleCreep = {
+            pos: new RoomPosition(25, 25, "E1N47"),
+            room: { name: "E1N47" },
+            // already confirmed ONE dead end this trip (e.g. E1N46) and is
+            // now back at E1N47 with nothing earlier in its own history -
+            // exactly the state moveToRoom() leaves a creep in right after
+            // retreatWithoutBlame()'s own "no earlier room either" fallthrough
+            memory: { _routeAvoid: ["E1N46"], _routeStack: ["E1N47"] },
+            moveTo: () => { moveCallsSecondCycle++; return ERR_NO_PATH; },
+            move: () => { throw new Error("should never nudge - not on a border"); },
+        };
+        routing.moveToRoom(secondCycleCreep, "W9N9", { range: 20 }); // 1st ERR_NO_PATH tick
+        routing.moveToRoom(secondCycleCreep, "W9N9", { range: 20 }); // 2nd - would confirm, IF blamed
+
+        assert(
+            secondCycleCreep.memory._routeAvoid.length === 1 &&
+                secondCycleCreep.memory._routeAvoid[0] === "E1N46",
+            "E1N47 is NOT added to _routeAvoid on this second-cycle failure - only the " +
+                "original E1N46 stays (got " + JSON.stringify(secondCycleCreep.memory._routeAvoid) + ")"
+        );
+        assert(!routing.isKnownDeadEnd("E1N47"),
+            "E1N47 is NOT shared as a route dead end either - the false-blame this reproduces");
+    }
+
+    // Same scenario, but the room is one the bot OWNS - markDeadEnd() (and
+    // retreatFrom()'s own per-creep avoid push) must refuse to touch it
+    // even on a creep's genuine FIRST stall, independent of the
+    // second-cycle guard above: architect.js plans roads to every exit by
+    // design, so an owned room is never a real dead end, and a creep that
+    // can't leave it needs to keep trying to go HOME, not learn to avoid it.
+    {
+        Memory.rooms.EOwnedRoom = { my: true };
+        let moveCallsOwned = 0;
+        const ownedRoomCreep = {
+            pos: new RoomPosition(25, 25, "EOwnedRoom"),
+            room: { name: "EOwnedRoom" },
+            memory: {},
+            moveTo: () => { moveCallsOwned++; return ERR_NO_PATH; },
+            move: () => { throw new Error("should never nudge - not on a border"); },
+        };
+        routing.moveToRoom(ownedRoomCreep, "W9N9", { range: 20 });
+        routing.moveToRoom(ownedRoomCreep, "W9N9", { range: 20 }); // confirms, on a genuine first stall
+
+        assert(!ownedRoomCreep.memory._routeAvoid || ownedRoomCreep.memory._routeAvoid.length === 0,
+            "an owned room is never added to this creep's own _routeAvoid, even on a genuine " +
+                "first-stall confirmation (got " + JSON.stringify(ownedRoomCreep.memory._routeAvoid) + ")");
+        assert(!routing.isKnownDeadEnd("EOwnedRoom"),
+            "an owned room is never shared as a route dead end either");
+
+        // markDeadEnd() itself refuses directly too - defense in depth for
+        // any OTHER caller, not just retreatFrom()
+        routing.markDeadEnd("EOwnedRoom");
+        assert(!routing.isKnownDeadEnd("EOwnedRoom"),
+            "markDeadEnd() has its own independent guard against marking an owned room");
+        delete Memory.rooms.EOwnedRoom;
     }
 
     // fallback safety net (ROADMAP 0060's original finding, kept under the

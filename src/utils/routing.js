@@ -8,7 +8,7 @@
 
 const remotes = require("../rooms/remotes");
 const config = require("./config");
-const roomCache = require("./roomCache");
+const move = require("./move");
 
 // Highway rooms sit on the map's coordinate grid (either axis a multiple of
 // 10) - open, sourceless, usually ownerless space that forms natural travel
@@ -117,12 +117,98 @@ function isDangerousRoom(roomName) {
     return remotes.hasHostiles(roomName) || remotes.isForeignOwned(roomName);
 }
 
+// ROADMAP 0077 - every passability function below (computeRealRoute's
+// roomCallback, routeCostCallback, avoidCostCallback) used to reason about
+// terrain only, never structure - the same gap utils/move.js's roomMatrix()
+// already closed for movement WITHIN a room (own/public rampart and
+// container walkable, everything else - including another player's or an
+// ally's private rampart/wall - impassable), just never reused across
+// rooms. Confirmed live twice (a claimer, then pioneers E1N47->E1N45): a
+// room already in vision this tick could still let a creep walk deep into
+// an ally's sealed interior before ERR_NO_PATH ever fired. roomMatrix() is
+// already cached per room on the heap (versioned by structure+site count,
+// utils/move.js) - this is pure reuse, no new room.find. Returns null for
+// any room with no vision this tick (Game.rooms[roomName] absent) - every
+// caller below falls back to its pre-0077 terrain-only behavior in that
+// case, unchanged.
+function knownStructureMatrix(roomName) {
+    const room = Game.rooms[roomName];
+    return room ? move.roomMatrix(room) : null;
+}
+
+// ROADMAP 0076 - a room retreatFrom() below CONFIRMS as a genuine dead end
+// (a creep was physically standing there and native moveTo() returned
+// ERR_NO_PATH repeatedly - ROADMAP 0063 made this blame reliable, no
+// longer a guess) is a fact about the ROOM, not just that one creep's
+// trip. Sharing it lets every OTHER creep - a second pioneer sent moments
+// later, say - skip discovering the exact same thing the hard way instead
+// of each walking in and backing out independently. Confirmed live: an
+// ally's interior rampart/wall (ROADMAP 0064's own terrain-only gap,
+// still open in ROADMAP.md's "Later" section) blocked a pioneer's route
+// through a room neither computeRealRoute (terrain-only) nor findRoute
+// (room-graph only, ally exempt from isDangerousRoom on purpose) could
+// see coming - but once ONE creep confirms it the hard way, there's no
+// reason for a sibling pioneer sent right after to repeat the exact same
+// wasted trip.
+//
+// This revives the spirit of the global blacklist ROADMAP 0058 had and
+// ROADMAP 0062 deliberately killed - but 0062's reason for killing it
+// (guessing WRONG which of two candidate rooms was the actual trap, a
+// coin-flip between the room the creep was in and the one it came from)
+// was fixed by 0063, which this only ever runs AFTER: creep.room.name at
+// the moment retreatFrom() fires is ground truth now, never a guess.
+// TTL'd (routing.deadEndTicks) since the obstruction can change - an ally
+// might open a rampart or tear down a wall; console clearRouteDeadEnd()
+// resets one early without waiting it out.
+function isKnownDeadEnd(roomName) {
+    const mem = Memory.rooms[roomName];
+    return !!(mem && mem.routeDeadEndUntil && mem.routeDeadEndUntil > Game.time);
+}
+
+function markDeadEnd(roomName) {
+    // ROADMAP 0078 - see retreatFrom()'s own comment: never share a room I
+    // own as a confirmed dead end. architect.js plans roads to every exit
+    // by design, so a failure to route through/out of an owned room is
+    // never a genuine, permanent fact about the room - always something
+    // transient (search-space constraints, a build in progress) that a
+    // shared, TTL'd mark would otherwise block every creep's routing on
+    // for no reason. Confirmed live: exactly this happened.
+    if (remotes.isMine(roomName)) return;
+
+    const alreadyKnown = isKnownDeadEnd(roomName);
+    const ticks = config.get("routing.deadEndTicks", 10000);
+    const mem = Memory.rooms[roomName] || (Memory.rooms[roomName] = {});
+    mem.routeDeadEndUntil = Game.time + ticks;
+    if (!alreadyKnown) {
+        console.log(
+            `[routing] ${roomName} confirmed a route dead end - every creep avoids it for ` +
+                `${ticks} ticks (clearRouteDeadEnd("${roomName}") to reset early)`
+        );
+    }
+}
+
+global.clearRouteDeadEnd = function (roomName) {
+    if (!Memory.rooms[roomName] || !Memory.rooms[roomName].routeDeadEndUntil) {
+        console.log(`[routing] ${roomName} wasn't marked as a route dead end`);
+        return;
+    }
+    delete Memory.rooms[roomName].routeDeadEndUntil;
+    console.log(`[routing] ${roomName} route dead-end mark cleared`);
+};
+
 // Room-level route to `toRoomName`: opts.avoid (array of room names, ROADMAP
 // 0062 - see moveToRoom() below) is excluded outright; highway rooms are
 // cheapened so the search prefers them; a dangerous room (isDangerousRoom
 // above) is heavily penalized, or - with opts.blockHostiles - excluded
-// outright too. Returns null when Game.map.findRoute finds nothing under
-// those constraints.
+// outright too. opts.allowRoom (ROADMAP 0075, (roomName) => boolean) is an
+// extra, optional restriction ON TOP of avoid/hostile - a room this rejects
+// is excluded outright regardless of everything else, same treatment as
+// avoid. Lets a caller confine the whole trip to a subset of rooms it
+// decides (remoteHauler/remoteMiner: only mine/reserved-by-me + the trip's
+// own destination - the same rule remotes.roomCallback used to enforce on
+// its own, narrower costCallback) without routing.js needing to know
+// anything about what that subset means. Returns null when
+// Game.map.findRoute finds nothing under those constraints.
 function findRoute(fromRoomName, toRoomName, opts) {
     opts = opts || {};
     const avoid = opts.avoid || [];
@@ -131,6 +217,8 @@ function findRoute(fromRoomName, toRoomName, opts) {
     const route = Game.map.findRoute(fromRoomName, toRoomName, {
         routeCallback: (roomName) => {
             if (avoid.indexOf(roomName) !== -1) return Infinity;
+            if (isKnownDeadEnd(roomName)) return Infinity;
+            if (opts.allowRoom && !opts.allowRoom(roomName)) return Infinity;
             if (roomName === toRoomName) return 1;
             const dangerous = isDangerousRoom(roomName);
             if (dangerous && opts.blockHostiles) return Infinity;
@@ -162,23 +250,28 @@ function routeCostCallback(route, currentRoomName, toRoomName, opts) {
     const allowed = new Set([currentRoomName, toRoomName]);
     if (route) {
         for (const step of route) {
+            if (opts.allowRoom && !opts.allowRoom(step.room)) continue;
+            // ROADMAP 0076 - see isKnownDeadEnd()'s own comment.
+            if (isKnownDeadEnd(step.room)) continue;
             allowed.add(step.room);
             const exits = Memory.rooms[step.room] && Memory.rooms[step.room].exits;
             if (!exits) continue;
             for (const neighbor of Object.values(exits)) {
                 if (avoid.indexOf(neighbor) !== -1) continue;
                 if (opts.blockHostiles && isDangerousRoom(neighbor)) continue;
+                // ROADMAP 0075 - see findRoute()'s own allowRoom comment.
+                if (opts.allowRoom && !opts.allowRoom(neighbor)) continue;
+                if (isKnownDeadEnd(neighbor)) continue;
                 allowed.add(neighbor);
             }
         }
     }
-    const fn = (roomName, matrix) => (allowed.has(roomName) ? matrix : false);
-    // Debug-only surface (ROADMAP 0064 live follow-up) - lets moveToRoom()
-    // log exactly how many rooms this tick's search was allowed to touch,
-    // to directly confirm/rule out the engine's own maxRooms ceiling as a
-    // cause, instead of inferring it from route length alone.
-    fn.allowedRooms = allowed;
-    return fn;
+    // ROADMAP 0077 - see knownStructureMatrix()'s own comment: a room this
+    // allowlist already accepted gets known-structure obstacles layered in
+    // when it's currently in vision, instead of the bare terrain-only
+    // matrix the engine handed in.
+    return (roomName, matrix) =>
+        allowed.has(roomName) ? knownStructureMatrix(roomName) || matrix : false;
 }
 
 // ROADMAP 0064 live follow-up - the actual root cause, found with a raw
@@ -220,7 +313,12 @@ function avoidCostCallback(avoid, opts) {
     return (roomName, matrix) => {
         if (avoid.indexOf(roomName) !== -1) return false;
         if (opts.blockHostiles && isDangerousRoom(roomName)) return false;
-        return matrix;
+        // ROADMAP 0075 - see findRoute()'s own allowRoom comment.
+        if (opts.allowRoom && !opts.allowRoom(roomName)) return false;
+        // ROADMAP 0076 - see isKnownDeadEnd()'s own comment.
+        if (isKnownDeadEnd(roomName)) return false;
+        // ROADMAP 0077 - see knownStructureMatrix()'s own comment.
+        return knownStructureMatrix(roomName) || matrix;
     };
 }
 
@@ -268,20 +366,16 @@ function computeRealRoute(fromPos, toRoomName, opts) {
             roomCallback: (roomName) => {
                 if (avoid.indexOf(roomName) !== -1) return false;
                 if (opts.blockHostiles && isDangerousRoom(roomName)) return false;
+                // ROADMAP 0075 - see findRoute()'s own allowRoom comment.
+                if (opts.allowRoom && !opts.allowRoom(roomName)) return false;
+                // ROADMAP 0076 - see isKnownDeadEnd()'s own comment.
+                if (isKnownDeadEnd(roomName)) return false;
+                // ROADMAP 0077 - see knownStructureMatrix()'s own comment:
+                // undefined (the implicit fall-through) keeps the prior
+                // terrain-only behavior for a room with no vision this tick.
+                return knownStructureMatrix(roomName) || undefined;
             },
         }
-    );
-    // ROADMAP 0064 same-day, third root cause: the only way to actually
-    // CONFIRM (not guess) whether moveMaxOps is sized correctly relative to
-    // this search - the two became mechanically equivalent once
-    // avoidCostCallback replaced routeCostCallback's narrow allowlist for
-    // native moveTo() execution - is to see how many ops THIS search
-    // actually spent. Always-on, not gated: this only ever runs once per
-    // leg (opt-in, trip start + each completed retreat), so the volume is
-    // inherently tiny, same reasoning as tryComputeRealRoute's own log.
-    console.log(
-        `[routing] computeRealRoute ${fromPos.roomName}->${toRoomName}: ` +
-            (result ? `ops=${result.ops} incomplete=${result.incomplete}` : "search returned nothing")
     );
     if (!result || result.incomplete || !result.path.length) return null;
 
@@ -343,44 +437,49 @@ function popStackAndRetreat(creep) {
     return prev;
 }
 
+// ROADMAP 0078 - see retreatFrom()'s own comment below: does this creep's
+// own visited history have anything BEHIND the room it's standing in right
+// now? If not, this room is this leg's own origin - there's nowhere honest
+// to retreat to, and treating it as a confirmed dead end would be exactly
+// the mistake retreatWithoutBlame() already exists to avoid one level up.
+function hasEarlierRoom(creep) {
+    const stack = creep.memory._routeStack || [];
+    const trimmed = stack[stack.length - 1] === creep.room.name ? stack.slice(0, -1) : stack;
+    return trimmed.length > 0;
+}
+
 function retreatFrom(creep) {
+    // ROADMAP 0078 - confirmed live: a pioneer's own OWNED home room
+    // (spawns, roads to every exit by architect.js design) got blamed and
+    // shared as a route dead end, blocking every other creep's routing
+    // through/into it too. Root cause traced: when retreatWithoutBlame()
+    // (below) falls through with no earlier room either, moveToRoom()
+    // retries the ordinary findRoute()-based flow FROM that same room -
+    // if THAT also fails for routing.noPathTicks ticks straight (a search
+    // genuinely constrained by the accumulated avoid list, or some other
+    // transient cause - never proof the room itself is unenterable), this
+    // function fires again with creep.room.name now pointing at what is
+    // really this leg's own origin.
+    //
+    // Only suspect a false blame under BOTH conditions at once: no earlier
+    // room to retreat to (hasEarlierRoom) AND this creep has already
+    // confirmed at least one OTHER dead end this same trip (_routeAvoid
+    // already non-empty) - i.e. this is a SECOND-OR-LATER retreat cycle
+    // landing back on ground with nothing behind it, exactly the
+    // accumulating-constraint pattern retreatWithoutBlame() exists for.
+    // A creep's very FIRST stall this trip (avoid still empty) with no
+    // earlier room is a genuinely different, trustworthy signal - it
+    // never moved, and native moveTo() still can't find a way out - so it
+    // keeps the original ROADMAP 0063 blame (confirmed by the existing
+    // "parked at its own trip origin" test in test/smoke.js).
+    const avoidSoFar = creep.memory._routeAvoid || [];
+    if (avoidSoFar.length > 0 && !hasEarlierRoom(creep)) {
+        retreatWithoutBlame(creep);
+        return;
+    }
+
     delete creep.memory._move; // stale native path cache - force a fresh search
     creep.memory._routeNoPathTicks = 0; // fresh streak once we're back on known-good ground
-    // Deliberately permanent, not leftover debug cruft - do not strip on a
-    // cleanup pass. ROADMAP.md's "Later" section (computeRealRoute/
-    // routeCostCallback incorporating known structure) is still open and
-    // unconfirmed either way; this call is rare (opt-in realRoute callers
-    // only reach it reactively) so the log volume is never a concern, and
-    // it's the only ground truth the next session investigating this will
-    // have without re-deriving everything from scratch.
-    console.log(
-        `[routing] retreatFrom ${creep.name}: ${creep.room.name} confirmed a dead end ` +
-            `(_routeStack was [${(creep.memory._routeStack || []).join(",")}])`
-    );
-    // ROADMAP 0064 same-day - diagnostic ONLY, no behavior change: the
-    // maxOps ceiling was just RULED OUT by live evidence (computeRealRoute
-    // succeeded at 803 and 29770 ops, both comfortably under even the old
-    // 20000 ceiling, right where native moveTo() still failed) - so
-    // whatever's actually blocking native moveTo() here but not
-    // computeRealRoute()'s own PathFinder.search must be something
-    // computeRealRoute() structurally never looks at: real, currently-
-    // visible obstacles. Unlike computeRealRoute() (deliberately
-    // terrain-only, roomCallback never touches the matrix), native
-    // moveTo()'s own internal search bakes in whatever structures the
-    // engine can currently see in THIS room (creep.room always has vision
-    // of its own room) - some structure types (invader core, keeper lair,
-    // power bank, spawn, etc.) always block regardless of any option;
-    // player ramparts/walls block too unless ignoreDestructibleStructures
-    // is explicitly set (never has been, here). Dumping exactly what's
-    // physically in this room at the moment of the confirmed failure turns
-    // that from a guess into a fact for the very next live test.
-    if (typeof creep.room.find === "function") {
-        console.log(
-            `[routing] retreatFrom ${creep.name}: ${creep.room.name} structures=[` +
-                roomCache.structures(creep.room).map((s) => `${s.structureType}@${s.pos.x},${s.pos.y}`).join(",") +
-                `] creeps=${creep.room.find(FIND_CREEPS).length}`
-        );
-    }
 
     // ROADMAP 0064: a cached real-route (opts.realRoute) that still led
     // to this dead end was wrong about something (new construction, most
@@ -391,18 +490,24 @@ function retreatFrom(creep) {
     delete creep.memory._realRouteDest;
     delete creep.memory._realRouteFrom;
 
-    const avoid = creep.memory._routeAvoid || (creep.memory._routeAvoid = []);
-    if (avoid.indexOf(creep.room.name) === -1) avoid.push(creep.room.name);
+    // ROADMAP 0078: never let THIS creep permanently avoid a room it owns
+    // either - the shared-cache guard in markDeadEnd() below covers every
+    // OTHER creep, but this creep's own _routeAvoid is separate state; left
+    // unguarded, it could later refuse to even try going home
+    // (moveToRoom()'s own toRoomName-in-_routeAvoid early refusal).
+    if (!remotes.isMine(creep.room.name)) {
+        const avoid = creep.memory._routeAvoid || (creep.memory._routeAvoid = []);
+        if (avoid.indexOf(creep.room.name) === -1) avoid.push(creep.room.name);
+    }
 
-    const prev = popStackAndRetreat(creep);
-    // no previous room recorded - this IS the trip's own origin, nowhere
-    // to retreat to. Leaves the dead end on `avoid` (harmless: findRoute()
-    // never reads an avoid entry for the room it starts from anyway) and
-    // falls back to the same fail-soft "no route" outcome as before.
-    console.log(
-        `[routing] retreatFrom ${creep.name}: _routeAvoid=[${avoid.join(",")}], ` +
-            (prev ? `retreating to ${prev}` : "no earlier room to retreat to (this was the trip's own origin)")
-    );
+    // ROADMAP 0076 - see isKnownDeadEnd()'s own comment: this room is
+    // confirmed, not guessed, so share it with every other creep too.
+    // markDeadEnd() has its own independent "never mine" guard (ROADMAP
+    // 0078) - kept there too, not just here, so it protects any future
+    // caller of markDeadEnd(), not only this one.
+    markDeadEnd(creep.room.name);
+
+    popStackAndRetreat(creep);
 }
 
 // ROADMAP 0064 live follow-up - confirmed live with a full trace: once
@@ -436,13 +541,7 @@ function retreatWithoutBlame(creep) {
     delete creep.memory._realRouteDest;
     delete creep.memory._realRouteFrom;
 
-    const prev = popStackAndRetreat(creep);
-    console.log(
-        `[routing] retreatWithoutBlame ${creep.name}: no complete route found from ` +
-            `${creep.room.name} avoiding [${(creep.memory._routeAvoid || []).join(",")}] - ` +
-            "this room was never actually attempted, so it's NOT added to _routeAvoid - " +
-            (prev ? `retreating to ${prev}` : "no earlier room to retreat to either")
-    );
+    popStackAndRetreat(creep);
 }
 
 // Route-aware Creep.moveTo() to a specific room - see findRoute() above.
@@ -493,22 +592,25 @@ function retreatWithoutBlame(creep) {
 // Returns true when a route was found and cached, false when opts.realRoute
 // is on but computeRealRoute() found nothing (see retreatWithoutBlame()
 // above for why that return value matters at the retreat-completion call
-// site), and undefined when opts.realRoute isn't set at all (nothing to
-// report either way).
+// site), and undefined when opts.realRoute is explicitly opted out
+// (nothing to report either way).
+//
+// ROADMAP 0075: opts.realRoute flipped from opt-IN to opt-OUT
+// (`opts.realRoute === false` skips this, anything else - including
+// leaving it unset - runs it). Every real caller already passed
+// `realRoute: true` explicitly by the time this changed (scout's
+// sign/layout tasks, reserver, raider, pioneer, squad) - a role written
+// tomorrow that forgets to pass the flag used to silently fall back to the
+// original reactive-only backtrack this whole mechanism exists to avoid;
+// now it gets the same upfront validation everyone else already relies on,
+// with no way to forget it. The one caller that genuinely shouldn't pay
+// this cost - scout's own free-roam exploration, no fixed destination, a
+// fresh direct-neighbor hop every cycle, validating terrain for a room
+// that's already adjacent buys nothing - opts out explicitly instead.
 function tryComputeRealRoute(creep, toRoomName, opts) {
-    if (!opts.realRoute) return;
+    if (opts.realRoute === false) return;
     const avoid = creep.memory._routeAvoid || [];
     const real = computeRealRoute(creep.pos, toRoomName, Object.assign({}, opts, { avoid }));
-    // Always-on (not gated behind a debug flag): this only ever runs for an
-    // opt-in caller (today, only claim missions) on a leg boundary - start
-    // of trip, or a retreat completing - never per-tick, so the log volume
-    // is inherently tiny. Diagnosing this exact mechanism live has needed
-    // it three times already (ROADMAP 0064's own history).
-    console.log(
-        `[routing] tryComputeRealRoute ${creep.name} ${creep.room.name}->${toRoomName} ` +
-            `avoid=[${avoid.join(",")}]: ` +
-            (real ? `found ${real.length} hop(s): ${real.join(" -> ")}` : "NONE (incomplete/empty search)")
-    );
     if (real) {
         creep.memory._realRoute = real;
         creep.memory._realRouteDest = toRoomName;
@@ -530,8 +632,9 @@ function tryComputeRealRoute(creep, toRoomName, opts) {
 // several fresh uncached searches in quick succession; that's cheap in
 // isolation but was enough to drain the CPU bucket in practice). A pre-check
 // PER LEG of a trip (start, and again after every retreat) is a different
-// story - see opts.realRoute below (ROADMAP 0064) and tryComputeRealRoute()
-// above, opt-in only, bounded by the number of dead ends actually found.
+// story - see opts.realRoute below (ROADMAP 0064, default-on since ROADMAP
+// 0075 - opt OUT with `realRoute: false` instead) and tryComputeRealRoute()
+// above, bounded by the number of dead ends actually found either way.
 function moveToRoom(creep, toRoomName, opts) {
     opts = opts || {};
     const range = opts.range === undefined ? 20 : opts.range;
@@ -548,14 +651,14 @@ function moveToRoom(creep, toRoomName, opts) {
     // live, a route computeRealRoute (200000 ops, 64 rooms) had JUST
     // validated as genuinely walkable still came back ERR_NO_PATH from
     // this exact same native moveTo() call, immediately triggering
-    // another (wrong) retreat. Scoped to opts.realRoute callers only
-    // (today, just the claimer's "claim" mission) rather than every
-    // moveToRoom() call - scout/pioneer/raider/squad have never shown
-    // this symptom, and a bigger ceiling isn't free CPU-wise for a search
-    // that would otherwise have failed cheap and fast for a genuine reason
-    // (constitution §1 - measure before widening a budget everyone pays
-    // for, not just the one caller with evidence it's needed).
-    if (opts.realRoute) {
+    // another (wrong) retreat. ROADMAP 0075: originally scoped to
+    // opts.realRoute callers only (today, just the claimer's "claim"
+    // mission) - now tracks the same opt-out default tryComputeRealRoute()
+    // uses above, since every caller that reaches this branch already runs
+    // computeRealRoute() itself; a bigger ceiling isn't free CPU-wise in
+    // the abstract (constitution §1), but it's only ever paid on the same
+    // tick a fresh path is actually needed, same as before.
+    if (opts.realRoute !== false) {
         moveOpts.maxOps = config.get("routing.moveMaxOps", 20000);
         moveOpts.maxRooms = config.get("routing.moveMaxRooms", 64);
     }
@@ -573,12 +676,12 @@ function moveToRoom(creep, toRoomName, opts) {
         delete creep.memory._realRouteDest;
         delete creep.memory._realRouteFrom;
 
-        // ROADMAP 0064: opt-in real-terrain validation of this leg of the
-        // trip - see tryComputeRealRoute()/computeRealRoute() above. A
-        // caller that can't afford to discover a dead end by walking into
-        // it (the claimer: CREEP_CLAIM_LIFE_TIME is a fixed budget) passes
-        // this; everyone else keeps relying on findRoute() + the reactive
-        // backtrack.
+        // ROADMAP 0064, default-on since ROADMAP 0075: real-terrain
+        // validation of this leg of the trip - see
+        // tryComputeRealRoute()/computeRealRoute() above. Runs for every
+        // caller unless it opts out with `realRoute: false` (scout's own
+        // free-roam exploration - no fixed destination, a fresh
+        // direct-neighbor hop every cycle, nothing worth pre-validating).
         tryComputeRealRoute(creep, toRoomName, opts);
     }
 
@@ -587,8 +690,12 @@ function moveToRoom(creep, toRoomName, opts) {
     // identical crossing every few ticks forever (routeCostCallback always
     // allows `toRoomName` - you have to be able to reach your actual
     // destination - so without this check nothing else here would ever
-    // stop that retry loop once the trap IS the destination).
-    if ((creep.memory._routeAvoid || []).indexOf(toRoomName) !== -1) return ERR_NO_PATH;
+    // stop that retry loop once the trap IS the destination). ROADMAP 0076:
+    // same refusal when a DIFFERENT creep already confirmed the destination
+    // itself is a dead end - no reason for this one to rediscover it.
+    if ((creep.memory._routeAvoid || []).indexOf(toRoomName) !== -1 || isKnownDeadEnd(toRoomName)) {
+        return ERR_NO_PATH;
+    }
 
     // Mid-retreat from a dead end found earlier this trip (retreatFrom()
     // below): keep walking back to that room, ignoring toRoomName for now,
@@ -707,41 +814,22 @@ function moveToRoom(creep, toRoomName, opts) {
     // narrower allowlist is reserved for the findRoute()-only fallback,
     // which was never checked against real terrain and still benefits from
     // being kept roughly on the room-graph path findRoute() chose.
-    const baseCostCallback = usingRealRoute
+    const costCallback = usingRealRoute
         ? avoidCostCallback(avoid, routeOpts)
         : routeCostCallback(route, creep.room.name, toRoomName, routeOpts);
-    // ROADMAP 0064 same-day, diagnostic ONLY - no decision here changes,
-    // only records what baseCostCallback already decided. Live evidence so
-    // far has ruled out every guess tried (maxOps - computeRealRoute
-    // succeeded at 136-29770 ops where native moveTo() still failed;
-    // structures/vision - E0N46 confirmed genuinely empty, zero structures,
-    // and native moveTo() still failed there too). The one thing left
-    // unobserved is what ROOMS native moveTo()'s own internal search
-    // actually asks this callback about, and what it's told for each - the
-    // only way to see that is to record it as it happens, since moveTo()
-    // never exposes its own search internals otherwise. `queriedRooms`
-    // only ever gets logged below on a tick that actually fails.
-    const queriedRooms = [];
-    const costCallback = (roomName, matrix) => {
-        const result = baseCostCallback(roomName, matrix);
-        queriedRooms.push(`${roomName}:${result === false ? "BLOCKED" : "open"}`);
-        return result;
-    };
-    costCallback.allowedRooms = baseCostCallback.allowedRooms;
 
-    // ROADMAP 0064 same-day, the actual root cause (found via queriedRooms
-    // above, live, across 3 separate legs - W0N47/W0N48/W0N50): native
+    // ROADMAP 0064 same-day, the actual root cause (found via a live trace
+    // across 3 separate legs - W0N47/W0N48/W0N50): native
     // moveTo()'s OWN internal multi-room search is measurably less capable
     // than computeRealRoute()'s raw PathFinder.search() under IDENTICAL
     // constraints (same avoid, same costs, same generous maxOps/maxRooms).
     // Confirmed live: computeRealRoute found a real, cheap (803-29770 ops)
     // route requiring an initial move AWAY from the goal before doubling
     // back (a detour, forced once enough rooms sit in _routeAvoid) every
-    // time - and native moveTo(), given the exact same room-level answers
-    // (queriedRooms showed it asking about and correctly being told open/
-    // blocked for exactly the right rooms), still gave up early, sometimes
-    // without even exploring the room the correct detour starts in
-    // (W0N49 - immediately adjacent, unblocked, never queried at all).
+    // time - and native moveTo(), given the exact same room-level answers,
+    // still gave up early, sometimes without even exploring the room the
+    // correct detour starts in (W0N49 - immediately adjacent, unblocked,
+    // never queried at all).
     // Two independent multi-room searches that can silently disagree is
     // exactly the "2 filtros" the user suspected - not our costCallback
     // logic (proven correct every time), but running a SECOND, less
@@ -774,24 +862,6 @@ function moveToRoom(creep, toRoomName, opts) {
     }
 
     creep.memory._routeNoPathTicks = (creep.memory._routeNoPathTicks || 0) + 1;
-    // Logged on EVERY failing tick, not just once retreat is confirmed
-    // (ROADMAP 0064 live follow-up, at the user's request - "pode colocar
-    // bastante log, só não quero que fique infinitamente nisso"): shows the
-    // exact allowed-room COUNT this tick's search had to work with when
-    // routeCostCallback's allowlist was in play (fell to findRoute() -
-    // never set on avoidCostCallback's blocklist, which has no fixed list
-    // to report - "N/A (blocklist)" there is itself the useful signal that
-    // this leg was trusting a validated route instead of guessing).
-    console.log(
-        `[routing] ${creep.name} ERR_NO_PATH in ${creep.room.name} (tick ${creep.memory._routeNoPathTicks}/` +
-            `${config.get("routing.noPathTicks", 2)}) - moveTarget=${moveTarget} (range ${moveRange}), ` +
-            `route=[${route ? route.map((s) => s.room).join(",") : "null"}], ` +
-            (costCallback.allowedRooms
-                ? `allowedRooms(${costCallback.allowedRooms.size})=[${Array.from(costCallback.allowedRooms).join(",")}], `
-                : "allowedRooms=N/A (blocklist), ") +
-            `avoid=[${avoid.join(",")}], usingRealRoute=${usingRealRoute}, ` +
-            `queriedRooms=[${queriedRooms.join(",") || "NONE - native moveTo() never called costCallback at all"}]`
-    );
     if (creep.memory._routeNoPathTicks >= config.get("routing.noPathTicks", 2)) {
         retreatFrom(creep);
         if (creep.memory._routeRetreatTo) {
@@ -862,4 +932,8 @@ module.exports = {
     isStuck,
     isOnBorder,
     nudgeAwayFromBorder,
+    // ROADMAP 0076 - exposed for smoke.js; markDeadEnd is also reachable
+    // indirectly through retreatFrom()/moveToRoom()
+    isKnownDeadEnd,
+    markDeadEnd,
 };

@@ -175,6 +175,19 @@ function roomCallback(allowRoomName) {
     };
 }
 
+// ROADMAP 0075: the same rule as roomCallback() above (never cross a room
+// that isn't mine, reserved by me, or the trip's own destination), but as a
+// plain boolean predicate instead of a PathFinder-shaped costCallback - the
+// shape utils/routing.moveToRoom()'s opts.allowRoom expects, so
+// remoteHauler/remoteMiner can route through the shared retreat/backtrack +
+// upfront real-terrain validation every other multi-room role already gets,
+// while keeping the exact same "stay in owned/reserved territory" guarantee
+// they always had.
+function allowRoom(destRoomName) {
+    return (roomName) =>
+        roomName === destRoomName || isMine(roomName) || isReservedByMe(roomName);
+}
+
 // --- console -------------------------------------------------------------
 //   reserveRoom("W2N5")            -> mother = nearest owned room
 //   reserveRoom("W2N5", "W1N1")    -> explicit mother room
@@ -334,4 +347,5 @@ module.exports = {
     active,
     pendingReserves,
     roomCallback,
+    allowRoom,
 };

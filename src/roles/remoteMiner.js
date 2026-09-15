@@ -2,12 +2,17 @@
 // reserved remote room instead of the home room. No architect() runs in a
 // remote room (it's not ours), so this role builds/repairs its own container
 // directly, and there's no link/tower to feed there - the remoteHauler just
-// drains the container. A hostile in the remote sends it home empty-handed
-// rather than fighting (ROADMAP 0020).
+// drains the container. Travel uses utils/routing.moveToRoom() with the same
+// mine-or-reserved-only restriction remoteHauler.js applies (ROADMAP 0075 -
+// see its own comment for why: upfront terrain validation + retreat/
+// backtrack instead of a raw moveTo() that could park on ERR_NO_PATH
+// forever). A hostile in the remote sends it home empty-handed rather than
+// fighting (ROADMAP 0020).
 
 const census = require("../utils/census");
 const { roomNeeds } = require("../rooms/needs");
 const remotes = require("../rooms/remotes");
+const routing = require("../utils/routing");
 const names = require("../utils/names");
 
 function body(room) {
@@ -42,19 +47,19 @@ var remoteMiner = {
             creep.room.name === targetRoomName &&
             remotes.hasHostiles(targetRoomName)
         ) {
-            creep.moveTo(new RoomPosition(25, 25, home), {
+            routing.moveToRoom(creep, home, {
                 range: 20,
                 reusePath: 30,
-                costCallback: remotes.roomCallback(home),
+                allowRoom: remotes.allowRoom(home),
             });
             return;
         }
 
         if (creep.room.name !== targetRoomName) {
-            creep.moveTo(new RoomPosition(25, 25, targetRoomName), {
+            routing.moveToRoom(creep, targetRoomName, {
                 range: 20,
                 reusePath: 30,
-                costCallback: remotes.roomCallback(targetRoomName),
+                allowRoom: remotes.allowRoom(targetRoomName),
             });
             return;
         }

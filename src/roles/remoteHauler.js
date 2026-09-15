@@ -1,14 +1,21 @@
 // Like the local hauler, but with a fixed remote-room <-> home-room route
 // instead of picking freely among piles: load from the assigned remote's
 // source container(s)/drops, deliver to home's storage/spawn/extensions.
-// Travel between rooms uses native moveTo with remotes.roomCallback() so it
-// never routes through a room that isn't ours or reserved by us. A hostile
-// in the remote sends it home rather than risking the creep (ROADMAP 0020).
+// Travel between rooms uses utils/routing.moveToRoom() (ROADMAP 0075 -
+// before that, a raw creep.moveTo() with remotes.roomCallback() as its only
+// safety net: no upfront terrain validation, no retreat/backtrack, so a
+// remote room with a natural-wall maze between the border and the container
+// left the creep parked on ERR_NO_PATH forever, silently) with
+// opts.allowRoom restricted to the exact same rule remotes.roomCallback used
+// to enforce on its own - never a room that isn't ours, reserved by us, or
+// the trip's own destination. A hostile in the remote sends it home rather
+// than risking the creep (ROADMAP 0020).
 
 const { scaledBody } = require("../utils/population");
 const census = require("../utils/census");
 const { roomNeeds } = require("../rooms/needs");
 const remotes = require("../rooms/remotes");
+const routing = require("../utils/routing");
 const names = require("../utils/names");
 
 function pickLoad(creep, targetRoomName) {
@@ -81,18 +88,18 @@ var remoteHauler = {
             ) {
                 // unsafe out there - head home with whatever we're carrying
                 creep.memory.job = carrying > 0 ? "deliver" : "load";
-                creep.moveTo(new RoomPosition(25, 25, home), {
+                routing.moveToRoom(creep, home, {
                     range: 20,
                     reusePath: 30,
-                    costCallback: remotes.roomCallback(home),
+                    allowRoom: remotes.allowRoom(home),
                 });
                 return;
             }
             if (creep.room.name !== targetRoomName) {
-                creep.moveTo(new RoomPosition(25, 25, targetRoomName), {
+                routing.moveToRoom(creep, targetRoomName, {
                     range: 20,
                     reusePath: 30,
-                    costCallback: remotes.roomCallback(targetRoomName),
+                    allowRoom: remotes.allowRoom(targetRoomName),
                 });
                 return;
             }
@@ -114,10 +121,10 @@ var remoteHauler = {
 
         // deliver
         if (creep.room.name !== home) {
-            creep.moveTo(new RoomPosition(25, 25, home), {
+            routing.moveToRoom(creep, home, {
                 range: 20,
                 reusePath: 30,
-                costCallback: remotes.roomCallback(home),
+                allowRoom: remotes.allowRoom(home),
             });
             return;
         }

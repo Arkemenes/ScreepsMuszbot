@@ -156,7 +156,7 @@ var scout = {
                     );
                     return;
                 }
-                routing.moveToRoom(creep, signRoom, { range: 20, reusePath: 30, realRoute: true });
+                routing.moveToRoom(creep, signRoom, { range: 20, reusePath: 30 });
                 return;
             }
             creep.memory.signTravelSince = undefined;
@@ -213,7 +213,7 @@ var scout = {
                     );
                     return;
                 }
-                routing.moveToRoom(creep, layoutRoom, { range: 20, reusePath: 30, realRoute: true });
+                routing.moveToRoom(creep, layoutRoom, { range: 20, reusePath: 30 });
                 return;
             } else {
                 creep.memory.layoutTravelSince = undefined;
@@ -284,9 +284,17 @@ var scout = {
         // border (a hand-rolled border-tile moveTo here doesn't: see
         // spec.md for the bug that caused).
         if (creep.memory.targetRoom && creep.memory.targetRoom != creep.room.name) {
+            // ROADMAP 0075: realRoute defaulted on for every other
+            // moveToRoom() caller, but this one is exploration with no
+            // fixed destination - always a direct neighbor (see the
+            // "exploration" block below), re-picked every time this room
+            // is reached. Validating terrain for a room that's already
+            // adjacent buys nothing and would pay computeRealRoute's cost
+            // on every single hop of a scout's endless wandering.
             const status = routing.moveToRoom(creep, creep.memory.targetRoom, {
                 range: 20,
                 reusePath: 20,
+                realRoute: false,
             });
             if (status === OK || status === ERR_TIRED) {
                 return true;
@@ -342,9 +350,12 @@ var scout = {
 
             creep.memory.cameFrom = creep.room.name;
             creep.memory.targetRoom = targetRoom;
+            // ROADMAP 0075 - see the other free-roam moveToRoom() call
+            // above for why this one opts out of the new default.
             const status = routing.moveToRoom(creep, targetRoom, {
                 range: 20,
                 reusePath: 20,
+                realRoute: false,
             });
             if (status === ERR_NO_PATH || status === ERR_INVALID_TARGET) {
                 blacklistRoom(targetRoom);

@@ -53,30 +53,25 @@ const defaults = {
         // fire, so it needs its own, much coarser pair (ROADMAP 0072).
         rampartCriticalRatio: 0.001,
         rampartSatisfactoryRatio: 0.01,
-        // ROADMAP 0054: the tower's own 3-tier delivery bands - hauler.js
-        // decides where to load/deliver energy from these. Critical is
-        // pulled from storage unconditionally; satisfactory is left alone
-        // (not a target either way); ideal (>= satisfactoryRatio) only
-        // keeps being topped off while logistics.reserveRatio is intact.
-        // Under defenseActive both bands shift up together - a tower nearly
-        // full going into a fight is worth more than the same energy idle
-        // in storage. satisfactoryRatio deliberately equals
-        // satisfactoryRepairEnergyRatio above (ROADMAP 0072, user request -
-        // "rever a zona morta do hauler"): the old 0.8 sat OUTSIDE the
-        // 50%-70% band this repair gate actually needs, so a tower could
-        // idle for a long time right at 50%-55% - hauler.js's own
-        // "critical" cutoff - with nothing in the delivery cascade actively
-        // pushing it any higher (the old ideal-band top-off only started at
-        // 80%, and the one path below that, the very bottom of
-        // pickDeliver's cascade, only fires once literally nothing else in
-        // the room wants the energy). Aligning the two closes that gap: the
-        // moment hauler.js starts treating the tower as "ideal, worth
-        // topping off", the tower has ALSO just crossed the energy bar its
-        // own satisfactory-tier repair needs.
+        // ROADMAP 0054, revised same-day by ROADMAP 0072 ("vamos matar essa
+        // zona morta do hauler"): the tower's delivery threshold -
+        // hauler.js's essentialConsumer pulls a critical tower (below this
+        // ratio) from storage unconditionally, same urgency as spawn/ext.
+        // Every OTHER tower (at/above this ratio) is a plain optional
+        // consumer, same tier as a lab/controller-container
+        // (resourceTiers.aboveReserve-gated) - there used to be a THIRD,
+        // higher "satisfactory" bar in between, and a tower sitting between
+        // the two matched neither: not essential, not yet "ideal", left
+        // alone with no active delivery path except pickDeliver's very last
+        // resort (only fires once literally nothing else in the room wants
+        // the energy) - a real, admitted dead zone. Removed entirely:
+        // critical vs optional is the same two-way split every other
+        // consumer in this cascade already uses, and a tower never needed a
+        // third state of its own. Shifts up under defenseActive - a tower
+        // nearly full going into a fight is worth more than the same energy
+        // idle in storage.
         criticalRatio: 0.5,
-        satisfactoryRatio: 0.7,
         criticalRatioUnderAttack: 0.8,
-        satisfactoryRatioUnderAttack: 0.95,
     },
     // ROADMAP 0072: repair-tier ratios for every structure that ISN'T a
     // rampart/wall (see tower.rampartCriticalRatio/rampartSatisfactoryRatio
@@ -154,12 +149,10 @@ const defaults = {
         minContainerLoad: 1000,
         // headcount when there's no link network
         maxCountNoLinks: 5,
-        // ROADMAP 0054: within the tower's ideal band (>= tower.satisfactoryRatio),
-        // top it off further only while it still has more than this fraction
-        // of free capacity - the practical cutoff for "already close enough
-        // to full, not worth another trip" (unchanged by 0054, tower's own
-        // critical/satisfactory bands moved to tower.criticalRatio/
-        // satisfactoryRatio above).
+        // ROADMAP 0054: for any non-critical tower (see tower.criticalRatio
+        // above), top it off further only while it still has more than this
+        // fraction of free capacity - the practical cutoff for "already
+        // close enough to full, not worth another trip".
         toppingOffThreshold: 0.05,
         // utils/autoscale.js (ROADMAP 0040/0049): ABSOLUTE ceiling on the
         // room's hauler count, base tier + autoscale delta combined (below
@@ -275,6 +268,21 @@ const defaults = {
         // under these constraints", not a guess, so it doesn't need the
         // same margin as position-based stall detection.
         noPathTicks: 2,
+        // ROADMAP 0076: once retreatFrom() confirms a room is a genuine
+        // route dead end (creep physically standing there, native moveTo()
+        // returned ERR_NO_PATH repeatedly), it's shared via
+        // Memory.rooms[x].routeDeadEndUntil so every OTHER creep also
+        // avoids it instead of independently rediscovering the same thing
+        // (e.g. a second pioneer sent moments after the first hit an
+        // ally's interior rampart neither computeRealRoute, terrain-only,
+        // nor findRoute, ally-exempt from isDangerousRoom, could see
+        // coming). TTL, not permanent - the obstruction can change (ally
+        // opens a rampart, wall gets torn down); console clearRouteDeadEnd
+        // resets one early without waiting it out. Order of magnitude
+        // picked to comfortably outlast a single spawn cycle without
+        // requiring the obstruction to be re-confirmed by every batch of
+        // creeps sent that way.
+        deadEndTicks: 10000,
         // ROADMAP 0064: computeRealRoute()'s PathFinder.search budget -
         // runs once per trip (opt-in, opts.realRoute), so it can afford a
         // much bigger ceiling than any per-tick search in this codebase.
