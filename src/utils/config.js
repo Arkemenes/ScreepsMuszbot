@@ -268,6 +268,9 @@ const defaults = {
         // under these constraints", not a guess, so it doesn't need the
         // same margin as position-based stall detection.
         noPathTicks: 2,
+        // Consecutive no-progress ticks with no fatigue before invalidating
+        // the native move cache and forcing a fresh path search.
+        noProgressTicks: 4,
         // ROADMAP 0076: once retreatFrom() confirms a room is a genuine
         // route dead end (creep physically standing there, native moveTo()
         // returned ERR_NO_PATH repeatedly), it's shared via

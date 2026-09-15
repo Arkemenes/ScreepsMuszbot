@@ -6,6 +6,8 @@ const config = require("../utils/config");
 const observer = require("../utils/observer");
 const names = require("../utils/names");
 
+let scoutSpawnRequestedTick = -1;
+
 // --- console: queue a controller-sign request -------------------------------
 //   signRoom("W1N1", "my message", "W2N2") -> queue it from W2N2
 //   signRoom("W1N1", "my message")         -> queue it
@@ -150,7 +152,25 @@ var scout = {
         if (signRoom) {
             const request = signRequest(signRoom);
             const sourceRoom = request.from && request.from !== signRoom ? request.from : null;
-            const travelRoom = sourceRoom && creep.room.name !== sourceRoom ? sourceRoom : signRoom;
+            const signMissionKey = signRoom + "|" + (sourceRoom || "") + "|" + request.text;
+            if (creep.memory._signMissionKey !== signMissionKey) {
+                creep.memory._signMissionKey = signMissionKey;
+                delete creep.memory._move;
+                delete creep.memory._routeAvoid;
+                delete creep.memory._routeAvoidSeenLen;
+                delete creep.memory._routeStack;
+                delete creep.memory._routeStackDest;
+                delete creep.memory._routeTrail;
+                delete creep.memory._realRoute;
+                delete creep.memory._realRouteDest;
+                delete creep.memory._realRouteFrom;
+                delete creep.memory._signSourceReached;
+            }
+            if (sourceRoom && creep.room.name === sourceRoom) {
+                creep.memory._signSourceReached = true;
+            }
+            const travelRoom =
+                sourceRoom && !creep.memory._signSourceReached ? sourceRoom : signRoom;
             if (creep.room.name !== signRoom) {
                 // stall guard: give up on this one-off request if it never
                 // gets there (e.g. the destination turned out unreachable -
@@ -176,7 +196,11 @@ var scout = {
                     );
                     return;
                 }
-                routing.moveToRoom(creep, travelRoom, { range: 20, reusePath: 30 });
+                routing.moveToRoom(creep, travelRoom, {
+                    range: 20,
+                    reusePath: 30,
+                    nativeRoute: true,
+                });
                 return;
             }
             creep.memory.signTravelSince = undefined;
@@ -192,6 +216,8 @@ var scout = {
             } else {
                 // OK, or an unrecoverable error - the request is done either way
                 delete Memory.signQueue[signRoom];
+                delete creep.memory._signMissionKey;
+                delete creep.memory._signSourceReached;
             }
             return;
         }
@@ -392,12 +418,26 @@ var scout = {
     // one scout, empire-wide
     spawn: function (room) {
         if (this.wanted(room) === 0) return false;
+        const signRoom = pendingSignRoom();
+        if (signRoom) {
+            const request = signRequest(signRoom);
+            if (request.from && request.from !== signRoom && room.name !== request.from) {
+                return false;
+            }
+        }
         if (census.total("scout", 0) > 0) return false;
+        if (scoutSpawnRequestedTick === Game.time) return false;
         const alreadySpawning = _.some(
             Game.spawns,
-            (s) => s.spawning && s.spawning.name.indexOf("Scout") === 0
+            (s) =>
+                s.spawning &&
+                Memory.creeps &&
+                Memory.creeps[s.spawning.name] &&
+                Memory.creeps[s.spawning.name].role === "scout"
         );
-        return !alreadySpawning;
+        if (alreadySpawning) return false;
+        scoutSpawnRequestedTick = Game.time;
+        return true;
     },
 
     spawnData: function (room) {

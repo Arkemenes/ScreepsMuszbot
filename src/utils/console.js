@@ -5,8 +5,8 @@
 // Each command is defined with `global.X = ...` in the module that owns it
 // (architect.js, builder.js, scout.js, hostiles.js, memory.js, remotes.js,
 // raiding.js, structures/observer.js, pioneering.js, rooms/needs.js,
-// roles/hauler.js) - this file only prints a reference, it doesn't define
-// the commands themselves.
+// roles/hauler.js, utils/census.js) - this file only prints a reference,
+// it doesn't define the commands themselves.
 // Keep this list in sync when adding/removing a console command.
 global.help = function () {
     const sections = [
@@ -101,6 +101,7 @@ global.help = function () {
         {
             title: "Manutenção",
             commands: [
+                ["findCreeps(role)", "lista nome e sala de todo creep vivo desse role, no império inteiro"],
                 ["GCStructureMemory()", "limpa Memory.structures de estruturas que não existem mais (rodar de vez em quando, ex.: a cada 10k ticks)"],
                 ["profile(ticks=100)", "liga o profiler (screeps-profiler) por N ticks, imprime o relatório de calls/tempo/média por função sozinho no fim e desliga o profiler de novo - não precisa mexer em Memory.settings.profiler na mão"],
                 ["resetTerminalLedger(roomName)", "reseta o ledger de retirada do terminal do hauler - usa quando o saldo já existente no terminal ficou preso como \"protegido pra sempre\" (ex.: build antigo, ou saldo de antes desse recurso existir); a partir do próximo tick o saldo atual vira a nova baseline, já liberado"],

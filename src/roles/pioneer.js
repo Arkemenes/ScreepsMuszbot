@@ -214,7 +214,11 @@ const pioneer = {
     },
 
     spawn(room) {
-        return census.count(room.name, "pioneer", 0) < this.wanted(room);
+        const wanted = this.wanted(room);
+        return (
+            wanted > census.count(room.name, "pioneer", 0) &&
+            pioneering.nextTarget(room) !== null
+        );
     },
 
     spawnData(room) {

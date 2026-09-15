@@ -49,6 +49,8 @@ Pedidos já persistidos como texto simples continuam funcionando.
    abandona o pedido se uma fase exceder o limite.
 7. Uma entrada legada `Memory.signQueue[roomName] = text` continua sendo
    assinada como antes.
+8. Com `fromRoomName` definido, somente a sala de origem pode criar o scout
+   da missão; a sala de destino não cria um scout para esse pedido.
 
 ## Constitution check
 

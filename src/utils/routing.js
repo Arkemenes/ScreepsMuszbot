@@ -178,6 +178,10 @@ function knownStructureMatrix(roomName) {
 // resets one early without waiting it out.
 function isKnownDeadEnd(roomName) {
     const mem = Memory.rooms[roomName];
+    if (remotes.isAllyOwned(roomName)) {
+        if (mem && mem.routeDeadEndUntil) delete mem.routeDeadEndUntil;
+        return false;
+    }
     return !!(mem && mem.routeDeadEndUntil && mem.routeDeadEndUntil > Game.time);
 }
 
@@ -189,7 +193,7 @@ function markDeadEnd(roomName) {
     // transient (search-space constraints, a build in progress) that a
     // shared, TTL'd mark would otherwise block every creep's routing on
     // for no reason. Confirmed live: exactly this happened.
-    if (remotes.isMine(roomName)) return;
+    if (remotes.isMine(roomName) || remotes.isAllyOwned(roomName)) return;
 
     const alreadyKnown = isKnownDeadEnd(roomName);
     const ticks = config.get("routing.deadEndTicks", 10000);
@@ -338,6 +342,19 @@ function avoidCostCallback(avoid, opts) {
     };
 }
 
+function hopCostCallback(currentRoomName, targetRoomName, opts) {
+    opts = opts || {};
+    return (roomName, matrix) => {
+        if (roomName !== currentRoomName && roomName !== targetRoomName) return false;
+        if (opts.blockHostiles && isDangerousRoom(roomName) && roomName !== targetRoomName) {
+            return false;
+        }
+        if (opts.allowRoom && !opts.allowRoom(roomName)) return false;
+        if (isKnownDeadEnd(roomName)) return false;
+        return knownStructureMatrix(roomName) || matrix;
+    };
+}
+
 // ROADMAP 0064: one-time, cached-per-trip validation that a room sequence
 // is actually WALKABLE (real terrain, Game.map.getRoomTerrain - available
 // even without vision, unlike structures), not just adjacent on the map
@@ -370,10 +387,10 @@ function avoidCostCallback(avoid, opts) {
 function computeRealRoute(fromPos, toRoomName, opts) {
     opts = opts || {};
     const avoid = opts.avoid || [];
-    const range = opts.range === undefined ? 20 : opts.range;
+    const targetPos = hopEntryPosition(fromPos.roomName, toRoomName);
     const result = PathFinder.search(
         fromPos,
-        { pos: new RoomPosition(25, 25, toRoomName), range },
+        { pos: targetPos, range: 0 },
         {
             plainCost: 1,
             swampCost: 5,
@@ -400,7 +417,75 @@ function computeRealRoute(fromPos, toRoomName, opts) {
         if (pos.roomName === fromPos.roomName) continue;
         if (rooms[rooms.length - 1] !== pos.roomName) rooms.push(pos.roomName);
     }
-    return rooms.length ? rooms : null;
+    if (!rooms.length) return null;
+
+    // A terrain search can return a path whose room trace is not usable as a
+    // hop plan after collapsing tiles. Never hand moveToRoom() a non-adjacent
+    // first hop; fall back to the room-graph route instead.
+    if (!isValidRoomTrace(fromPos.roomName, rooms)) return null;
+    return rooms;
+}
+
+function isValidRoomTrace(fromRoomName, rooms) {
+    let previousRoom = fromRoomName;
+    for (const roomName of rooms || []) {
+        let distance;
+        try {
+            distance = Game.map.getRoomLinearDistance
+                ? Game.map.getRoomLinearDistance(previousRoom, roomName)
+                : null;
+        } catch (e) {
+            distance = null;
+        }
+        if (distance !== null && distance !== 1) return false;
+        previousRoom = roomName;
+    }
+    return true;
+}
+
+function hopEntryPosition(fromRoomName, toRoomName) {
+    const matchRoom = (roomName) => {
+        const match = /^([WE])(\d+)([NS])(\d+)$/.exec(roomName);
+        if (!match) return null;
+        return {
+            x: (match[1] === "W" ? -1 : 1) * Number(match[2]),
+            y: (match[3] === "N" ? -1 : 1) * Number(match[4]),
+        };
+    };
+    const from = matchRoom(fromRoomName);
+    const to = matchRoom(toRoomName);
+    if (!from || !to) return new RoomPosition(25, 25, toRoomName);
+
+    let edge = null;
+    if (to.x > from.x) edge = { axis: "x", value: 0 };
+    else if (to.x < from.x) edge = { axis: "x", value: 49 };
+    else if (to.y > from.y) edge = { axis: "y", value: 0 };
+    else if (to.y < from.y) edge = { axis: "y", value: 49 };
+    if (!edge) return new RoomPosition(25, 25, toRoomName);
+
+    const terrain = Game.map.getRoomTerrain && Game.map.getRoomTerrain(toRoomName);
+    const fromTerrain = Game.map.getRoomTerrain && Game.map.getRoomTerrain(fromRoomName);
+    const matrix = knownStructureMatrix(toRoomName);
+    const fromMatrix = knownStructureMatrix(fromRoomName);
+    const isWalkable = (roomTerrain, roomMatrix, x, y) =>
+        (!roomTerrain || roomTerrain.get(x, y) !== TERRAIN_MASK_WALL) &&
+        (!roomMatrix || roomMatrix.get(x, y) < 255);
+    const candidates = [];
+    for (let offset = 0; offset < 50; offset++) {
+        for (const delta of [offset, -offset]) {
+            const variable = 25 + delta;
+            if (variable < 0 || variable > 49) continue;
+            const x = edge.axis === "x" ? edge.value : variable;
+            const y = edge.axis === "y" ? edge.value : variable;
+            if (!isWalkable(terrain, matrix, x, y)) continue;
+            const fromX = edge.axis === "x" ? (to.x > from.x ? 49 : 0) : variable;
+            const fromY = edge.axis === "y" ? (to.y > from.y ? 49 : 0) : variable;
+            if (!isWalkable(fromTerrain, fromMatrix, fromX, fromY)) continue;
+            candidates.push(new RoomPosition(x, y, toRoomName));
+        }
+        if (candidates.length) return candidates[0];
+    }
+    return new RoomPosition(25, 25, toRoomName);
 }
 
 // Records each room this creep has actually STOOD IN while travelling
@@ -659,6 +744,16 @@ function moveToRoom(creep, toRoomName, opts) {
         reusePath: opts.reusePath === undefined ? 20 : opts.reusePath,
     };
 
+    if (opts.nativeRoute) {
+        if (isOnBorder(creep) && nudgeAwayFromBorder(creep)) return OK;
+        const route = findRoute(creep.room.name, toRoomName, opts);
+        const nextRoom = route && route.length ? route[0].room : toRoomName;
+        return creep.moveTo(new RoomPosition(25, 25, nextRoom), {
+            range,
+            reusePath: moveOpts.reusePath,
+        });
+    }
+
     // ROADMAP 0064 live follow-up: the engine's own defaults (maxOps 2000,
     // maxRooms 16) can be too small once routeCostCallback's "allowed" set
     // spans several rooms with real natural-wall clutter (maxOps) or the
@@ -699,6 +794,23 @@ function moveToRoom(creep, toRoomName, opts) {
         // free-roam exploration - no fixed destination, a fresh
         // direct-neighbor hop every cycle, nothing worth pre-validating).
         tryComputeRealRoute(creep, toRoomName, opts);
+    }
+
+    const progressKey = creep.room.name + ":" + toRoomName;
+    const progressPos = creep.pos.x + ":" + creep.pos.y + ":" + creep.pos.roomName;
+    if (creep.memory._routeProgressKey !== progressKey) {
+        creep.memory._routeProgressKey = progressKey;
+        creep.memory._routeProgressPos = progressPos;
+        creep.memory._routeNoProgressTicks = 0;
+    } else if (creep.memory._routeProgressPos === progressPos && creep.fatigue === 0) {
+        creep.memory._routeNoProgressTicks = (creep.memory._routeNoProgressTicks || 0) + 1;
+        if (creep.memory._routeNoProgressTicks >= config.get("routing.noProgressTicks", 4)) {
+            delete creep.memory._move;
+            creep.memory._routeNoProgressTicks = 0;
+        }
+    } else {
+        creep.memory._routeProgressPos = progressPos;
+        creep.memory._routeNoProgressTicks = 0;
     }
 
     // The destination ITSELF already proved unreachable from here - refuse
@@ -811,6 +923,19 @@ function moveToRoom(creep, toRoomName, opts) {
     // best-effort logging aid; avoidCostCallback itself never reads `route`
     // at all, only the always-fresh `avoid` list below, so there's nothing
     // stale to worry about functionally, only for the diagnostic log line.
+    if (
+        creep.memory._realRoute &&
+        creep.memory._realRouteDest === toRoomName &&
+        !isValidRoomTrace(
+            creep.memory._realRouteFrom || creep.room.name,
+            creep.memory._realRoute
+        )
+    ) {
+        delete creep.memory._realRoute;
+        delete creep.memory._realRouteDest;
+        delete creep.memory._realRouteFrom;
+    }
+
     let route;
     let usingRealRoute = false;
     if (creep.memory._realRoute && creep.memory._realRouteDest === toRoomName) {
@@ -823,6 +948,9 @@ function moveToRoom(creep, toRoomName, opts) {
         route = findRoute(creep.room.name, toRoomName, routeOpts);
     }
 
+    const nextHop = usingRealRoute && route.length ? route[0].room : null;
+    const singleHop = nextHop !== null && nextHop !== toRoomName;
+
     // ROADMAP 0064 live follow-up: a validated _realRoute gets the SAME
     // blocklist-only freedom computeRealRoute() itself used to validate it
     // (avoidCostCallback - see its own comment above for the full "raw
@@ -830,8 +958,10 @@ function moveToRoom(creep, toRoomName, opts) {
     // narrower allowlist is reserved for the findRoute()-only fallback,
     // which was never checked against real terrain and still benefits from
     // being kept roughly on the room-graph path findRoute() chose.
-    const costCallback = usingRealRoute
-        ? avoidCostCallback(avoid, routeOpts)
+    const costCallback = usingRealRoute && singleHop
+        ? hopCostCallback(creep.room.name, nextHop, routeOpts)
+        : usingRealRoute
+            ? avoidCostCallback(avoid, routeOpts)
         : routeCostCallback(route, creep.room.name, toRoomName, routeOpts);
 
     // ROADMAP 0064 same-day, the actual root cause (found via a live trace
@@ -860,11 +990,10 @@ function moveToRoom(creep, toRoomName, opts) {
     // 20 defensively regardless of what a future caller passes, so a
     // larger opts.range can never let the engine call the hop "reached"
     // while the creep is still in the room behind it.
-    const nextHop = usingRealRoute && route.length ? route[0].room : null;
-    const singleHop = nextHop !== null && nextHop !== toRoomName;
     const moveTarget = singleHop ? nextHop : toRoomName;
-    const moveRange = singleHop ? Math.min(range, 20) : range;
-    const status = creep.moveTo(new RoomPosition(25, 25, moveTarget), {
+    const moveRange = 0;
+    const targetPos = hopEntryPosition(creep.room.name, moveTarget);
+    const status = creep.moveTo(targetPos, {
         range: moveRange,
         reusePath: moveOpts.reusePath,
         maxOps: moveOpts.maxOps,

@@ -60,7 +60,16 @@ function hasHostiles(roomName) {
 function isForeignOwned(roomName) {
     const mem = Memory.rooms[roomName];
     const owner = mem && mem.owner;
-    return !!(owner && owner !== myUsername() && !isAlly(owner));
+    const ownerName =
+        owner && typeof owner === "object" ? owner.username : owner;
+    return !!(ownerName && ownerName !== myUsername() && !isAlly(ownerName));
+}
+
+function isAllyOwned(roomName) {
+    const mem = Memory.rooms[roomName];
+    const owner = mem && mem.owner;
+    const ownerName = owner && typeof owner === "object" ? owner.username : owner;
+    return !!(ownerName && isAlly(ownerName));
 }
 
 // Room-to-room hop count (not path length) - cheap and cached per tick, used
@@ -341,6 +350,7 @@ module.exports = {
     isReservedByMe,
     hasHostiles,
     isForeignOwned,
+    isAllyOwned,
     roomDistance,
     nearestOwnedRoom,
     eligible,

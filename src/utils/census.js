@@ -67,4 +67,14 @@ function total(role, minTtl = 5) {
     ).length;
 }
 
+// Console: name + room of every creep of `role`, empire-wide.
+global.findCreeps = function (role) {
+    const list = all(role);
+    console.log(role + ": " + list.length + " creep(s)");
+    for (const creep of list) {
+        console.log("  " + creep.name + " @ " + creep.room.name);
+    }
+    return list.map((creep) => ({ name: creep.name, room: creep.room.name }));
+};
+
 module.exports = { creepsByRole, allInRoom, count, all, total, build };

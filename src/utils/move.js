@@ -80,6 +80,20 @@ function isAt(pos, x, y) {
     return pos.x === x && pos.y === y;
 }
 
+function invalidateBlockedCrossRoomPath(creep) {
+    const cached = creep.memory._move;
+    if (!cached || !cached.path || !cached.path.length) return false;
+    const direction = Number(cached.path[0]);
+    const dx = [0, 0, 1, 1, 1, 0, -1, -1, -1];
+    const dy = [0, -1, -1, 0, 1, 1, 1, 0, -1];
+    const x = creep.pos.x + (dx[direction] || 0);
+    const y = creep.pos.y + (dy[direction] || 0);
+    if (x < 0 || x > 49 || y < 0 || y > 49) return false;
+    if (creep.room.getTerrain().get(x, y) !== TERRAIN_MASK_WALL) return false;
+    delete creep.memory._move;
+    return true;
+}
+
 // Roles / creeps that hold a fixed work post - never shove these, route around.
 const STATIONARY_ROLES = { miner: true, upgrader: true };
 function isParked(creep) {
@@ -104,6 +118,10 @@ function travel(creep, target, opts) {
 
     // cross-room: let the engine handle route finding
     if (destPos.roomName !== creep.room.name) {
+        const blockedCache = invalidateBlockedCrossRoomPath(creep);
+        if (blockedCache) {
+            opts = Object.assign({}, opts, { reusePath: 0 });
+        }
         return nativeMoveTo.call(creep, target, opts);
     }
 

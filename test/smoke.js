@@ -2580,6 +2580,22 @@ PathFinder.search = realSearch;
 assert(searches >= 2,
     "a frozen creep triggers repathing (" + searches + " searches / 6 ticks)");
 
+const originalRoomTerrain = room.getTerrain;
+room.getTerrain = () => ({
+    get: (x, y) => x === 46 && y === 11 ? TERRAIN_MASK_WALL : 0,
+});
+const crossRoomWalker = Object.assign(Object.create(Creep.prototype), {
+    id: "crossRoomWalker",
+    room,
+    fatigue: 0,
+    pos: new RoomPosition(45, 10, "W1N1"),
+    memory: { _move: { path: "4", dest: { x: 24, y: 0, room: "W1N2" } } },
+});
+crossRoomWalker.moveTo(new RoomPosition(24, 0, "W1N2"), { reusePath: 30 });
+room.getTerrain = originalRoomTerrain;
+assert(!crossRoomWalker.memory._move,
+    "cross-room movement drops a native path cache whose next tile is a wall");
+
 // --- 0009: an incomplete PathFinder result (a pocket sealed by
 // walls/ramparts, best-effort partial path) is refused outright instead of
 // being walked as if it reached the destination -----------------------
@@ -3773,6 +3789,16 @@ Game.creeps.Sc1 = Object.assign(new Creep(), {
 Game.time++;
 assert(scout.spawn(room) === false, "no second scout is spawned");
 
+// A flavored scout name no longer starts with "Scout". The spawn guard must
+// inspect the persisted role instead of the cosmetic name.
+spawn.spawning = { name: "Kessa Farrow" };
+Memory.creeps[spawn.spawning.name] = { role: "scout" };
+Game.time++;
+assert(scout.spawn(room) === false,
+    "a scout already spawning is detected by role, not by its flavored name");
+spawn.spawning = null;
+delete Memory.creeps["Kessa Farrow"];
+
 // an extra scout retires itself
 Game.creeps.Sc2 = Object.assign(new Creep(), {
     id: "sc2", name: "Sc2", room, memory: { role: "scout", home: "W1N1" },
@@ -3854,6 +3880,8 @@ delete Game.creeps.Sc2;
         },
         suicide: () => OK,
     });
+    sourceScout.memory._routeAvoid = ["WStaleRoom"];
+    sourceScout.memory._realRoute = ["WStaleRoom"];
     Game.creeps.ScSource = sourceScout;
     global.signRoom("W3N3", "from home", "W2N2");
     assert(
@@ -3865,12 +3893,19 @@ delete Game.creeps.Sc2;
     scout.run(sourceScout);
     assert(routedTo[0] === "W2N2",
         "signRoom scout travels to the source room first");
+    assert(!sourceScout.memory._routeAvoid && !sourceScout.memory._realRoute,
+        "a new signRoom mission clears stale route state before travelling");
     sourceScout.room = sourceRoom;
     sourceScout.pos = new RoomPosition(20, 20, "W2N2");
     Game.time++;
     scout.run(sourceScout);
     assert(routedTo[1] === "W3N3",
         "signRoom scout travels to the destination after reaching the source");
+    sourceScout.room = Object.assign({}, room, { name: "W2N3" });
+    Game.time++;
+    scout.run(sourceScout);
+    assert(routedTo[2] === "W3N3",
+        "signRoom scout keeps travelling to the destination after leaving the source");
     sourceScout.room = targetRoom;
     sourceScout.pos = new RoomPosition(20, 20, "W3N3");
     Game.time++;
@@ -3887,6 +3922,36 @@ delete Game.creeps.Sc2;
     routing.moveToRoom = originalMoveToRoom;
     delete Game.creeps.ScSource;
 }
+
+Memory.rooms.E1N46 = {
+    owner: { username: "vlc6wsw0l" },
+    routeDeadEndUntil: Game.time + 1000,
+};
+const routingForAlly = require(path.join(PROJECT, "src/utils/routing"));
+assert(!routingForAlly.isKnownDeadEnd("E1N46"),
+    "an allied room is not blocked by a stale shared route dead-end mark");
+delete Memory.rooms.E1N46.routeDeadEndUntil;
+routingForAlly.markDeadEnd("E1N46");
+assert(!Memory.rooms.E1N46.routeDeadEndUntil,
+    "an allied room is never marked as a shared route dead-end");
+
+    // A sourced sign mission must be spawned by the requested origin room, not by
+    // whichever owned room happens to be processed first.
+    {
+        Memory.signQueue = {};
+        delete Game.creeps.Sc1;
+        delete Game.creeps.Sc2;
+        global.signRoom("E1N45", "Glory to CtrlAltDefeat!", "E1N47");
+        const originRoom = Object.assign({}, room, { name: "E1N47" });
+        const wrongRoom = Object.assign({}, room, { name: "E1N45" });
+        Game.time++;
+        assert(scout.spawn(wrongRoom) === false,
+            "a sourced sign request is not spawned from the destination room");
+        Game.time++;
+        assert(scout.spawn(originRoom) === true,
+            "a sourced sign request is spawned from its origin room");
+        global.signRoom("E1N45");
+    }
 
 // --- scout: free-roam exploration actually crosses room borders, and an
 // unreachable target room gets blacklisted instead of retried forever
@@ -4068,6 +4133,10 @@ delete Game.creeps.Sc2;
         "an ally's own room is exempt - their interior obstacles are the reactive backtrack's " +
             "job (ROADMAP 0061), not something routing refuses to enter outright");
     delete Memory.rooms.WAllyOwned;
+    Memory.rooms.WAllyOwnedObject = { owner: { username: "fR1dj" } };
+    assert(remotesMod.isForeignOwned("WAllyOwnedObject") === false,
+        "an ally's own room with object-form owner is also exempt from routing refusal");
+    delete Memory.rooms.WAllyOwnedObject;
     assert(remotesMod.isForeignOwned("W1N2") === false,
         "an unowned room is never foreign-owned");
     assert(remotesMod.isForeignOwned("WNeverVisited") === false,
@@ -5504,6 +5573,20 @@ delete Game.creeps.Sc2;
             PathFinder.search = realSearch;
         }
 
+        // A malformed collapsed trace must never become a multi-room hop plan.
+        {
+            PathFinder.search = () => ({
+                path: [
+                    new RoomPosition(25, 25, "W1N1"),
+                    new RoomPosition(25, 25, "W3N1"),
+                ],
+                incomplete: false,
+            });
+            assert(routing.computeRealRoute(new RoomPosition(25, 25, "W1N1"), "W9N9", {}) === null,
+                "computeRealRoute rejects a non-adjacent room hop after collapsing the path");
+            PathFinder.search = realSearch;
+        }
+
         // an incomplete (or empty) search is never trusted - null, not a
         // partial/misleading sequence
         {
@@ -5588,10 +5671,8 @@ delete Game.creeps.Sc2;
             const cm = new PathFinder.CostMatrix();
             assert(seenCostCallback("WCache2", cm) === cm,
                 "the cached real route's next hop is allowed");
-            assert(seenCostCallback("WSomeUnrelatedRoom", cm) === cm,
-                "a room OUTSIDE the cached real route sequence is still allowed - only " +
-                    "opts.avoid/hostile actually excludes anything now, not membership in the " +
-                    "curated route+slack list (that allowlist is what caused the live bug)");
+            assert(seenCostCallback("WSomeUnrelatedRoom", cm) === false,
+                "a validated hop excludes rooms outside the current room and next hop");
             PathFinder.search = realSearch;
             Game.map.findRoute = realFindRouteRR;
         }
@@ -5617,23 +5698,13 @@ delete Game.creeps.Sc2;
             const cm2 = new PathFinder.CostMatrix();
             assert(seenCostCallback2("WBlockedRoom", cm2) === false,
                 "opts.avoid still excludes a room outright under the blocklist-based callback");
-            assert(seenCostCallback2("WAnyOtherRoom", cm2) === cm2,
-                "any room NOT in avoid stays open");
+            assert(seenCostCallback2("WAnyOtherRoom", cm2) === false,
+                "a validated hop still excludes unrelated rooms");
             PathFinder.search = realSearch;
         }
 
-        // ROADMAP 0064 same-day follow-up, second root cause: the creep
-        // physically ending up in a room OUTSIDE the recorded _realRoute
-        // sequence is expected, not an error - avoidCostCallback is a
-        // blocklist, so native moveTo() is free to (and regularly does)
-        // wander onto a cheaper path through rooms that were never in the
-        // cached list. Confirmed live: this used to be read as "fell off
-        // the validated route", discarding _realRoute entirely and falling
-        // back to findRoute()/routeCostCallback's narrow allowlist - the
-        // exact mechanism avoidCostCallback exists to bypass - reproducing
-        // the same one-room-at-a-time blame cascade the fix was supposed to
-        // end. It must stay cached and still drive execution via the
-        // blocklist callback.
+        // A validated route remains cached when the creep's room differs from
+        // the recorded sequence, but execution still stays within one hop.
         {
             let findRouteCallsDetour = 0;
             Game.map.findRoute = () => { findRouteCallsDetour++; return [{ exit: 1, room: "W9N9" }]; };
@@ -5667,9 +5738,8 @@ delete Game.creeps.Sc2;
                 "_realRoute stays cached across the deviation instead of being deleted"
             );
             const cm3 = new PathFinder.CostMatrix();
-            assert(seenCostCallback3("WSomeRoomNeverInTheRoute", cm3) === cm3,
-                "the blocklist callback (not the old allowlist) is still what drives execution " +
-                    "after the deviation");
+            assert(seenCostCallback3("WSomeRoomNeverInTheRoute", cm3) === false,
+                "a deviation does not reopen arbitrary rooms during a validated hop");
             PathFinder.search = realSearch;
             Game.map.findRoute = realFindRouteRR;
         }
@@ -5706,7 +5776,7 @@ delete Game.creeps.Sc2;
                 "with a 3-hop cached real route, moveTo() targets only the NEXT hop, not the " +
                     "final destination directly - live evidence across 3 legs showed native " +
                     "moveTo()'s own multi-room search failing routes computeRealRoute solved fine");
-            assert(seenRange === 20, "the per-hop range is capped at the caller's own range here");
+            assert(seenRange === 0, "each hop requires entering the target room");
 
             // creep physically enters WHop1 - the next call should aim at WHop2
             hopCreep.room = { name: "WHop1" };
@@ -5727,12 +5797,9 @@ delete Game.creeps.Sc2;
             PathFinder.search = realSearch;
         }
 
-        // range capping: two adjacent rooms' centers are always >=25 tiles
-        // apart in world coordinates, so satisfying a larger range against
-        // an intermediate hop's center could let the engine call the hop
-        // "reached" before the creep actually crosses into it - capped at
-        // 20 defensively regardless of what opts.range a future caller
-        // passes; the final hop keeps the caller's own range unchanged
+        // Every room hop now targets a walkable entry tile and requires
+        // entering that room. This avoids treating a wall at the room center
+        // as the destination or considering an adjacent room reached early.
         {
             PathFinder.search = () => ({
                 path: [
@@ -5750,14 +5817,14 @@ delete Game.creeps.Sc2;
                 moveTo: (pos, o) => { seenTarget2 = pos.roomName; seenRange2 = o.range; return OK; },
             };
             routing.moveToRoom(hopCreep2, "WHopFinal2", { range: 30, realRoute: true });
-            assert(seenTarget2 === "WHopA" && seenRange2 === 20,
-                "an intermediate hop's range is capped at 20 regardless of a larger opts.range");
+            assert(seenTarget2 === "WHopA" && seenRange2 === 0,
+                "an intermediate hop requires entering the target room");
 
             hopCreep2.room = { name: "WHopA" };
             hopCreep2.pos = new RoomPosition(25, 25, "WHopA");
             routing.moveToRoom(hopCreep2, "WHopFinal2", { range: 30, realRoute: true });
-            assert(seenTarget2 === "WHopFinal2" && seenRange2 === 30,
-                "the final hop uses the caller's own range unchanged, not the intermediate cap");
+            assert(seenTarget2 === "WHopFinal2" && seenRange2 === 0,
+                "the final hop also requires entering the destination room");
             PathFinder.search = realSearch;
         }
 
