@@ -136,6 +136,7 @@ module.exports.loop = function () {
                     guard("creep:" + name, () => creepLogic[role].run(creep));
                 }
             }
+            guard("traffic:trace", () => utils.traffic.flushScoutTrace());
             // age the traffic counters down (heap-only, gated internally to
             // once every DECAY_INTERVAL ticks)
             guard("traffic:decay", () => utils.traffic.decay());

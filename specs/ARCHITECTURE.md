@@ -143,6 +143,18 @@ quiser nada — puro oportunismo. `squadDismantler` nunca aparece nesse loop
 - **factory** (ROADMAP 0051) — com `Memory.rooms[x].factoryProduct` setado (`setFactoryProduct()`), `cooldown===0`, e todo componente da receita (`COMMODITIES[product].components` — constante nativa do Screeps, nunca hardcoded) já estocado, chama `produce(product)`. Estocar/escoar é `roles/hauler.js`'s `pickMineralJob()` (não-energia) + `optionalConsumer()` (energia).
 - **powerSpawn** (ROADMAP 0051) — com `store[RESOURCE_POWER] >= 1`, chama `processPower()` incondicionalmente (sem checar energia própria — o motor recusa sozinho, fail-soft, se faltar); `powerSpawn.enabled` (`config.js`) desliga se preciso. Conseguir Power em primeiro lugar (invasão de power bank, ou mercado) é fora de escopo — ver ROADMAP "Later".
 
+### Scout trace
+
+`scoutTrace(true)` também ativa um registro heap-only de intenções de
+movimento. `utils/traffic.flushScoutTrace()` roda depois de todos os roles e
+reporta os creeps que disputaram a próxima tile do scout naquele tick; é apenas
+diagnóstico e não altera os intents (ROADMAP 0087).
+
+`utils/routing.moveToRoom()` também reaproveita `utils/excuseMe.ask()` quando
+a próxima tile cacheada de uma viagem multi-sala está ocupada por creep próprio.
+As proteções existentes de cadeia, saída válida e miner inamovível permanecem
+as mesmas (ROADMAP 0088).
+
 ## Persistence
 
 | Onde | O quê |

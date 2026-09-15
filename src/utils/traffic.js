@@ -11,6 +11,97 @@ const config = require("./config");
 
 let counts = {}; // { roomName: { "x:y": count } }
 let lastDecay = 0;
+let intentTick = -1;
+let intentsByTile = {};
+let intentsByCreep = {};
+let watchedScoutStep = null;
+
+function scoutTraceEnabled() {
+    return !!(
+        Memory.settings &&
+        Memory.settings.debug &&
+        Memory.settings.debug.scoutTrace
+    );
+}
+
+function ensureIntentTick() {
+    if (intentTick === Game.time) return;
+    intentTick = Game.time;
+    intentsByTile = {};
+    intentsByCreep = {};
+    watchedScoutStep = null;
+}
+
+function recordIntent(creep, x, y, action) {
+    if (!scoutTraceEnabled() || !creep.room || x < 0 || x > 49 || y < 0 || y > 49) return;
+    ensureIntentTick();
+    const creepKey = creep.id || creep.name;
+    const previous = intentsByCreep[creepKey];
+    if (previous) delete intentsByTile[previous.tileKey][creepKey];
+    const tileKey = creep.room.name + ":" + x + ":" + y;
+    const tile = intentsByTile[tileKey] || (intentsByTile[tileKey] = {});
+    tile[creepKey] = { name: creep.name, role: creep.memory.role, action };
+    intentsByCreep[creepKey] = { tileKey };
+}
+
+function recordDirectionIntent(creep, direction) {
+    const dx = [0, 0, 1, 1, 1, 0, -1, -1, -1];
+    const dy = [0, -1, -1, 0, 1, 1, 1, 0, -1];
+    if (!dx[direction] && !dy[direction]) return;
+    recordIntent(creep, creep.pos.x + dx[direction], creep.pos.y + dy[direction], "move");
+}
+
+function cachedMoveStep(creep) {
+    const nativePath = creep.memory._move && creep.memory._move.path;
+    if (nativePath) {
+        const direction = Number(nativePath[0]);
+        const dx = [0, 0, 1, 1, 1, 0, -1, -1, -1];
+        const dy = [0, -1, -1, 0, 1, 1, 1, 0, -1];
+        if (dx[direction] || dy[direction]) {
+            return { x: creep.pos.x + dx[direction], y: creep.pos.y + dy[direction] };
+        }
+    }
+    const path = creep.memory._m && creep.memory._m.path;
+    if (path && path.length) return { x: path[0][0], y: path[0][1] };
+    return null;
+}
+
+function recordMoveToIntent(creep) {
+    const step = cachedMoveStep(creep);
+    if (step) recordIntent(creep, step.x, step.y, "moveTo");
+}
+
+function watchScoutMove(creep) {
+    if (!scoutTraceEnabled() || creep.memory.role !== "scout") return;
+    const step = cachedMoveStep(creep);
+    if (!step || step.x < 0 || step.x > 49 || step.y < 0 || step.y > 49) return;
+    ensureIntentTick();
+    watchedScoutStep = {
+        creepKey: creep.id || creep.name,
+        name: creep.name,
+        tileKey: creep.room.name + ":" + step.x + ":" + step.y,
+    };
+}
+
+function flushScoutTrace() {
+    if (!scoutTraceEnabled() || !watchedScoutStep) return;
+    const intents = intentsByTile[watchedScoutStep.tileKey] || {};
+    const scoutIntent = intents[watchedScoutStep.creepKey] || null;
+    const latest = intentsByCreep[watchedScoutStep.creepKey] || null;
+    const contenders = Object.keys(intents)
+        .filter((creepKey) => creepKey !== watchedScoutStep.creepKey)
+        .map((creepKey) => intents[creepKey]);
+    console.log("[scoutTrace] " + JSON.stringify({
+        tick: Game.time,
+        action: "intent-resolution",
+        scout: watchedScoutStep.name,
+        nextStep: watchedScoutStep.tileKey,
+        scoutIntent,
+        latestIntent: latest && latest.tileKey,
+        contenders,
+    }));
+    watchedScoutStep = null;
+}
 
 function record(creep) {
     if (!creep.pos || !creep.room) return;
@@ -90,4 +181,14 @@ function worthRepairing(structure) {
     return isHot(structure.room.name, structure.pos.x, structure.pos.y);
 }
 
-module.exports = { record, decay, hot, isHot, worthRepairing };
+module.exports = {
+    record,
+    decay,
+    hot,
+    isHot,
+    worthRepairing,
+    recordDirectionIntent,
+    recordMoveToIntent,
+    watchScoutMove,
+    flushScoutTrace,
+};

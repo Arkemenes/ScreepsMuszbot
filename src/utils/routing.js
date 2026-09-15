@@ -9,6 +9,50 @@
 const remotes = require("../rooms/remotes");
 const config = require("./config");
 const roomCache = require("./roomCache");
+const traffic = require("./traffic");
+const excuseMe = require("./excuseMe");
+
+function requestCrossRoomClearance(creep) {
+    const path = creep.memory._move && creep.memory._move.path;
+    const direction = path && Number(path[0]);
+    const dx = [0, 0, 1, 1, 1, 0, -1, -1, -1];
+    const dy = [0, -1, -1, 0, 1, 1, 1, 0, -1];
+    if (!direction || !dx[direction] && !dy[direction]) return;
+    const x = creep.pos.x + dx[direction];
+    const y = creep.pos.y + dy[direction];
+    if (x < 0 || x > 49 || y < 0 || y > 49) return;
+    const blocker = creep.room
+        .lookForAt(LOOK_CREEPS, x, y)
+        .find((other) => other.my && other.id !== creep.id);
+    if (blocker && excuseMe.ask(creep, x, y)) creep.move(direction);
+}
+
+function scoutTraceNextStep(creep) {
+    const path = creep.memory._move && creep.memory._move.path;
+    const direction = path && Number(path[0]);
+    const dx = [0, 0, 1, 1, 1, 0, -1, -1, -1];
+    const dy = [0, -1, -1, 0, 1, 1, 1, 0, -1];
+    if (!direction || !dx[direction] && !dy[direction]) return null;
+    const x = creep.pos.x + dx[direction];
+    const y = creep.pos.y + dy[direction];
+    if (x < 0 || x > 49 || y < 0 || y > 49) return null;
+    return {
+        pos: creep.room.name + ":" + x + "," + y,
+        direction,
+        creeps: creep.room.lookForAt(LOOK_CREEPS, x, y).map((other) => ({
+            name: other.name,
+            role: other.memory && other.memory.role,
+            fatigue: other.fatigue,
+        })),
+        terrain: creep.room.getTerrain().get(x, y),
+        structures: creep.room.lookForAt(LOOK_STRUCTURES, x, y).map((structure) =>
+            structure.structureType
+        ),
+        sites: creep.room.lookForAt(LOOK_CONSTRUCTION_SITES, x, y).map((site) =>
+            site.structureType
+        ),
+    };
+}
 
 function traceScoutMove(creep, action, targetPos, status) {
     if (
@@ -24,13 +68,19 @@ function traceScoutMove(creep, action, targetPos, status) {
         pos: creep.room.name + ":" + creep.pos.x + "," + creep.pos.y,
         target: targetPos && targetPos.roomName + ":" + targetPos.x + "," + targetPos.y,
         fatigue: creep.fatigue,
+        spawning: creep.spawning,
+        activeMove: creep.body.filter((part) => part.type === MOVE && part.hits > 0).length,
         moveDest: creep.memory._move && creep.memory._move.dest,
+        nextStep: scoutTraceNextStep(creep),
         realRoute: creep.memory._realRoute,
         routeDest: creep.memory._realRouteDest,
         avoid: creep.memory._routeAvoid,
         retreatTo: creep.memory._routeRetreatTo,
         noPath: creep.memory._routeNoPathTicks,
     }));
+    if (action === "native-after" || action === "route-after") {
+        traffic.watchScoutMove(creep);
+    }
 }
 
 // Highway rooms sit on the map's coordinate grid (either axis a multiple of
@@ -859,6 +909,7 @@ function moveToRoom(creep, toRoomName, opts) {
             swampCost: costs.swampCost,
             costCallback: hopCostCallback(creep.room.name, nextRoom, hopOpts),
         });
+        requestCrossRoomClearance(creep);
         traceScoutMove(creep, "native-after", targetPos, status);
         return status;
     }
@@ -1116,6 +1167,7 @@ function moveToRoom(creep, toRoomName, opts) {
         swampCost: costs.swampCost,
         costCallback,
     });
+    requestCrossRoomClearance(creep);
     traceScoutMove(creep, "route-after", targetPos, status);
 
     if (status !== ERR_NO_PATH) {

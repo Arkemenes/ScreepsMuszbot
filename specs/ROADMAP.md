@@ -96,6 +96,8 @@ detalhe.
 | 0084 | [Custo de rota baseado no corpo do creep](features/0084-body-aware-route-cost/spec.md) | done | custo de plain/swamp derivado de `MOVE` e partes ativas; carga de `CARRY` não altera fadiga |
 | 0085 | [Trace de rota do scout](features/0085-scout-route-trace/spec.md) | done | `scoutTrace()` mostra snapshot; `scoutTrace(true)` liga logs opt-in de rota para investigar stalls sem mudar movimento |
 | 0086 | [Fallback do nativeRoute do scout](features/0086-scout-native-route-fallback/spec.md) | done | `signRoom` deixa o ramo que devolve `ERR_NO_PATH` repetidamente e volta ao fluxo padrão de rota |
+| 0087 | [Trace de colisão de intenção do scout](features/0087-scout-intent-collision-trace/spec.md) | done | loga no fim do tick quem também declarou movimento para a próxima tile do scout |
+| 0088 | [Cortesia de tráfego em rota multi-sala](features/0088-cross-room-traffic-courtesy/spec.md) | done | `moveToRoom()` reaproveita `excuseMe` quando o próximo passo cacheado está ocupado por creep próprio |
 
 ## Fila atual
 

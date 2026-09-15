@@ -49,6 +49,18 @@ global.scoutTrace = function (enabled) {
     }
 
     const creep = scouts[0];
+    if (enabled === "step") {
+        const path = creep.memory._move && creep.memory._move.path;
+        const direction = path && Number(path[0]);
+        if (direction < TOP || direction > TOP_LEFT) {
+            console.log("[scoutTrace] no cached direction to probe");
+            return;
+        }
+        const result = creep.move(direction);
+        console.log("[scoutTrace] direct step direction=" + direction + " result=" + result);
+        return;
+    }
+
     const memory = creep.memory;
     console.log(JSON.stringify({
         tick: Game.time,

@@ -7,8 +7,13 @@ comandos de scout já vivem. Sem argumento, ele encontra o scout e imprime um
 snapshot compacto. Com booleano, ele configura o gate persistente de log.
 
 `utils/routing.js` lê o gate imediatamente antes dos retornos que emitem uma
-intenção de movimento. O helper compartilha o formato do log e devolve o
-status original sem mudar a rota ou a chamada ao motor.
+intenção de movimento. O helper registra também a próxima direção do cache
+`_move` e os creeps na tile correspondente, e devolve o status original sem
+mudar a rota ou a chamada ao motor.
+
+Para distinguir o cache de `moveTo()` da resolução do motor, `scoutTrace("step")`
+envia uma única direção já cacheada usando `creep.move()`. É uma ação manual,
+não um fallback automático.
 
 ## Modules
 

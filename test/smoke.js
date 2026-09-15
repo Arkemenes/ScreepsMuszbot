@@ -237,6 +237,7 @@ Room.Terrain = Terrain;
 
 // exists so utils/move.js can capture a native moveTo at load time
 Creep.prototype.moveTo = function () { return OK; };
+Creep.prototype.move = function () { return OK; };
 Creep.prototype.moveByPath = function () { return OK; };
 
 Object.assign(global, {
@@ -462,6 +463,31 @@ assert(typeof global.Memory.rooms.W1N1 === "object", "intel populated Memory.roo
 assert(Game.creeps.Harv1.memory.role === "hauler",
     "legacy harvester creep was folded into the hauler role");
 assert(global.Memory.rooms.W1N1.numberOfHaulers >= 1, "census counted the migrated hauler");
+
+{
+    const traffic = require(path.join(PROJECT, "src/utils/traffic"));
+    const traceCreep = Game.creeps.Harv1;
+    const originalSettings = Memory.settings;
+    Memory.settings = Memory.settings || {};
+    const originalDebug = Memory.settings.debug;
+    delete Memory.settings.debug;
+    let traceError = null;
+    try {
+        traffic.recordDirectionIntent(traceCreep, RIGHT);
+        traffic.flushScoutTrace();
+    } catch (error) { traceError = error; }
+    assert(!traceError, "disabled scout intent tracing is a no-op");
+    Memory.settings.debug = { scoutTrace: true };
+    traceError = null;
+    try {
+        traffic.recordDirectionIntent(traceCreep, RIGHT);
+        traffic.recordMoveToIntent(traceCreep);
+        traffic.flushScoutTrace();
+    } catch (error) { traceError = error; }
+    assert(!traceError, "enabled scout intent tracing records and flushes without throwing");
+    Memory.settings.debug = originalDebug;
+    Memory.settings = originalSettings;
+}
 
 // --- ROADMAP 0079: Memory.stats fields collected on every tick ---------
 // (the throttled/dedicated ones - avgBarrierHits, market.credits,
@@ -2773,6 +2799,52 @@ assert(sidestepper._moved === true && minerBehind._moved === false,
     "a miner further down a single-file line still refuses to move, but the mobile creep in front of it can still sidestep");
 room.lookForAt = realLookForAt;
 
+{
+    const routing = require(path.join(PROJECT, "src/utils/routing"));
+    const excuseMe = require(path.join(PROJECT, "src/utils/excuseMe"));
+    const originalAsk = excuseMe.ask;
+    const crossMover = {
+        id: "cross-mover",
+        name: "cross-mover",
+        room,
+        pos: new RoomPosition(10, 10, "W1N1"),
+        body: [{ type: MOVE, hits: 100 }],
+        store: { getUsedCapacity: () => 0 },
+        memory: { role: "scout" },
+        move: (direction) => {
+            crossMover.directMoveDirection = direction;
+            return OK;
+        },
+        moveTo: () => {
+            crossMover.memory._move = { path: "3" };
+            return OK;
+        },
+    };
+    const crossBlocker = { id: "cross-blocker", my: true };
+    let askCalls = 0;
+    excuseMe.ask = (creep, x, y) => {
+        askCalls++;
+        return creep === crossMover && x === 11 && y === 10;
+    };
+    room.lookForAt = (type, x, y) =>
+        type === LOOK_CREEPS && x === 11 && y === 10 ? [crossBlocker] : [];
+    const occupiedResult = routing.moveToRoom(crossMover, "W2N1", {
+        nativeRoute: true,
+        realRoute: false,
+    });
+    assert(occupiedResult === OK && askCalls === 1 && crossMover.directMoveDirection === RIGHT,
+        "a multi-room route asks an allied creep blocking its next cached step to make way and enters it");
+    room.lookForAt = () => [];
+    const clearResult = routing.moveToRoom(crossMover, "W2N1", {
+        nativeRoute: true,
+        realRoute: false,
+    });
+    assert(clearResult === OK && askCalls === 1,
+        "a multi-room route does not ask for clearance when its next cached step is empty");
+    excuseMe.ask = originalAsk;
+    room.lookForAt = realLookForAt;
+}
+
 const B3 = plan().buildings;
 assert(B3.filter((b) => b.structureType === "container").length >= 2,
     "replanned plan still has source containers (got " +
@@ -3917,6 +3989,15 @@ delete Game.creeps.Sc2;
     assert(sourceScout._signed === "from home" && !Memory.signQueue.W3N3,
         "signRoom scout signs and clears a request with a source room");
 
+    sourceScout.memory._move = { path: "4" };
+    let directScoutDirection = null;
+    sourceScout.move = (direction) => {
+        directScoutDirection = direction;
+        return OK;
+    };
+    global.scoutTrace("step");
+    assert(directScoutDirection === BOTTOM_RIGHT,
+        "scoutTrace(step) sends the cached direction to the single scout directly");
     global.scoutTrace(true);
     assert(Memory.settings.debug.scoutTrace === true,
         "scoutTrace(true) enables opt-in scout route logs");
