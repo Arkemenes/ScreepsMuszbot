@@ -2840,8 +2840,8 @@ room.lookForAt = realLookForAt;
         nativeRoute: true,
         realRoute: false,
     });
-    assert(clearResult === OK && askCalls === 1 && crossMover.directMoveDirection === RIGHT,
-        "a multi-room route follows its cached step directly when it is empty");
+    assert(clearResult === OK && askCalls === 1 && crossMover.directMoveDirection === null,
+        "a multi-room route leaves an empty normal step to native moveTo");
     crossMover.directMoveDirection = null;
     crossMover.moveTo = () => {
         delete crossMover.memory._move;
@@ -2853,6 +2853,18 @@ room.lookForAt = realLookForAt;
     });
     assert(noPathResult === ERR_NO_PATH && crossMover.directMoveDirection === null,
         "a multi-room ERR_NO_PATH never follows a cached step directly");
+    crossMover.moveTo = () => {
+        crossMover.memory._move = { path: "3" };
+        return OK;
+    };
+    crossMover.memory._routeStackDest = "W2N1";
+    crossMover.memory._routeProgressKey = "W1N1:W2N1";
+    crossMover.memory._routeProgressPos = "10:10:W1N1";
+    crossMover.memory._routeNoProgressTicks = 3;
+    crossMover.directMoveDirection = null;
+    const stalledResult = routing.moveToRoom(crossMover, "W2N1", { realRoute: false });
+    assert(stalledResult === OK && crossMover.directMoveDirection === RIGHT,
+        "a confirmed multi-room no-progress stall follows one freshly cached step directly");
     excuseMe.ask = originalAsk;
     room.lookForAt = realLookForAt;
 }

@@ -99,6 +99,7 @@ detalhe.
 | 0087 | [Trace de colisão de intenção do scout](features/0087-scout-intent-collision-trace/spec.md) | done | loga no fim do tick quem também declarou movimento para a próxima tile do scout |
 | 0088 | [Cortesia de tráfego em rota multi-sala](features/0088-cross-room-traffic-courtesy/spec.md) | done | `moveToRoom()` reaproveita `excuseMe` quando o próximo passo cacheado está ocupado por creep próprio |
 | 0089 | [Passo cacheado em rota multi-sala](features/0089-cross-room-cached-step/spec.md) | done | `moveToRoom()` emite `move(direction)` após `moveTo()` encontrar caminho, sem esperar um blocker acionar `excuseMe` |
+| 0090 | [Passo cacheado só no stall](features/0090-stall-only-cached-step/spec.md) | done | limita o `move(direction)` direto à recuperação de inércia; percurso normal continua com `moveTo()` |
 
 ## Fila atual
 

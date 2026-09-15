@@ -160,6 +160,11 @@ o primeiro `move(direction)` de `_move.path`, com ou sem bloqueador (ROADMAP
 0089). Isso preserva a busca/cache nativos, mas evita uma rota multi-sala ficar
 inerte até outro creep mover o viajante por `excuseMe`.
 
+O passo direto de 0089 só é usado na recuperação após `routing.noProgressTicks`
+ou quando `excuseMe` efetivamente abriu a próxima tile; no percurso normal,
+`moveTo()` mantém o controle da rota para não forçar direções internas do cache
+a cada tick (ROADMAP 0090).
+
 ## Persistence
 
 | Onde | O quê |

@@ -12,21 +12,29 @@ const roomCache = require("./roomCache");
 const traffic = require("./traffic");
 const excuseMe = require("./excuseMe");
 
-function followCrossRoomStep(creep) {
+function requestCrossRoomClearance(creep) {
     const path = creep.memory._move && creep.memory._move.path;
     const direction = path && Number(path[0]);
     const dx = [0, 0, 1, 1, 1, 0, -1, -1, -1];
     const dy = [0, -1, -1, 0, 1, 1, 1, 0, -1];
-    if (direction < TOP || direction > TOP_LEFT) return;
+    if (direction < TOP || direction > TOP_LEFT) return false;
     const x = creep.pos.x + dx[direction];
     const y = creep.pos.y + dy[direction];
-    if (x >= 0 && x <= 49 && y >= 0 && y <= 49) {
-        const blocker = creep.room
-            .lookForAt(LOOK_CREEPS, x, y)
-            .find((other) => other.my && other.id !== creep.id);
-        if (blocker) excuseMe.ask(creep, x, y);
-    }
+    if (x < 0 || x > 49 || y < 0 || y > 49) return false;
+    const blocker = creep.room
+        .lookForAt(LOOK_CREEPS, x, y)
+        .find((other) => other.my && other.id !== creep.id);
+    if (!blocker || !excuseMe.ask(creep, x, y)) return false;
     creep.move(direction);
+    return true;
+}
+
+function followCachedStep(creep) {
+    const path = creep.memory._move && creep.memory._move.path;
+    const direction = path && Number(path[0]);
+    if (direction < TOP || direction > TOP_LEFT) return false;
+    creep.move(direction);
+    return true;
 }
 
 function scoutTraceNextStep(creep) {
@@ -911,7 +919,7 @@ function moveToRoom(creep, toRoomName, opts) {
             swampCost: costs.swampCost,
             costCallback: hopCostCallback(creep.room.name, nextRoom, hopOpts),
         });
-        if (status === OK) followCrossRoomStep(creep);
+        if (status === OK) requestCrossRoomClearance(creep);
         traceScoutMove(creep, "native-after", targetPos, status);
         return status;
     }
@@ -958,6 +966,7 @@ function moveToRoom(creep, toRoomName, opts) {
         tryComputeRealRoute(creep, toRoomName, opts);
     }
 
+    let forceCachedStep = false;
     const progressKey = creep.room.name + ":" + toRoomName;
     const progressPos = creep.pos.x + ":" + creep.pos.y + ":" + creep.pos.roomName;
     if (creep.memory._routeProgressKey !== progressKey) {
@@ -969,6 +978,7 @@ function moveToRoom(creep, toRoomName, opts) {
         if (creep.memory._routeNoProgressTicks >= config.get("routing.noProgressTicks", 4)) {
             delete creep.memory._move;
             creep.memory._routeNoProgressTicks = 0;
+            forceCachedStep = true;
         }
     } else {
         creep.memory._routeProgressPos = progressPos;
@@ -1169,7 +1179,9 @@ function moveToRoom(creep, toRoomName, opts) {
         swampCost: costs.swampCost,
         costCallback,
     });
-    if (status === OK) followCrossRoomStep(creep);
+    if (status === OK && !requestCrossRoomClearance(creep) && forceCachedStep) {
+        followCachedStep(creep);
+    }
     traceScoutMove(creep, "route-after", targetPos, status);
 
     if (status !== ERR_NO_PATH) {
