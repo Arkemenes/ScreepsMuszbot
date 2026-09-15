@@ -26,7 +26,7 @@ tile ocupada.
 ## Out of scope
 
 - Trocar o PathFinder, custos ou destino da rota.
-- Alterar o limite configurável de stall.
+- Alterar o algoritmo de PathFinder, custos ou destino da rota.
 
 ## Acceptance criteria
 
@@ -34,6 +34,11 @@ tile ocupada.
 2. O smoke test assert que uma tile ocupada ainda abre passagem e move o viajante.
 3. O smoke test assert que o limiar de falta de progresso emite um passo direto uma única vez após renovar `_move`.
 4. Smoke e build permanecem verdes.
+
+## Decision
+
+O limiar padrão de `routing.noProgressTicks` é 2: um tick preserva a intenção
+nativa e o segundo tick sem avanço usa a recuperação pontual.
 
 ## Constitution check
 

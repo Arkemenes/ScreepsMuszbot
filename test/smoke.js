@@ -2860,7 +2860,7 @@ room.lookForAt = realLookForAt;
     crossMover.memory._routeStackDest = "W2N1";
     crossMover.memory._routeProgressKey = "W1N1:W2N1";
     crossMover.memory._routeProgressPos = "10:10:W1N1";
-    crossMover.memory._routeNoProgressTicks = 3;
+    crossMover.memory._routeNoProgressTicks = 1;
     crossMover.directMoveDirection = null;
     const stalledResult = routing.moveToRoom(crossMover, "W2N1", { realRoute: false });
     assert(stalledResult === OK && crossMover.directMoveDirection === RIGHT,
