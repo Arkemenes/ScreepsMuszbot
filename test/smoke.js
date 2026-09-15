@@ -3861,8 +3861,10 @@ delete Game.creeps.Sc2;
     const routing = require(path.join(PROJECT, "src/utils/routing"));
     const originalMoveToRoom = routing.moveToRoom;
     const routedTo = [];
-    routing.moveToRoom = (creep, roomName) => {
+    const routedOptions = [];
+    routing.moveToRoom = (creep, roomName, opts) => {
         routedTo.push(roomName);
+        routedOptions.push(opts);
         return OK;
     };
     const sourceRoom = Object.assign({}, room, { name: "W2N2" });
@@ -3893,6 +3895,8 @@ delete Game.creeps.Sc2;
     scout.run(sourceScout);
     assert(routedTo[0] === "W2N2",
         "signRoom scout travels to the source room first");
+    assert(!routedOptions[0].nativeRoute,
+        "signRoom uses the standard route flow with ERR_NO_PATH recovery");
     assert(!sourceScout.memory._routeAvoid && !sourceScout.memory._realRoute,
         "a new signRoom mission clears stale route state before travelling");
     sourceScout.room = sourceRoom;
@@ -3912,6 +3916,17 @@ delete Game.creeps.Sc2;
     scout.run(sourceScout);
     assert(sourceScout._signed === "from home" && !Memory.signQueue.W3N3,
         "signRoom scout signs and clears a request with a source room");
+
+    global.scoutTrace(true);
+    assert(Memory.settings.debug.scoutTrace === true,
+        "scoutTrace(true) enables opt-in scout route logs");
+    let scoutTraceError = null;
+    try { global.scoutTrace(); } catch (error) { scoutTraceError = error; }
+    assert(!scoutTraceError,
+        "scoutTrace() snapshots the single scout without throwing");
+    global.scoutTrace(false);
+    assert(Memory.settings.debug.scoutTrace === false,
+        "scoutTrace(false) disables opt-in scout route logs");
 
     global.signRoom("W3N3", "legacy");
     assert(Memory.signQueue.W3N3 === "legacy",

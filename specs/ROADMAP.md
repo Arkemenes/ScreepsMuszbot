@@ -93,6 +93,9 @@ detalhe.
 
 | 0082 | [Optional source room for signRoom](features/0082-sign-room-source/spec.md) | done | `signRoom(roomName, text, fromRoomName?)` permite ao scout retornar primeiro a uma sala de origem antes de viajar ao destino; chamadas antigas e entradas legadas da fila continuam válidas |
 | 0083 | [Rampart pública no pathing multi-room](features/0083-multiroom-public-rampart-pathing/spec.md) | done | pathing entre salas bloqueia walls/ramparts privadas conhecidas, mas considera ramparts públicas de terceiros como caminho válido; pathing intra-room permanece inalterado |
+| 0084 | [Custo de rota baseado no corpo do creep](features/0084-body-aware-route-cost/spec.md) | done | custo de plain/swamp derivado de `MOVE` e partes ativas; carga de `CARRY` não altera fadiga |
+| 0085 | [Trace de rota do scout](features/0085-scout-route-trace/spec.md) | done | `scoutTrace()` mostra snapshot; `scoutTrace(true)` liga logs opt-in de rota para investigar stalls sem mudar movimento |
+| 0086 | [Fallback do nativeRoute do scout](features/0086-scout-native-route-fallback/spec.md) | done | `signRoom` deixa o ramo que devolve `ERR_NO_PATH` repetidamente e volta ao fluxo padrão de rota |
 
 ## Fila atual
 

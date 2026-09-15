@@ -31,6 +31,53 @@ global.signRoom = function (roomName, text, fromRoomName) {
 global.signQueue = function () {
     console.log(JSON.stringify(Memory.signQueue || {}));
 };
+global.scoutTrace = function (enabled) {
+    if (typeof enabled === "boolean") {
+        Memory.settings = Memory.settings || {};
+        Memory.settings.debug = Memory.settings.debug || {};
+        Memory.settings.debug.scoutTrace = enabled;
+        console.log("[scoutTrace] " + (enabled ? "enabled" : "disabled"));
+        return;
+    }
+
+    const scouts = Object.keys(Game.creeps)
+        .map((name) => Game.creeps[name])
+        .filter((creep) => creep.memory.role === "scout");
+    if (scouts.length !== 1) {
+        console.log("[scoutTrace] expected 1 scout, found " + scouts.length);
+        return;
+    }
+
+    const creep = scouts[0];
+    const memory = creep.memory;
+    console.log(JSON.stringify({
+        tick: Game.time,
+        name: creep.name,
+        pos: creep.room.name + ":" + creep.pos.x + "," + creep.pos.y,
+        fatigue: creep.fatigue,
+        sign: {
+            mission: memory._signMissionKey,
+            phase: memory.signTravelTarget,
+            since: memory.signTravelSince,
+            sourceReached: memory._signSourceReached,
+        },
+        route: {
+            moveDest: memory._move && memory._move.dest,
+            realRoute: memory._realRoute,
+            realRouteDest: memory._realRouteDest,
+            realRouteFrom: memory._realRouteFrom,
+            stack: memory._routeStack,
+            stackDest: memory._routeStackDest,
+            trail: memory._routeTrail,
+            avoid: memory._routeAvoid,
+            retreatTo: memory._routeRetreatTo,
+            noPath: memory._routeNoPathTicks,
+            progressKey: memory._routeProgressKey,
+            progressPos: memory._routeProgressPos,
+            noProgress: memory._routeNoProgressTicks,
+        },
+    }));
+};
 
 function pendingSignRoom() {
     const q = Memory.signQueue || {};
@@ -161,6 +208,11 @@ var scout = {
                 delete creep.memory._routeStack;
                 delete creep.memory._routeStackDest;
                 delete creep.memory._routeTrail;
+                delete creep.memory._routeRetreatTo;
+                delete creep.memory._routeNoPathTicks;
+                delete creep.memory._routeProgressKey;
+                delete creep.memory._routeProgressPos;
+                delete creep.memory._routeNoProgressTicks;
                 delete creep.memory._realRoute;
                 delete creep.memory._realRouteDest;
                 delete creep.memory._realRouteFrom;
@@ -172,19 +224,35 @@ var scout = {
             const travelRoom =
                 sourceRoom && !creep.memory._signSourceReached ? sourceRoom : signRoom;
             if (creep.room.name !== signRoom) {
+                const travelPhase = sourceRoom && creep.room.name !== sourceRoom
+                    ? "from:" + sourceRoom
+                    : "to:" + signRoom;
+                if (creep.memory.signTravelTarget !== travelPhase) {
+                    // A fresh leg of the same mission must not inherit the old
+                    // route/retreat/progress bookkeeping from the last room hop.
+                    delete creep.memory._move;
+                    delete creep.memory._routeAvoid;
+                    delete creep.memory._routeAvoidSeenLen;
+                    delete creep.memory._routeStack;
+                    delete creep.memory._routeStackDest;
+                    delete creep.memory._routeTrail;
+                    delete creep.memory._routeRetreatTo;
+                    delete creep.memory._routeNoPathTicks;
+                    delete creep.memory._routeProgressKey;
+                    delete creep.memory._routeProgressPos;
+                    delete creep.memory._routeNoProgressTicks;
+                    delete creep.memory._realRoute;
+                    delete creep.memory._realRouteDest;
+                    delete creep.memory._realRouteFrom;
+                    creep.memory.signTravelTarget = travelPhase;
+                    creep.memory.signTravelSince = Game.time;
+                }
                 // stall guard: give up on this one-off request if it never
                 // gets there (e.g. the destination turned out unreachable -
                 // moveToRoom now refuses it outright once blacklisted,
                 // ROADMAP 0060, but that return value isn't checked here;
                 // this catches it either way) instead of camping on it with
                 // zero feedback for the life of the blacklist
-                const travelPhase = sourceRoom && creep.room.name !== sourceRoom
-                    ? "from:" + sourceRoom
-                    : "to:" + signRoom;
-                if (creep.memory.signTravelTarget !== travelPhase) {
-                    creep.memory.signTravelTarget = travelPhase;
-                    creep.memory.signTravelSince = Game.time;
-                }
                 const travelLimit = config.get("routing.travelStallLimit", 500);
                 if (Game.time - creep.memory.signTravelSince > travelLimit) {
                     delete Memory.signQueue[signRoom];
@@ -199,7 +267,6 @@ var scout = {
                 routing.moveToRoom(creep, travelRoom, {
                     range: 20,
                     reusePath: 30,
-                    nativeRoute: true,
                 });
                 return;
             }
