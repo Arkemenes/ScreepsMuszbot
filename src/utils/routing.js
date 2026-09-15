@@ -12,19 +12,21 @@ const roomCache = require("./roomCache");
 const traffic = require("./traffic");
 const excuseMe = require("./excuseMe");
 
-function requestCrossRoomClearance(creep) {
+function followCrossRoomStep(creep) {
     const path = creep.memory._move && creep.memory._move.path;
     const direction = path && Number(path[0]);
     const dx = [0, 0, 1, 1, 1, 0, -1, -1, -1];
     const dy = [0, -1, -1, 0, 1, 1, 1, 0, -1];
-    if (!direction || !dx[direction] && !dy[direction]) return;
+    if (direction < TOP || direction > TOP_LEFT) return;
     const x = creep.pos.x + dx[direction];
     const y = creep.pos.y + dy[direction];
-    if (x < 0 || x > 49 || y < 0 || y > 49) return;
-    const blocker = creep.room
-        .lookForAt(LOOK_CREEPS, x, y)
-        .find((other) => other.my && other.id !== creep.id);
-    if (blocker && excuseMe.ask(creep, x, y)) creep.move(direction);
+    if (x >= 0 && x <= 49 && y >= 0 && y <= 49) {
+        const blocker = creep.room
+            .lookForAt(LOOK_CREEPS, x, y)
+            .find((other) => other.my && other.id !== creep.id);
+        if (blocker) excuseMe.ask(creep, x, y);
+    }
+    creep.move(direction);
 }
 
 function scoutTraceNextStep(creep) {
@@ -909,7 +911,7 @@ function moveToRoom(creep, toRoomName, opts) {
             swampCost: costs.swampCost,
             costCallback: hopCostCallback(creep.room.name, nextRoom, hopOpts),
         });
-        requestCrossRoomClearance(creep);
+        if (status === OK) followCrossRoomStep(creep);
         traceScoutMove(creep, "native-after", targetPos, status);
         return status;
     }
@@ -1167,7 +1169,7 @@ function moveToRoom(creep, toRoomName, opts) {
         swampCost: costs.swampCost,
         costCallback,
     });
-    requestCrossRoomClearance(creep);
+    if (status === OK) followCrossRoomStep(creep);
     traceScoutMove(creep, "route-after", targetPos, status);
 
     if (status !== ERR_NO_PATH) {

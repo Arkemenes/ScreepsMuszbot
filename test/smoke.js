@@ -2835,12 +2835,24 @@ room.lookForAt = realLookForAt;
     assert(occupiedResult === OK && askCalls === 1 && crossMover.directMoveDirection === RIGHT,
         "a multi-room route asks an allied creep blocking its next cached step to make way and enters it");
     room.lookForAt = () => [];
+    crossMover.directMoveDirection = null;
     const clearResult = routing.moveToRoom(crossMover, "W2N1", {
         nativeRoute: true,
         realRoute: false,
     });
-    assert(clearResult === OK && askCalls === 1,
-        "a multi-room route does not ask for clearance when its next cached step is empty");
+    assert(clearResult === OK && askCalls === 1 && crossMover.directMoveDirection === RIGHT,
+        "a multi-room route follows its cached step directly when it is empty");
+    crossMover.directMoveDirection = null;
+    crossMover.moveTo = () => {
+        delete crossMover.memory._move;
+        return ERR_NO_PATH;
+    };
+    const noPathResult = routing.moveToRoom(crossMover, "W2N1", {
+        nativeRoute: true,
+        realRoute: false,
+    });
+    assert(noPathResult === ERR_NO_PATH && crossMover.directMoveDirection === null,
+        "a multi-room ERR_NO_PATH never follows a cached step directly");
     excuseMe.ask = originalAsk;
     room.lookForAt = realLookForAt;
 }

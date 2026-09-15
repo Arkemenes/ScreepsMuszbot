@@ -155,6 +155,11 @@ a próxima tile cacheada de uma viagem multi-sala está ocupada por creep própr
 As proteções existentes de cadeia, saída válida e miner inamovível permanecem
 as mesmas (ROADMAP 0088).
 
+Depois de `moveTo() === OK`, `utils/routing.moveToRoom()` emite explicitamente
+o primeiro `move(direction)` de `_move.path`, com ou sem bloqueador (ROADMAP
+0089). Isso preserva a busca/cache nativos, mas evita uma rota multi-sala ficar
+inerte até outro creep mover o viajante por `excuseMe`.
+
 ## Persistence
 
 | Onde | O quê |
