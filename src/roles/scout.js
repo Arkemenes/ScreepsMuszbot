@@ -188,6 +188,7 @@ var scout = {
     /** @param {Creep} creep **/
     run: function (creep) {
         silenceAttackAlerts(creep); // ROADMAP 0052 - entering hostile territory is routine here
+        if (creep.spawning) return;
         if (takeCover(creep)) return;
 
         // enforce a single scout empire-wide - extras retire themselves

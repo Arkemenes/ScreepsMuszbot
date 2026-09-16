@@ -2808,6 +2808,7 @@ room.lookForAt = realLookForAt;
         name: "cross-mover",
         room,
         pos: new RoomPosition(10, 10, "W1N1"),
+        fatigue: 0,
         body: [{ type: MOVE, hits: 100 }],
         store: { getUsedCapacity: () => 0 },
         memory: { role: "scout" },
@@ -2858,13 +2859,17 @@ room.lookForAt = realLookForAt;
         return OK;
     };
     crossMover.memory._routeStackDest = "W2N1";
-    crossMover.memory._routeProgressKey = "W1N1:W2N1";
-    crossMover.memory._routeProgressPos = "10:10:W1N1";
-    crossMover.memory._routeNoProgressTicks = 1;
+    delete crossMover.memory._routeProgressKey;
+    delete crossMover.memory._routeProgressPos;
+    delete crossMover.memory._routeNoProgressTicks;
     crossMover.directMoveDirection = null;
+    Memory.settings.routing = { noProgressTicks: 2 };
+    routing.moveToRoom(crossMover, "W2N1", { realRoute: false });
+    routing.moveToRoom(crossMover, "W2N1", { realRoute: false });
     const stalledResult = routing.moveToRoom(crossMover, "W2N1", { realRoute: false });
     assert(stalledResult === OK && crossMover.directMoveDirection === RIGHT,
         "a confirmed multi-room no-progress stall follows one freshly cached step directly");
+    delete Memory.settings.routing;
     excuseMe.ask = originalAsk;
     room.lookForAt = realLookForAt;
 }
@@ -3922,6 +3927,28 @@ assert(Game.creeps.Sc1._signed === "hello world" && !(Memory.signQueue || {}).W1
     "the scout signs the controller and clears the request");
 delete Game.creeps.Sc1;
 delete Game.creeps.Sc2;
+
+// A creep remains visible in Game.creeps while it is still being spawned, but
+// the engine rejects movement intents with ERR_BUSY until spawning ends.
+// Scout missions must remain queued and avoid routing/recovery during that
+// interval.
+{
+    let spawningMoveCalled = false;
+    global.signRoom("W9N9", "wait for spawn");
+    const spawningScout = Object.assign(new Creep(), {
+        id: "scSpawning", name: "ScSpawning", room,
+        spawning: true,
+        memory: { role: "scout", home: "W1N1" },
+        pos: new RoomPosition(20, 20, "W1N1"),
+        moveTo: () => { spawningMoveCalled = true; return ERR_BUSY; },
+    });
+    Game.creeps.ScSpawning = spawningScout;
+    scout.run(spawningScout);
+    assert(!spawningMoveCalled && Memory.signQueue.W9N9 === "wait for spawn",
+        "a spawning scout does not attempt movement or consume its pending mission");
+    delete Game.creeps.ScSpawning;
+    delete Memory.signQueue.W9N9;
+}
 
 // --- sign queue: travel stall guard (ROADMAP 0060 follow-up) - moveToRoom()
 // now refuses a blacklisted destination outright with zero feedback of its

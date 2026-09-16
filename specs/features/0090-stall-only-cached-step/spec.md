@@ -49,4 +49,10 @@ nativa e o segundo tick sem avanço usa a recuperação pontual.
 
 ## Open questions
 
-- Nenhuma.
+- **Bug de produção ainda aberto:** em uma viagem cross-room, `nativeMoveTo()`
+	pode retornar `OK` com `fatigue === 0`, sem contender observado e sem
+	deslocar o scout por dois ticks; um `move(direction)` direto é aceito e o
+	creep anda no tick seguinte. A reprodução, fatos confirmados, hipóteses e o
+	experimento `reusePath:30` versus `reusePath:0` estão em `notes.md`.
+- O guard de `creep.spawning` evita chamadas que retornariam `ERR_BUSY`, mas é
+	apenas proteção auxiliar e não deve ser tratado como causa raiz do stall.

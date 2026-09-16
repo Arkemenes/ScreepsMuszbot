@@ -11,8 +11,10 @@ const config = require("./config");
 const roomCache = require("./roomCache");
 const traffic = require("./traffic");
 const excuseMe = require("./excuseMe");
+const scoutTraceHistory = {};
 
 function requestCrossRoomClearance(creep) {
+    if (!creep.room || typeof creep.room.lookForAt !== "function") return false;
     const path = creep.memory._move && creep.memory._move.path;
     const direction = path && Number(path[0]);
     const dx = [0, 0, 1, 1, 1, 0, -1, -1, -1];
@@ -33,7 +35,8 @@ function followCachedStep(creep) {
     const path = creep.memory._move && creep.memory._move.path;
     const direction = path && Number(path[0]);
     if (direction < TOP || direction > TOP_LEFT) return false;
-    creep.move(direction);
+    const result = creep.move(direction);
+    traceScoutMove(creep, "cached-step", null, result, { direction });
     return true;
 }
 
@@ -64,17 +67,28 @@ function scoutTraceNextStep(creep) {
     };
 }
 
-function traceScoutMove(creep, action, targetPos, status) {
+function traceScoutMove(creep, action, targetPos, status, detail) {
     if (
         creep.memory.role !== "scout" ||
         !Memory.settings ||
         !Memory.settings.debug ||
         !Memory.settings.debug.scoutTrace
     ) return;
+    const traceKey = creep.id || creep.name;
+    const previous = scoutTraceHistory[traceKey];
+    const previousTick = previous && previous.tick === Game.time - 1 ? previous : null;
+    const position = {
+        room: creep.room.name,
+        x: creep.pos.x,
+        y: creep.pos.y,
+    };
     console.log("[scoutTrace] " + JSON.stringify({
         tick: Game.time,
         action,
         status,
+        detail,
+        progressKey: creep.memory._routeProgressKey,
+        progressPos: creep.memory._routeProgressPos,
         pos: creep.room.name + ":" + creep.pos.x + "," + creep.pos.y,
         target: targetPos && targetPos.roomName + ":" + targetPos.x + "," + targetPos.y,
         fatigue: creep.fatigue,
@@ -87,9 +101,15 @@ function traceScoutMove(creep, action, targetPos, status) {
         avoid: creep.memory._routeAvoid,
         retreatTo: creep.memory._routeRetreatTo,
         noPath: creep.memory._routeNoPathTicks,
+        previousTick: previousTick && previousTick.position,
+        movedSincePreviousTick: previousTick &&
+            (previousTick.position.room !== position.room ||
+                previousTick.position.x !== position.x ||
+                previousTick.position.y !== position.y),
     }));
     if (action === "native-after" || action === "route-after") {
         traffic.watchScoutMove(creep);
+        scoutTraceHistory[traceKey] = { tick: Game.time, position };
     }
 }
 
@@ -871,6 +891,10 @@ function tryComputeRealRoute(creep, toRoomName, opts) {
 // above, bounded by the number of dead ends actually found either way.
 function moveToRoom(creep, toRoomName, opts) {
     opts = opts || {};
+    traceScoutMove(creep, "route-enter", null, undefined, {
+        destination: toRoomName,
+        nativeRoute: !!opts.nativeRoute,
+    });
     const range = opts.range === undefined ? 20 : opts.range;
     const moveOpts = {
         range: 20,
@@ -1169,7 +1193,12 @@ function moveToRoom(creep, toRoomName, opts) {
     const moveTarget = singleHop ? nextHop : toRoomName;
     const moveRange = 0;
     const targetPos = hopEntryPosition(creep.room.name, moveTarget);
-    traceScoutMove(creep, "route-before", targetPos);
+    traceScoutMove(creep, "route-before", targetPos, undefined, {
+        forceCachedStep,
+        progressKey,
+        progressPos,
+        noProgress: creep.memory._routeNoProgressTicks,
+    });
     const status = creep.moveTo(targetPos, {
         range: moveRange,
         reusePath: moveOpts.reusePath,

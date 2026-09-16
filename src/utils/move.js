@@ -6,6 +6,47 @@
 const roomCache = require("./roomCache");
 const excuseMe = require("./excuseMe");
 
+function scoutMoveDebugEnabled(creep) {
+    return !!(
+        creep &&
+        creep.memory &&
+        creep.memory.role === "scout" &&
+        Memory.settings &&
+        Memory.settings.debug &&
+        Memory.settings.debug.scoutTrace
+    );
+}
+
+function moveState(creep) {
+    const cached = creep.memory && creep.memory._move;
+    return {
+        room: creep.room && creep.room.name,
+        x: creep.pos && creep.pos.x,
+        y: creep.pos && creep.pos.y,
+        path: cached && cached.path,
+        dest: cached && cached.dest,
+    };
+}
+
+function traceNativeMove(creep, target, opts, before, status) {
+    if (!scoutMoveDebugEnabled(creep)) return;
+    const after = moveState(creep);
+    console.log("[scoutTrace] " + JSON.stringify({
+        tick: Game.time,
+        action: "native-moveTo",
+        target: target && target.roomName + ":" + target.x + "," + target.y,
+        status,
+        before,
+        after,
+        samePosition: before.room === after.room &&
+            before.x === after.x && before.y === after.y,
+        fatigue: creep.fatigue,
+        reusePath: opts && opts.reusePath,
+        maxOps: opts && opts.maxOps,
+        maxRooms: opts && opts.maxRooms,
+    }));
+}
+
 // Captured before anything overrides it (prototypes/move.js).
 const nativeMoveTo = Creep.prototype.moveTo;
 
@@ -113,7 +154,10 @@ function travel(creep, target, opts) {
 
     const destPos = target.pos || target;
     if (!(destPos instanceof RoomPosition)) {
-        return nativeMoveTo.call(creep, target, opts);
+        const before = moveState(creep);
+        const status = nativeMoveTo.call(creep, target, opts);
+        traceNativeMove(creep, target, opts, before, status);
+        return status;
     }
 
     // cross-room: let the engine handle route finding
@@ -122,7 +166,10 @@ function travel(creep, target, opts) {
         if (blockedCache) {
             opts = Object.assign({}, opts, { reusePath: 0 });
         }
-        return nativeMoveTo.call(creep, target, opts);
+        const before = moveState(creep);
+        const status = nativeMoveTo.call(creep, target, opts);
+        traceNativeMove(creep, destPos, opts, before, status);
+        return status;
     }
 
     const range = opts.range == null ? 1 : opts.range;

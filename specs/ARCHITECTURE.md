@@ -165,6 +165,18 @@ ou quando `excuseMe` efetivamente abriu a próxima tile; no percurso normal,
 `moveTo()` mantém o controle da rota para não forçar direções internas do cache
 a cada tick (ROADMAP 0090).
 
+### Investigação aberta: `nativeMoveTo()` sem deslocamento
+
+Há uma reprodução em produção documentada em
+`specs/features/0090-stall-only-cached-step/notes.md`: depois de o scout sair
+de `spawning`, `nativeMoveTo()` retorna `OK` com `fatigue === 0`, sem contender
+observado e sem deslocamento por dois ticks; um `move(direction)` direto é
+aceito e o creep anda no tick seguinte. O trace opt-in (`scoutTrace(true)`) é
+diagnóstico, não prova que `_move.path` seja a intenção efetivamente aplicada
+pelo motor. A causa raiz permanece aberta; a próxima investigação deve
+comparar `reusePath:30` com `reusePath:0` no mesmo alvo antes de alterar o
+algoritmo de movimento novamente.
+
 ## Persistence
 
 | Onde | O quê |
