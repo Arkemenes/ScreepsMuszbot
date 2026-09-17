@@ -7188,6 +7188,13 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
     });
     const [ox, oy] = observerLogic.roomNameToXY("E20N20");
 
+    // the priority-scoring assertions below expect every run() call to
+    // actually explore - neutralize the exploreInterval throttle (default
+    // 10 ticks) for them; the throttle itself gets its own assertions
+    // further down.
+    Memory.settings = Memory.settings || {};
+    Memory.settings.observer = { exploreInterval: 1 };
+
     observed = null;
     observerLogic.run(obs2);
     assert(observed !== null, "with nothing pending, the observer explores some room");
@@ -7232,12 +7239,12 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
         "a room with more hostiles is re-observed more often than a merely stale quiet one");
 
     Memory.settings = Memory.settings || {};
-    Memory.settings.observer = { militaryWeight: 0 };
+    Memory.settings.observer = { exploreInterval: 1, militaryWeight: 0 };
     observed = null;
     observerLogic.run(obs2);
     assert(observed === warmRoom,
         "militaryWeight=0 falls back to plain least-recently-seen (staleness only)");
-    delete Memory.settings.observer;
+    Memory.settings.observer = { exploreInterval: 1 };
 
     const ancientRoom = observerLogic.xyToRoomName(ox - 5, oy - 5);
     Memory.rooms[ancientRoom] = { lastVisit: 1 }; // enormous staleness, no enemies
@@ -7249,6 +7256,36 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
     delete Memory.rooms[hotRoom];
     delete Memory.rooms[ancientRoom];
 
+    for (let dx = -10; dx <= 10; dx++) {
+        for (let dy = -10; dy <= 10; dy++) {
+            delete Memory.rooms[observerLogic.xyToRoomName(ox + dx, oy + dy)];
+        }
+    }
+
+    // --- exploration throttle (observer.exploreInterval, default 10 ticks)
+    // - the priority scan is real per-tick cost (a (2*OBSERVER_RANGE+1)^2
+    // square of Memory.rooms lookups), so a repeat decision is throttled;
+    // serveLayoutRequests/serveObserveRequests stay unthrottled (tested
+    // above, both fire every call regardless).
+    for (let dx = -10; dx <= 10; dx++) {
+        for (let dy = -10; dy <= 10; dy++) {
+            Memory.rooms[observerLogic.xyToRoomName(ox + dx, oy + dy)] = { lastVisit: 1000 };
+        }
+    }
+    delete Memory.settings.observer; // back to the default exploreInterval (10)
+    Game.time += 20; // clear of any interval window left by the tests above
+    observed = null;
+    observerLogic.run(obs2);
+    assert(observed !== null, "an explore decision fires once the interval has elapsed");
+    observed = null;
+    observerLogic.run(obs2);
+    assert(observed === null,
+        "a repeat explore decision is throttled within observer.exploreInterval");
+    Memory.settings.observer = { exploreInterval: 1 };
+    observed = null;
+    observerLogic.run(obs2);
+    assert(observed !== null, "exploreInterval=1 explores again immediately");
+    delete Memory.settings.observer;
     for (let dx = -10; dx <= 10; dx++) {
         for (let dy = -10; dy <= 10; dy++) {
             delete Memory.rooms[observerLogic.xyToRoomName(ox + dx, oy + dy)];
@@ -7320,6 +7357,11 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
 {
     const observerLogic = require(path.join(PROJECT, "src/structures/observer"));
     const now = Game.time;
+    // exploration assertions below expect every run() call to actually
+    // explore when idle - neutralize the exploreInterval throttle (already
+    // covered by its own assertions in the single-observer block above).
+    Memory.settings = Memory.settings || {};
+    Memory.settings.observer = { exploreInterval: 1 };
 
     let observed = null;
     let observedBy = null;
@@ -7393,6 +7435,7 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
     }
     delete Game.structures.obsX;
     delete Game.structures.obsY;
+    delete Memory.settings.observer;
 }
 
 // --- determinism: replanning from the same starting state twice gives the

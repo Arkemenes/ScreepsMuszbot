@@ -136,7 +136,7 @@ function moveTraceEnabled() {
 }
 let moveTraceTick = -1;
 let moveTraceTally = {};
-function moveTrace(reason) {
+function moveTrace(creep, reason) {
     if (!moveTraceEnabled()) return;
     if (moveTraceTick !== Game.time) {
         if (moveTraceTick !== -1) {
@@ -145,7 +145,9 @@ function moveTrace(reason) {
         moveTraceTick = Game.time;
         moveTraceTally = {};
     }
-    moveTraceTally[reason] = (moveTraceTally[reason] || 0) + 1;
+    const role = (creep.memory && creep.memory.role) || "unknown";
+    const slot = moveTraceTally[role] || (moveTraceTally[role] = {});
+    slot[reason] = (slot[reason] || 0) + 1;
 }
 
 // console: moveStats(true) turns the tally on, moveStats() prints the last
@@ -290,7 +292,7 @@ function travel(creep, target, opts) {
         }
     }
 
-    moveTrace(repath ? repathReason : "cacheHit");
+    moveTrace(creep, repath ? repathReason : "cacheHit");
 
     if (repath) {
         const avoidCreeps =

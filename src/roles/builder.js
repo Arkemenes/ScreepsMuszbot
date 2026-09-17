@@ -150,12 +150,65 @@ function builderRepairTargets(room) {
     return repairCache[room.name];
 }
 
+// --- TEMPORARY diagnostic (CPU investigation, 2026-09) - gated behind
+// Memory.settings.debug.builderStats, off by default. Measures
+// opportunisticWork's own CPU (Game.cpu.getUsed() delta around the call,
+// summed across every builder each tick) to answer "what would we save by
+// disabling it" with a real number instead of a guess. Remove once the
+// investigation is done - not meant to stay long-term.
+function builderTraceEnabled() {
+    return !!(
+        Memory.settings &&
+        Memory.settings.debug &&
+        Memory.settings.debug.builderStats
+    );
+}
+let builderTraceTick = -1;
+let builderTraceCpu = 0;
+let builderTraceCalls = 0;
+function builderTrace(cpuDelta) {
+    if (builderTraceTick !== Game.time) {
+        if (builderTraceTick !== -1) {
+            Memory.builderDebug = {
+                tick: builderTraceTick,
+                opportunisticCpu: builderTraceCpu,
+                calls: builderTraceCalls,
+            };
+        }
+        builderTraceTick = Game.time;
+        builderTraceCpu = 0;
+        builderTraceCalls = 0;
+    }
+    builderTraceCpu += cpuDelta;
+    builderTraceCalls++;
+}
+
+// console: builderStats(true) turns the tally on, builderStats() prints the
+// last finalized tick's numbers, builderStats(false) turns it back off.
+// TEMPORARY - see the block comment above.
+global.builderStats = function (enabled) {
+    if (typeof enabled === "boolean") {
+        Memory.settings = Memory.settings || {};
+        Memory.settings.debug = Memory.settings.debug || {};
+        Memory.settings.debug.builderStats = enabled;
+        console.log("[builderStats] " + (enabled ? "enabled" : "disabled"));
+        return;
+    }
+    console.log("[builderStats] " + JSON.stringify(Memory.builderDebug || {}));
+};
+
 var builder = {
     /** @param {Creep} creep **/
     run: function (creep) {
         if (takeCover(creep)) return;
 
-        opportunisticWork(creep);
+        if (builderTraceEnabled()) {
+            const start = Game.cpu.getUsed();
+            opportunisticWork(creep);
+            builderTrace(Game.cpu.getUsed() - start);
+        } else {
+            opportunisticWork(creep);
+        }
 
         if (
             creep.store.getUsedCapacity(RESOURCE_ENERGY) > 0 &&
@@ -307,3 +360,4 @@ var builder = {
 };
 
 module.exports = builder;
+

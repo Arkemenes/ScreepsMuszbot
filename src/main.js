@@ -15,6 +15,34 @@ function maybeEnableProfiler() {
     if (!profilerEnabled && Memory.settings && Memory.settings.profiler) {
         profilerEnabled = true;
         utils.profiler.enable();
+        // screeps-profiler only auto-wraps the engine prototypes it's
+        // handed (Profiler.prototypes) - our own dispatch layer
+        // (roleLogic[role].run(), structureLogic[type].run(), and the big
+        // per-room passes) lives on plain objects/functions, so a profile()
+        // run showed nothing for any of it. Register those too, once, right
+        // here - same wrap, same on/off switch, no extra cost when the
+        // profiler is disabled.
+        for (const role in creepLogic) {
+            utils.profiler.registerObject(creepLogic[role], "role:" + role);
+        }
+        for (const type in structureLogic) {
+            utils.profiler.registerObject(
+                structureLogic[type],
+                "structure:" + type
+            );
+        }
+        roomLogic.planCity = utils.profiler.registerFN(
+            roomLogic.planCity,
+            "roomLogic.planCity"
+        );
+        roomLogic.getIntel = utils.profiler.registerFN(
+            roomLogic.getIntel,
+            "roomLogic.getIntel"
+        );
+        roomLogic.spawning = utils.profiler.registerFN(
+            roomLogic.spawning,
+            "roomLogic.spawning"
+        );
     }
 }
 

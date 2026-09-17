@@ -151,6 +151,22 @@ function explorePriority(observers) {
     return true;
 }
 
+// explorePriority() scans a (2*OBSERVER_RANGE+1)^2 square of room names
+// every time it runs - real cost, and staleness only grows slowly, so
+// there's no need to re-decide every single tick with nothing else pending.
+// Throttled to once every `observer.exploreInterval` ticks (default 10);
+// serveLayoutRequests/serveObserveRequests above stay unthrottled - those
+// are cheap (bounded by pending request count, not room count) and the
+// player is actively waiting on them.
+let exploreTick = -1;
+function throttledExplore(observers) {
+    const interval = config.get("observer.exploreInterval", 10);
+    if (interval > 1 && Game.time - exploreTick < interval) return false;
+    const acted = explorePriority(observers);
+    if (acted) exploreTick = Game.time;
+    return acted;
+}
+
 // module-heap only (constitution §3: derived/transient, never Memory) -
 // tracks whether some observer already acted this tick, so a second (third,
 // ...) observer's run() call in the same tick is a no-op (ROADMAP 0056).
@@ -167,7 +183,7 @@ var observer = {
             // exactly as before ROADMAP 0056, no coordination overhead.
             if (serveLayoutRequests([structure])) return;
             if (serveObserveRequests([structure])) return;
-            explorePriority([structure]);
+            throttledExplore([structure]);
             return;
         }
 
@@ -179,7 +195,7 @@ var observer = {
         observedThisTick =
             serveLayoutRequests(observers) ||
             serveObserveRequests(observers) ||
-            explorePriority(observers);
+            throttledExplore(observers);
     },
 };
 

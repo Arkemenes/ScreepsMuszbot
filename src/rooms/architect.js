@@ -35,6 +35,55 @@ let layoutKey = {
 };
 _.merge(layoutKey, _.invert(layoutKey));
 
+// visualizeStructures()/createConstructionSites() both do a full scan of
+// every planned building (300+ in a mature room) - cheap once, wasteful
+// done unconditionally EVERY tick forever, even in a room that's fully
+// built and hasn't changed since the last scan. planScanDue() skips the
+// scan on quiet ticks via a cheap per-room fingerprint (two array lengths,
+// both already cached by roomCache) and only pays the full cost again once
+// that fingerprint actually changes - built or destroyed, by decay, an
+// enemy, or the player via the UI, none of which fire an event we could
+// hook, so re-reading current state is the only real source of truth.
+// `forceInterval` bounds the fallback: even with no detected change, force
+// a rescan periodically as a safety net for the rare "same counts,
+// different tile" edge case (one structure destroyed, a different one of
+// the same type appears the same tick).
+let planScanState = {};
+function planScanDue(key, room, forceInterval) {
+    const fingerprint =
+        roomCache.structures(room).length +
+        ":" +
+        roomCache.constructionSites(room).length;
+    const cached = planScanState[key];
+    const due =
+        !cached ||
+        cached.fingerprint !== fingerprint ||
+        Game.time - cached.tick >= forceInterval;
+    if (due) planScanState[key] = { fingerprint, tick: Game.time };
+    return due;
+}
+
+// console: planVisual(50) sets the preview's forced-refresh interval
+// (ticks) - it still redraws immediately on any real change regardless of
+// this number (see planScanDue() above); planVisual(false) turns the
+// preview off entirely; planVisual() resets to the default (50). Doesn't
+// affect createConstructionSites()'s own (separate) forced interval -
+// planner.scanForceInterval, config-only, no console toggle needed for
+// that one.
+global.planVisual = function (arg) {
+    Memory.settings = Memory.settings || {};
+    Memory.settings.planner = Memory.settings.planner || {};
+    if (arg === false) {
+        Memory.settings.planner.visualizeEnabled = false;
+        console.log("[planVisual] disabled");
+        return;
+    }
+    const interval = Number.isInteger(arg) && arg > 0 ? arg : 50;
+    Memory.settings.planner.visualizeEnabled = true;
+    Memory.settings.planner.visualizeForceInterval = interval;
+    console.log("[planVisual] enabled, forceInterval=" + interval);
+};
+
 // `opts.preview`: plan a room we don't own yet, so planLayout() (console) /
 // the scout's layout task (roles/scout.js) can show what the base layout
 // WOULD look like once scouted, without owning it - same 13-step algorithm,
@@ -50,7 +99,15 @@ function planCity(room, opts) {
     }
 
     const existingPlan = planStore.getPlan(roomName);
-    if (existingPlan) {
+    if (
+        existingPlan &&
+        config.get("planner.visualizeEnabled", true) &&
+        planScanDue(
+            roomName + ":visualize",
+            room,
+            config.get("planner.visualizeForceInterval", 50)
+        )
+    ) {
         visualizeStructures(existingPlan.buildings, roomName);
     }
 
@@ -61,7 +118,12 @@ function planCity(room, opts) {
         !opts.preview &&
         existingPlan &&
         (Memory.rooms[roomName].planned ||
-            (Memory.rooms[roomName].planStep || 0) >= 3)
+            (Memory.rooms[roomName].planStep || 0) >= 3) &&
+        planScanDue(
+            roomName + ":build",
+            room,
+            config.get("planner.scanForceInterval", 50)
+        )
     ) {
         createConstructionSites(room);
     }

@@ -1,8 +1,18 @@
 // Every stored / dropped energy source in a room, all equal priority - the
 // caller just takes whichever is closest by path. Shared by builder.js and
 // pioneer.js (ROADMAP 0037) - was a local copy in builder.js, extracted here
-// once a second role needed the exact same list (constitution §5).
+// once a second role needed the exact same list (constitution §5). Cached
+// per tick per room (roomCache.js's own idiom) - every builder/pioneer in
+// the room used to rebuild this same list from scratch.
+let energyPilesTick = -1;
+let energyPilesCache = {};
 function energyPiles(room) {
+    if (energyPilesTick !== Game.time) {
+        energyPilesTick = Game.time;
+        energyPilesCache = {};
+    }
+    if (energyPilesCache[room.name]) return energyPilesCache[room.name];
+
     const piles = [];
 
     for (const r of room.find(FIND_DROPPED_RESOURCES)) {
@@ -26,6 +36,7 @@ function energyPiles(room) {
         if (isStore || isReceivingLink) piles.push(s);
     }
 
+    energyPilesCache[room.name] = piles;
     return piles;
 }
 
@@ -45,9 +56,10 @@ function findNearbyFullSource(creep) {
 // true when the room runs both collector links (next to a source) and
 // non-collector links (the receiving end of the link network)
 function hasLinkNetwork(room) {
-    const links = room.find(FIND_MY_STRUCTURES, {
-        filter: { structureType: STRUCTURE_LINK },
-    });
+    const links = _.filter(
+        roomCache.myStructures(room),
+        (s) => s.structureType === STRUCTURE_LINK
+    );
     if (links.length < 2) return false;
 
     const collectors = links.filter((link) => link.isCollector()).length;
@@ -61,10 +73,8 @@ function hasLinkNetwork(room) {
 function receivingLink(room, pos, opts) {
     opts = opts || {};
     let links = _.filter(
-        room.find(FIND_MY_STRUCTURES, {
-            filter: { structureType: STRUCTURE_LINK },
-        }),
-        (l) => !l.isCollector()
+        roomCache.myStructures(room),
+        (l) => l.structureType === STRUCTURE_LINK && !l.isCollector()
     );
     if (opts.awayFromController && room.controller) {
         const away = _.filter(
