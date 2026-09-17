@@ -100,7 +100,9 @@ detalhe.
 | 0088 | [Cortesia de tráfego em rota multi-sala](features/0088-cross-room-traffic-courtesy/spec.md) | done | `moveToRoom()` reaproveita `excuseMe` quando o próximo passo cacheado está ocupado por creep próprio |
 | 0089 | [Passo cacheado em rota multi-sala](features/0089-cross-room-cached-step/spec.md) | done | `moveToRoom()` emite `move(direction)` após `moveTo()` encontrar caminho, sem esperar um blocker acionar `excuseMe` |
 | 0090 | [Passo cacheado só no stall](features/0090-stall-only-cached-step/spec.md) | done | limita o `move(direction)` direto à recuperação de inércia; percurso normal continua com `moveTo()` |
-| 0091 | [Política global de tiers para recursos e ações](features/0091-resource-priority-tiers/spec.md) | done | snapshot econômico cacheado por sala/tick, API declarativa de prioridade e migração de hauler/remoteHauler/bootstrap; abastecimento opcional respeita criticidade; terminal intersalas fica para feature futura |
+| 0091 | [Política global de tiers para recursos e ações](features/0091-resource-priority-tiers/spec.md) | done | snapshot econômico cacheado por sala/tick, API declarativa de prioridade e migração de hauler/remoteHauler/bootstrap; produção mínima vence refill de torre crítica; abastecimento opcional respeita criticidade; terminal intersalas fica para feature futura |
+| 0092 | [Miner na cascata global de energia](features/0092-miner-global-energy-cascade/spec.md) | done | miner usa o estado econômico global e os thresholds compartilhados da torre para escolher torre de source, link ou container; defesa ativa mantém prioridade da torre |
+| 0093 | [Builder aguarda estabilidade econômica](features/0093-builder-stability-gate/spec.md) | done | construção de sites espera `stable`/`abundant`; reparo crítico continua permitido durante instabilidade |
 
 ## Fila atual
 

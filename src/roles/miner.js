@@ -4,6 +4,7 @@ const census = require("../utils/census");
 const { takeCover } = require("../utils/combat");
 const { roomNeeds } = require("../rooms/needs");
 const config = require("../utils/config");
+const resourceTiers = require("../utils/resourceTiers");
 const names = require("../utils/names");
 const planStore = require("../utils/planStore");
 
@@ -308,9 +309,10 @@ function distribute(creep) {
     if (creep.store[RESOURCE_ENERGY] === 0) return;
 
     const mem = Memory.rooms[creep.room.name] || {};
+    const economy = resourceTiers.getEconomySnapshot(creep.room);
     const reserve = mem.defenseActive
-        ? config.get("miner.towerReserveUnderAttack", 0.9)
-        : config.get("miner.towerReserve", 0.5);
+        ? config.get("tower.criticalRatioUnderAttack", 0.8)
+        : config.get("tower.criticalRatio", 0.5);
     const cap = tower ? tower.store.getCapacity(RESOURCE_ENERGY) : 0;
 
     // "surplus" gates ONLY the beyond-reserve top-off (branch 4 below) - the
@@ -325,8 +327,12 @@ function distribute(creep) {
             (l) => l.store.getFreeCapacity(RESOURCE_ENERGY) > 0
         );
     const mayFeedTower = consumersFull || surplus;
+    const towerBelowReserve = tower && tower.store[RESOURCE_ENERGY] < cap * reserve;
+    const sharedCritical =
+        economy.state === "critical" && economy.reason !== "defense";
+    const feedTowerReserveFirst = towerBelowReserve && !sharedCritical;
 
-    if (tower && tower.store[RESOURCE_ENERGY] < cap * reserve) {
+    if (feedTowerReserveFirst) {
         creep.transfer(tower, RESOURCE_ENERGY);
     } else if (link) {
         creep.transfer(link, RESOURCE_ENERGY);
@@ -337,7 +343,7 @@ function distribute(creep) {
         creep.transfer(container, RESOURCE_ENERGY);
     } else if (
         tower &&
-        mayFeedTower &&
+        (mayFeedTower || towerBelowReserve) &&
         tower.store.getFreeCapacity(RESOURCE_ENERGY) > 0
     ) {
         creep.transfer(tower, RESOURCE_ENERGY);

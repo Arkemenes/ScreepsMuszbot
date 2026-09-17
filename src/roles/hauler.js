@@ -461,16 +461,18 @@ function isSourceDefenseTower(structure) {
 }
 
 function pickDeliver(creep) {
-    let target = creep.pos.findClosestByRange(roomCache.myStructures(creep.room), {
-        filter: (s) => isTowerCritical(s, creep.room),
-    });
-    if (target) return target.id;
-
-    target = creep.pos.findClosestByPath(roomCache.myStructures(creep.room), {
+    // Production continuity comes before optional defense refill: a hungry
+    // spawn/extension must win over a tower sitting below its refill ratio.
+    let target = creep.pos.findClosestByPath(roomCache.myStructures(creep.room), {
         filter: (s) =>
             (s.structureType === STRUCTURE_SPAWN ||
                 s.structureType === STRUCTURE_EXTENSION) &&
             s.store.getFreeCapacity(RESOURCE_ENERGY) > 0,
+    });
+    if (target) return target.id;
+
+    target = creep.pos.findClosestByRange(roomCache.myStructures(creep.room), {
+        filter: (s) => isTowerCritical(s, creep.room),
     });
     if (target) return target.id;
 

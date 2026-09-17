@@ -81,7 +81,11 @@ Invalid or missing bodies use the existing fallback costs.
 estados `critical`, `stable` ou `abundant`, a razão dominante e a quantidade
 de consumidores críticos. `stats`, `hauler`, `remoteHauler` e `bootstrap`
 reutilizam esse snapshot; terminal e transferências intersalas continuam fora
-do escopo do 0091.
+do escopo do 0091. `miner.distribute()` também consulta o snapshot para
+decidir entre a reserva da torre de source e os buffers compartilhados, usando
+os thresholds globais `tower.criticalRatio*`. `builder` usa o mesmo snapshot
+para bloquear construção satisfatória em estado `critical`, mas preserva
+reparos críticos.
 
 ### `src/prototypes/`
 

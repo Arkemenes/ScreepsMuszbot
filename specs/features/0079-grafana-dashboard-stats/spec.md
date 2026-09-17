@@ -118,6 +118,11 @@ defeito do dashboard, é o estado real do bot.
 - `screeps-dashboard.json` (cópia versionada) como referência de contrato
   — qualquer rename de campo nesta spec exige atualizar o `expr`/label do
   painel correspondente no dashboard também (fora deste repo).
+- O `exporter.py` mantém as métricas nomeadas do dashboard e também expõe
+  escalares novos automaticamente em `screeps_stat_value` (numéricos) e
+  `screeps_stat_info` (textuais), usando `path` e labels de contexto como
+  `room`, `mineral`, `compound`, `category` e `direction`. Isso não cria
+  painéis automaticamente, mas evita alterar o exporter a cada novo campo.
 
 ## Out of scope
 

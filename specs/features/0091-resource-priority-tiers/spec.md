@@ -119,6 +119,9 @@ motivo no `Memory.stats` para monitoramento.
 6. `test/smoke.js` asserts que um `remoteHauler` entrega em spawn/extension ou
    outro consumidor crítico da sala-mãe antes de storage e consumidores
    satisfatórios.
+6a. `test/smoke.js` asserts que um `hauler` entrega em spawn/extension vazio
+  antes de uma torre em `497/1000`, mesmo quando a torre está abaixo do
+  threshold de refill.
 7. `test/smoke.js` asserts que um `hauler` não inicia `mineralJob` enquanto
    existir uma torre crítica ou outro consumidor crítico conhecido.
 8. `test/smoke.js` asserts que `bootstrap` considera consumidor crítico antes

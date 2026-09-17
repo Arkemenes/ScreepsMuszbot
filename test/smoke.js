@@ -947,6 +947,24 @@ hauler.run(hlTowerBaseline);
 assert(hlTowerBaseline._to === "tower1",
     "baseline: hauler delivers to a normal tower below reserve");
 
+// A tower at 497/1000 is below the critical refill ratio, but production
+// continuity still wins when the spawn is empty (global priority policy).
+{
+    const savedSpawnStoreHaulerPriority = spawn.store;
+    const savedTowerStoreHaulerPriority = tower.store;
+    spawn.store = Object.assign(store(0, 300), { getFreeCapacity: () => 300 });
+    tower.store = Object.assign(store(497, 1000), { getFreeCapacity: () => 503 });
+    Game.time++;
+    const hSpawnPriority = makeCreep("HSpawnPriority", "hauler", { store: store(200, 200) });
+    hSpawnPriority.transfer = (t) => { hSpawnPriority._to = t && t.id; return OK; };
+    hSpawnPriority.memory.job = "deliver";
+    hauler.run(hSpawnPriority);
+    assert(hSpawnPriority._to === "spawn1",
+        "hauler prioritizes an empty spawn over a tower at 497/1000 (0091)");
+    spawn.store = savedSpawnStoreHaulerPriority;
+    tower.store = savedTowerStoreHaulerPriority;
+}
+
 planStore.mutate("W1N1", (plan) => {
     plan.buildings.push({
         x: tower.pos.x, y: tower.pos.y,
@@ -2152,6 +2170,46 @@ findMap[FIND_MY_STRUCTURES] = findMap[FIND_MY_STRUCTURES].filter((s) => s.id !==
     Game.constructionSites = {};
 }
 
+// --- ROADMAP 0093: builder waits for economic stability ----------------
+{
+    const builderSite = Object.assign(new ConstructionSite(), {
+        id: "builder-stability-site", structureType: STRUCTURE_EXTENSION,
+        progress: 0, progressTotal: 1000,
+        pos: new RoomPosition(21, 21, "W1N1"), room,
+    });
+    REG[builderSite.id] = builderSite;
+    findMap[FIND_MY_CONSTRUCTION_SITES] = [builderSite];
+    Game.constructionSites = { [builderSite.id]: builderSite };
+
+    const savedSpawnStoreBuilderGate = spawn.store;
+    spawn.store = Object.assign(store(0, 300), { getFreeCapacity: () => 300 });
+    Game.time++;
+    const unstableBuilder = makeCreep("BuilderUnstable", "builder", {
+        store: store(50, 100), pos: new RoomPosition(20, 20, "W1N1"),
+    });
+    unstableBuilder._built = false;
+    unstableBuilder.build = () => { unstableBuilder._built = true; return OK; };
+    builder.run(unstableBuilder);
+    assert(!unstableBuilder._built,
+        "builder waits while the room economy is critical (0093)");
+
+    spawn.store = Object.assign(store(300, 300), { getFreeCapacity: () => 0 });
+    Game.time++;
+    const stableBuilder = makeCreep("BuilderStable", "builder", {
+        store: store(50, 100), pos: new RoomPosition(20, 20, "W1N1"),
+    });
+    stableBuilder._built = false;
+    stableBuilder.build = () => { stableBuilder._built = true; return OK; };
+    builder.run(stableBuilder);
+    assert(stableBuilder._built,
+        "builder builds once the room economy is stable (0093)");
+
+    spawn.store = savedSpawnStoreBuilderGate;
+    findMap[FIND_MY_CONSTRUCTION_SITES] = [];
+    Game.constructionSites = {};
+    delete REG[builderSite.id];
+}
+
 // --- reservations: economy pickers win a contested pile -------------
 const reservations = require(path.join(PROJECT, "src/utils/reservations"));
 const contested = Object.assign(new Resource(), {
@@ -2361,6 +2419,25 @@ assert(seatedMiner(100, false, false) === "mtwr",
     "still wants energy - the hauler never backstops a source-defense tower");
 assert(seatedMiner(100, true, false) === "mtwr",
     "buffers full (container + link) -> miner feeds the tower even mid-fill");
+
+// 2a. The global economy snapshot uses the real spawn store, not only the
+// room energy summary. A hungry spawn routes source energy into the shared
+// container before the source-defense tower; active defense keeps the tower
+// reservation first.
+{
+    const savedSpawnStoreMinerPolicy = spawn.store;
+    spawn.store = Object.assign(store(0, 300), { getFreeCapacity: () => 300 });
+    Game.time++;
+    assert(seatedMiner(100, false, false) === "mcont",
+        "global critical spawn routes miner energy to the shared container before the tower (0092)");
+
+    Memory.rooms.W1N1.defenseActive = true;
+    Game.time++;
+    assert(seatedMiner(100, false, false) === "mtwr",
+        "active defense keeps the source tower ahead of the shared container (0092)");
+    Memory.rooms.W1N1.defenseActive = false;
+    spawn.store = savedSpawnStoreMinerPolicy;
+}
 
 // 2b. harvesting only happens when it actually goes somewhere: a full
 // container with nothing downstream to take the overflow should not be mined

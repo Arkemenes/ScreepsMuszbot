@@ -8,6 +8,7 @@ const { roomNeeds } = require("../rooms/needs");
 const reservations = require("../utils/reservations");
 const traffic = require("../utils/traffic");
 const rampartRepair = require("../utils/rampartRepair");
+const resourceTiers = require("../utils/resourceTiers");
 const names = require("../utils/names");
 const energyLedger = require("../utils/energyLedger");
 
@@ -90,14 +91,16 @@ function opportunisticWork(creep) {
         return;
     }
 
-    const site = _.sortBy(
-        creep.pos.findInRange(roomCache.constructionSites(creep.room), 3),
-        (s) => -(s.progress / s.progressTotal)
-    )[0];
-    if (site) {
-        const status = creep.build(site);
-        if (status === OK) {
-            energyLedger.creditBuild(creep, site);
+    if (resourceTiers.getEconomySnapshot(creep.room).state !== "critical") {
+        const site = _.sortBy(
+            creep.pos.findInRange(roomCache.constructionSites(creep.room), 3),
+            (s) => -(s.progress / s.progressTotal)
+        )[0];
+        if (site) {
+            const status = creep.build(site);
+            if (status === OK) {
+                energyLedger.creditBuild(creep, site);
+            }
         }
     }
 }
@@ -201,14 +204,17 @@ var builder = {
             // otherwise the sites closest to being finished, ties broken by
             // distance
             const constructionSites = roomCache.constructionSites(creep.room);
+            const economy = resourceTiers.getEconomySnapshot(creep.room);
             var targetConstructionSite =
-                priorityTarget(creep) ||
-                _.sortBy(
-                    constructionSites,
-                    (s) =>
-                        -(s.progress / s.progressTotal) +
-                        creep.pos.getRangeTo(s) / 10000
-                )[0];
+                economy.state === "critical"
+                    ? null
+                    : priorityTarget(creep) ||
+                        _.sortBy(
+                            constructionSites,
+                            (s) =>
+                                -(s.progress / s.progressTotal) +
+                                creep.pos.getRangeTo(s) / 10000
+                        )[0];
 
             if (targetConstructionSite) {
                 creep.pushState("Build", targetConstructionSite.id);
