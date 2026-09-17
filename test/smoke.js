@@ -668,6 +668,72 @@ assert(
     "no scout spawned while economy roles still want creeps (phase 1)"
 );
 
+// --- ROADMAP 0094: spawn passes energy structures in anchor order -------
+{
+    const spawning = require(path.join(PROJECT, "src/rooms/spawning"));
+    const storage = {
+        pos: new RoomPosition(25, 25, "W1N1"),
+    };
+    const nearStorageExtension = Object.assign(new OwnedStructure(), {
+        id: "nearStorageExtension",
+        structureType: STRUCTURE_EXTENSION,
+        pos: new RoomPosition(26, 25, "W1N1"),
+    });
+    const farStorageExtension = Object.assign(new OwnedStructure(), {
+        id: "farStorageExtension",
+        structureType: STRUCTURE_EXTENSION,
+        pos: new RoomPosition(5, 5, "W1N1"),
+    });
+    const storageSpawn = Object.assign(new Spawn(), {
+        id: "storageOrderSpawn",
+        structureType: STRUCTURE_SPAWN,
+        pos: new RoomPosition(40, 40, "W1N1"),
+    });
+    const storageRoom = {
+        name: "StorageOrderRoom",
+        storage,
+        find: () => [storageSpawn, farStorageExtension, nearStorageExtension],
+    };
+    const storageOrder = spawning.energyStructuresForSpawn(
+        storageRoom,
+        storageSpawn
+    );
+    assert(
+        storageOrder[0] === nearStorageExtension,
+        "spawn energy structures are ordered closest to storage first"
+    );
+
+    const spawnAnchor = Object.assign(new Spawn(), {
+        id: "spawnAnchor",
+        structureType: STRUCTURE_SPAWN,
+        pos: new RoomPosition(10, 10, "W1N1"),
+    });
+    const nearSpawnExtension = Object.assign(new OwnedStructure(), {
+        id: "nearSpawnExtension",
+        structureType: STRUCTURE_EXTENSION,
+        pos: new RoomPosition(11, 10, "W1N1"),
+    });
+    const farSpawnExtension = Object.assign(new OwnedStructure(), {
+        id: "farSpawnExtension",
+        structureType: STRUCTURE_EXTENSION,
+        pos: new RoomPosition(40, 40, "W1N1"),
+    });
+    const noStorageRoom = {
+        name: "NoStorageOrderRoom",
+        storage: null,
+        find: () => [spawnAnchor, farSpawnExtension, nearSpawnExtension],
+    };
+    const noStorageOrder = spawning.energyStructuresForSpawn(
+        noStorageRoom,
+        spawnAnchor
+    );
+    assert(
+        noStorageOrder[0] === spawnAnchor &&
+            noStorageOrder[1] === nearSpawnExtension,
+        "without storage, spawn energy structures are ordered closest to spawn"
+    );
+}
+
 // --- under attack: spawns should focus on defenders ------------------
 console.log = (...a) => { logs.push(a.join(" ")); };
 findMap[FIND_HOSTILE_CREEPS] = [hostile];

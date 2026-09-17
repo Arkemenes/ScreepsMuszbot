@@ -3,6 +3,9 @@
 let usedOnStart = 0;
 let enabled = false;
 let depth = 0;
+// Call stack for self-time accounting (see wrapFunction below) - reset each
+// tick alongside `depth`.
+let callStack = [];
 
 function AlreadyWrappedError() {
     this.name = "AlreadyWrappedError";
@@ -12,6 +15,7 @@ function AlreadyWrappedError() {
 
 function setupProfiler() {
     depth = 0; // reset depth, this needs to be done each tick.
+    callStack.length = 0;
     Game.profiler = {
         stream(duration, filter) {
             setupMemory("stream", duration || 10, filter);
@@ -101,15 +105,37 @@ function wrapFunction(name, originalFunction) {
             if (nameMatchesFilter) {
                 depth++;
             }
-            const result = originalFunction.apply(this, arguments);
-            if (depth > 0 || !getFilter()) {
+            // Self-time accounting: our own wrapping nests functions that
+            // call other wrapped functions (role:X.run() calling
+            // Creep.harvest(), RoomPosition.findInRange(), ...) - without
+            // this, a parent's recorded time INCLUDES every child's time,
+            // making an outer dispatcher look expensive on its own when the
+            // cost actually belongs to (and is already shown on) the child's
+            // own line. `frame.childTime` accumulates how much of this
+            // call's elapsed time was actually spent inside nested wrapped
+            // calls, so `totalTime - frame.childTime` is this function's
+            // OWN work.
+            const frame = { childTime: 0 };
+            callStack.push(frame);
+            try {
+                return originalFunction.apply(this, arguments);
+            } finally {
+                callStack.pop();
                 const end = Game.cpu.getUsed();
-                Profiler.record(name, end - start);
+                const totalTime = end - start;
+                // always propagate to the parent, even when this call's own
+                // record below is filtered out - otherwise the parent's self
+                // time would be overstated by exactly this child's cost
+                if (callStack.length) {
+                    callStack[callStack.length - 1].childTime += totalTime;
+                }
+                if (depth > 0 || !getFilter()) {
+                    Profiler.record(name, totalTime, totalTime - frame.childTime);
+                }
+                if (nameMatchesFilter) {
+                    depth--;
+                }
             }
-            if (nameMatchesFilter) {
-                depth--;
-            }
-            return result;
         }
 
         return originalFunction.apply(this, arguments);
@@ -226,7 +252,7 @@ const Profiler = {
         );
         const startTick = Memory.profiler.enabledTick + 1;
         const elapsedTicks = endTick - startTick;
-        const header = "calls\t\ttime\t\tavg\t\tfunction";
+        const header = "calls\t\tself\t\tavg-self\t\ttotal\t\tfunction";
         const footer = [
             `Avg: ${(Memory.profiler.totalTime / elapsedTicks).toFixed(2)}`,
             `Total: ${Memory.profiler.totalTime.toFixed(2)}`,
@@ -259,18 +285,26 @@ const Profiler = {
                     name: functionName,
                     calls: functionCalls.calls,
                     totalTime: functionCalls.time,
-                    averageTime: functionCalls.time / functionCalls.calls,
+                    selfTime: functionCalls.selfTime || 0,
+                    averageSelf: (functionCalls.selfTime || 0) / functionCalls.calls,
                 };
             })
+            // self time (exclusive of nested wrapped calls) is the reliable
+            // signal for "where does CPU actually go" - inclusive `totalTime`
+            // double-counts everything a wrapped function calls into that's
+            // also wrapped (e.g. role:X.run() calling Creep.harvest()), so
+            // sorting by it used to make outer dispatchers look artificially
+            // expensive.
             .sort((val1, val2) => {
-                return val2.totalTime - val1.totalTime;
+                return val2.selfTime - val1.selfTime;
             });
 
         const lines = stats.map((data) => {
             return [
                 data.calls,
+                data.selfTime.toFixed(1),
+                data.averageSelf.toFixed(3),
                 data.totalTime.toFixed(1),
-                data.averageTime.toFixed(3),
                 data.name,
             ].join("\t\t");
         });
@@ -289,15 +323,17 @@ const Profiler = {
         { name: "Flag", val: Flag },
     ],
 
-    record(functionName, time) {
+    record(functionName, time, selfTime) {
         if (!Memory.profiler.map[functionName]) {
             Memory.profiler.map[functionName] = {
                 time: 0,
+                selfTime: 0,
                 calls: 0,
             };
         }
         Memory.profiler.map[functionName].calls++;
         Memory.profiler.map[functionName].time += time;
+        Memory.profiler.map[functionName].selfTime += selfTime;
     },
 
     endTick() {

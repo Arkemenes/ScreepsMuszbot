@@ -3,6 +3,7 @@ let raiding = require("./raiding");
 const census = require("../utils/census");
 const config = require("../utils/config");
 const energyLedger = require("../utils/energyLedger");
+const roomCache = require("../utils/roomCache");
 
 // Priority order: whatever order the roles are declared in roles/index.js
 // (bootstrap, defender, miner, hauler, upgrader, builder, scout).
@@ -10,6 +11,29 @@ let creepTypes = _.keys(creepLogic);
 
 function bodyCost(body) {
     return _.sum(body, (part) => BODYPART_COST[part.type]);
+}
+
+function energyStructuresForSpawn(room, spawn) {
+    const anchor = room.storage && room.storage.pos
+        ? room.storage.pos
+        : spawn.pos;
+    return roomCache
+        .myStructures(room)
+        .filter(
+            (structure) =>
+                structure.structureType === STRUCTURE_SPAWN ||
+                structure.structureType === STRUCTURE_EXTENSION
+        )
+        .map((structure, index) => ({
+            structure,
+            index,
+            distance: anchor.getRangeTo(structure.pos),
+        }))
+        .sort(
+            (left, right) =>
+                left.distance - right.distance || left.index - right.index
+        )
+        .map((entry) => entry.structure);
 }
 
 // ROADMAP 0045, old_1 parity: an idle spawn opportunistically renews an
@@ -147,9 +171,11 @@ function spawnCreeps(room) {
         // cheap low-priority creep still gets built when the room can't yet
         // pay for the expensive high-priority one.
         let picked = null;
+        const energyStructures = energyStructuresForSpawn(room, spawn);
         for (const req of requests) {
             const dry = spawn.spawnCreep(req.body, req.name, {
                 memory: req.memory,
+                energyStructures,
                 dryRun: true,
             });
             if (dry === OK) {
@@ -161,6 +187,7 @@ function spawnCreeps(room) {
 
         const result = spawn.spawnCreep(picked.body, picked.name, {
             memory: picked.memory,
+            energyStructures,
         });
         if (result !== OK) {
             console.log(
@@ -179,3 +206,4 @@ function spawnCreeps(room) {
 module.exports = spawnCreeps;
 // exposed for the offline smoke test only
 module.exports.renewIdleSpawns = renewIdleSpawns;
+module.exports.energyStructuresForSpawn = energyStructuresForSpawn;

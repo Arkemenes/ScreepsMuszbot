@@ -103,6 +103,7 @@ detalhe.
 | 0091 | [Política global de tiers para recursos e ações](features/0091-resource-priority-tiers/spec.md) | done | snapshot econômico cacheado por sala/tick, API declarativa de prioridade e migração de hauler/remoteHauler/bootstrap; produção mínima vence refill de torre crítica; abastecimento opcional respeita criticidade; terminal intersalas fica para feature futura |
 | 0092 | [Miner na cascata global de energia](features/0092-miner-global-energy-cascade/spec.md) | done | miner usa o estado econômico global e os thresholds compartilhados da torre para escolher torre de source, link ou container; defesa ativa mantém prioridade da torre |
 | 0093 | [Builder aguarda estabilidade econômica](features/0093-builder-stability-gate/spec.md) | done | construção de sites espera `stable`/`abundant`; reparo crítico continua permitido durante instabilidade |
+| 0094 | [Energy structures mais próximas do anchor de spawn](features/0094-spawn-near-storage/spec.md) | done | spawnCreep recebe spawns/extensions ordenados pelo storage, ou pelo spawn executor sem storage |
 
 ## Fila atual
 
