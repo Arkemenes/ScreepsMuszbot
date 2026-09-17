@@ -1,3 +1,4 @@
+import math
 import os, time, json, base64, gzip, requests
 from prometheus_client import start_http_server, Gauge
 
@@ -44,6 +45,20 @@ market_bought_credits = Gauge('screeps_market_bought_credits', 'Créditos gastos
 market_sold_credits = Gauge('screeps_market_sold_credits', 'Créditos recebidos', ['resource'])
 terminal_transfer_energy = Gauge('screeps_terminal_transfer_energy', 'Transferência de energia entre salas', ['from_room', 'to_room'])
 
+# Fallback for new Memory.stats fields. Named metrics above remain the stable
+# dashboard contract; these families make new scalar fields observable without
+# requiring a Python edit for every addition to stats.js.
+generic_stat_value = Gauge(
+    'screeps_stat_value',
+    'Numeric scalar discovered in Memory.stats',
+    ['path', 'room', 'mineral', 'compound', 'category', 'direction'],
+)
+generic_stat_info = Gauge(
+    'screeps_stat_info',
+    'Text scalar discovered in Memory.stats',
+    ['path', 'room', 'mineral', 'compound', 'category', 'direction', 'value'],
+)
+
 
 def decode_data(data):
     if data is None:
@@ -82,10 +97,75 @@ def fetch_stats():
     return decode_data(r.json().get("data"))
 
 
+def _generic_stats(value, path=(), labels=None):
+    """Yield scalar stats while turning known dynamic maps into labels."""
+    labels = dict(labels or {})
+
+    if isinstance(value, dict):
+        for key, child in value.items():
+            child_labels = dict(labels)
+            if path == ("rooms",) and "room" not in labels:
+                child_labels["room"] = str(key)
+                child_path = path
+            elif path and path[-1] == "minerals" and "mineral" not in labels:
+                child_labels["mineral"] = str(key)
+                child_path = path
+            elif path and path[-1] == "compoundsT3" and "compound" not in labels:
+                child_labels["compound"] = str(key)
+                child_path = path
+            elif path and path[-1] == "energySpent" and "category" not in labels:
+                child_labels["category"] = str(key)
+                child_path = path
+            elif (
+                path and path[-1] == "transactions" and
+                key in ("bought", "sold") and "direction" not in labels
+            ):
+                child_labels["direction"] = str(key)
+                child_path = path
+            else:
+                child_path = path + (str(key),)
+            yield from _generic_stats(child, child_path, child_labels)
+        return
+
+    if isinstance(value, list):
+        for index, child in enumerate(value):
+            yield from _generic_stats(child, path + (str(index),), labels)
+        return
+
+    if isinstance(value, bool) or value is None:
+        return
+
+    if isinstance(value, (int, float)) and math.isfinite(value):
+        yield "value", ".".join(path), labels, value
+    elif isinstance(value, str) and value:
+        yield "info", ".".join(path), labels, value[:120]
+
+
+def update_generic_metrics(stats):
+    """Export scalar fields not covered by the named dashboard metrics."""
+    generic_stat_value.clear()
+    generic_stat_info.clear()
+    for kind, path, labels, value in _generic_stats(stats):
+        metric_labels = {
+            "path": path,
+            "room": labels.get("room", ""),
+            "mineral": labels.get("mineral", ""),
+            "compound": labels.get("compound", ""),
+            "category": labels.get("category", ""),
+            "direction": labels.get("direction", ""),
+        }
+        if kind == "value":
+            generic_stat_value.labels(**metric_labels).set(value)
+        else:
+            generic_stat_info.labels(value=value, **metric_labels).set(1)
+
+
 def update_metrics():
     stats = fetch_stats()
     if not stats:
         return
+
+    update_generic_metrics(stats)
 
     # --- GCL ---
     gcl = stats.get("gcl", {})
