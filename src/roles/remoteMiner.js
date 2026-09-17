@@ -32,6 +32,23 @@ function openSource(targetRoom, targetRoomName) {
     return targetRoom.find(FIND_SOURCES).find((s) => !taken[s.id]) || null;
 }
 
+// The container next to this creep's source rarely changes once built - a
+// cached id resolved via Game.getObjectById (cheap) replaces a native
+// findInRange every tick; only re-searches the source's neighborhood when
+// the cached id no longer resolves (destroyed, or never found yet).
+function containerNear(creep, source) {
+    if (creep.memory.container) {
+        const cached = Game.getObjectById(creep.memory.container);
+        if (cached) return cached;
+        creep.memory.container = undefined;
+    }
+    const found = source.pos.findInRange(FIND_STRUCTURES, 1, {
+        filter: (s) => s.structureType === STRUCTURE_CONTAINER,
+    })[0];
+    creep.memory.container = found ? found.id : undefined;
+    return found || null;
+}
+
 var remoteMiner = {
     /** @param {Creep} creep **/
     run: function (creep) {
@@ -78,14 +95,15 @@ var remoteMiner = {
         // build/maintain its own container - no architect() in a room that
         // isn't ours
         if (creep.store.getUsedCapacity(RESOURCE_ENERGY) > 0) {
-            const container = source.pos.findInRange(FIND_STRUCTURES, 1, {
-                filter: (s) => s.structureType === STRUCTURE_CONTAINER,
-            })[0];
-            const site = source.pos.findInRange(
-                FIND_MY_CONSTRUCTION_SITES,
-                1,
-                { filter: (s) => s.structureType === STRUCTURE_CONTAINER }
-            )[0];
+            const container = containerNear(creep, source);
+            // no container yet -> only then is a construction site even
+            // possible, so this native find is skipped entirely once the
+            // container above is cached (the common steady state)
+            const site = container
+                ? null
+                : source.pos.findInRange(FIND_MY_CONSTRUCTION_SITES, 1, {
+                      filter: (s) => s.structureType === STRUCTURE_CONTAINER,
+                  })[0];
 
             if (site) {
                 creep.build(site);

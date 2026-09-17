@@ -1,5 +1,6 @@
 const config = require("../utils/config");
 const resourceTiers = require("../utils/resourceTiers");
+const roomCache = require("../utils/roomCache");
 
 // Split the non-collector links into "the one near the controller" (range 3,
 // same geometric pattern utils/energy.js's receivingLink() already uses) and
@@ -70,12 +71,13 @@ var link = {
             link.cooldown === 0 &&
             link.isActive()
         ) {
-            let nonCollectorLinks = link.room.find(FIND_STRUCTURES, {
-                filter: (s) =>
+            let nonCollectorLinks = _.filter(
+                roomCache.structures(link.room),
+                (s) =>
                     s.structureType == STRUCTURE_LINK &&
                     !s.isCollector() &&
-                    s.store.getFreeCapacity(RESOURCE_ENERGY) > 0,
-            });
+                    s.store.getFreeCapacity(RESOURCE_ENERGY) > 0
+            );
             let target = pickTarget(nonCollectorLinks, link.room);
 
             if (target) {

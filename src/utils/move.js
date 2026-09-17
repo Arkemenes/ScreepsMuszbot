@@ -121,6 +121,48 @@ function isAt(pos, x, y) {
     return pos.x === x && pos.y === y;
 }
 
+// --- TEMPORARY diagnostic (CPU investigation, 2026-09) - gated behind
+// Memory.settings.debug.moveStats, off by default. Tallies WHY travel()
+// repathed this tick vs. just reused the cached path, to tell apart genuine
+// repath thrashing from ordinary population/traffic variance behind the
+// moveTo/move growth seen across two profile(100) runs. Remove once the
+// investigation is done - not meant to stay long-term.
+function moveTraceEnabled() {
+    return !!(
+        Memory.settings &&
+        Memory.settings.debug &&
+        Memory.settings.debug.moveStats
+    );
+}
+let moveTraceTick = -1;
+let moveTraceTally = {};
+function moveTrace(reason) {
+    if (!moveTraceEnabled()) return;
+    if (moveTraceTick !== Game.time) {
+        if (moveTraceTick !== -1) {
+            Memory.moveDebug = { tick: moveTraceTick, tally: moveTraceTally };
+        }
+        moveTraceTick = Game.time;
+        moveTraceTally = {};
+    }
+    moveTraceTally[reason] = (moveTraceTally[reason] || 0) + 1;
+}
+
+// console: moveStats(true) turns the tally on, moveStats() prints the last
+// finalized tick's breakdown, moveStats(false) turns it back off. TEMPORARY -
+// see the block comment above.
+global.moveStats = function (enabled) {
+    if (typeof enabled === "boolean") {
+        Memory.settings = Memory.settings || {};
+        Memory.settings.debug = Memory.settings.debug || {};
+        Memory.settings.debug.moveStats = enabled;
+        console.log("[moveStats] " + (enabled ? "enabled" : "disabled"));
+        return;
+    }
+    console.log("[moveStats] " + JSON.stringify(Memory.moveDebug || {}));
+};
+
+
 function invalidateBlockedCrossRoomPath(creep) {
     const cached = creep.memory._move;
     if (!cached || !cached.path || !cached.path.length) return false;
@@ -193,13 +235,18 @@ function travel(creep, target, opts) {
         }
     }
 
-    let repath =
-        !m ||
-        m.key !== key ||
-        !m.path ||
-        m.path.length === 0 ||
-        (m.stuck || 0) >= 3 ||
-        Game.time - m.t > 50;
+    let repathReason = !m
+        ? "noCache"
+        : m.key !== key
+        ? "destOrRangeChanged"
+        : !m.path || m.path.length === 0
+        ? "pathExhausted"
+        : (m.stuck || 0) >= 3
+        ? "stuckLimit"
+        : Game.time - m.t > 50
+        ? "ttlExpired"
+        : null;
+    let repath = !!repathReason;
 
     let blockedByParked = false;
 
@@ -212,6 +259,7 @@ function travel(creep, target, opts) {
         }
         if (!m.path.length) {
             repath = true;
+            repathReason = "pathExhaustedAfterAdvance";
         } else {
             const [nx, ny] = m.path[0];
             // shoved off the path -> recompute
@@ -222,6 +270,7 @@ function travel(creep, target, opts) {
                 ) !== 1
             ) {
                 repath = true;
+                repathReason = "shovedOffPath";
             } else if (
                 _.some(
                     creep.room.lookForAt(LOOK_CREEPS, nx, ny),
@@ -235,10 +284,13 @@ function travel(creep, target, opts) {
                 if (!excuseMe.ask(creep, nx, ny)) {
                     repath = true;
                     blockedByParked = true;
+                    repathReason = "blockedByParkedNoExit";
                 }
             }
         }
     }
+
+    moveTrace(repath ? repathReason : "cacheHit");
 
     if (repath) {
         const avoidCreeps =
