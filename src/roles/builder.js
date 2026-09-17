@@ -59,6 +59,31 @@ global.clearBuildPriority = function () {
     console.log("[build] priority cleared");
 };
 
+// Per-tick, per-room cache: every builder in a room was independently
+// re-running isPlanned/worthRepairing/tier over the WHOLE structures list
+// every tick - the filtered result is identical for all of them, only the
+// findInRange range-check afterwards actually depends on the creep's own
+// position, so that's the only part left per-creep below.
+let criticalTick = -1;
+let criticalCache = {};
+function criticalRepairCandidates(room) {
+    if (criticalTick !== Game.time) {
+        criticalTick = Game.time;
+        criticalCache = {};
+    }
+    if (!criticalCache[room.name]) {
+        criticalCache[room.name] = _.filter(
+            roomCache.structures(room),
+            (s) =>
+                s.structureType !== STRUCTURE_CONTROLLER &&
+                isPlanned(s) &&
+                traffic.worthRepairing(s) &&
+                rampartRepair.tier(s) === "critical"
+        );
+    }
+    return criticalCache[room.name];
+}
+
 // While carrying energy, do a repair on anything critical within work range
 // (3) - the exact same "critical" tier the main repair branch below uses
 // (utils/rampartRepair.tier, ROADMAP 0072 - one shared tier system for
@@ -74,13 +99,7 @@ function opportunisticWork(creep) {
 
     // when several are in range, take the one closest to full / finished
     const hurt = _.sortBy(
-        creep.pos.findInRange(roomCache.structures(creep.room), 3, {
-            filter: (s) =>
-                s.structureType !== STRUCTURE_CONTROLLER &&
-                isPlanned(s) &&
-                traffic.worthRepairing(s) &&
-                rampartRepair.tier(s) === "critical",
-        }),
+        creep.pos.findInRange(criticalRepairCandidates(creep.room), 3),
         (s) => -(s.hits / s.hitsMax)
     )[0];
     if (hurt) {
@@ -103,6 +122,32 @@ function opportunisticWork(creep) {
             }
         }
     }
+}
+
+// Per-tick, per-room cache: every builder recomputed this same
+// filter+sort (isPlanned/worthRepairing/builderMayRepair, then
+// rampartRepair.priority) from scratch, and neither depends on which
+// builder is asking - only room state.
+let repairTick = -1;
+let repairCache = {};
+function builderRepairTargets(room) {
+    if (repairTick !== Game.time) {
+        repairTick = Game.time;
+        repairCache = {};
+    }
+    if (!repairCache[room.name]) {
+        const filtered = _.filter(
+            roomCache.structures(room),
+            (s) =>
+                s.structureType != STRUCTURE_CONTROLLER &&
+                s.hits < s.hitsMax &&
+                isPlanned(s) &&
+                traffic.worthRepairing(s) &&
+                rampartRepair.builderMayRepair(s, room)
+        );
+        repairCache[room.name] = _.sortBy(filtered, rampartRepair.priority);
+    }
+    return repairCache[room.name];
 }
 
 var builder = {
@@ -175,20 +220,10 @@ var builder = {
             // gate tower.js no longer gets); a normal structure's optimal
             // tier is always eligible regardless (bounded/cheap repair, no
             // reserve concern).
-            let repairTargets = _.filter(
-                roomCache.structures(creep.room),
-                (s) =>
-                    s.structureType != STRUCTURE_CONTROLLER &&
-                    s.hits < s.hitsMax &&
-                    isPlanned(s) &&
-                    traffic.worthRepairing(s) &&
-                    rampartRepair.builderMayRepair(s, creep.room)
-            );
+            let repairTargets = builderRepairTargets(creep.room);
 
             var repairTarget;
             if (repairTargets.length) {
-                repairTargets = _.sortBy(repairTargets, rampartRepair.priority);
-
                 repairTarget = repairTargets[0];
 
                 if (rampartRepair.tier(repairTarget) === "critical") {

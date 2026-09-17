@@ -230,17 +230,22 @@ function liveWorkForSource(roomMiners, sourceId, leadTime) {
 // distribute()'s own surplus/top-off logic below - once the container is
 // full and there's no link, a not-yet-full tower always ends up fed) -
 // otherwise it would just spill on the ground and decay for nothing.
-function hasDepositTarget(creep) {
+// `near` is the seat's adjacent structures (run() looks it up once and hands
+// it to both this and distribute() - they used to each re-run their own
+// findInRange for container/link/tower, four native calls a tick instead of
+// one).
+function hasDepositTarget(creep, near) {
     const container = _.find(
-        creep.pos.findInRange(FIND_STRUCTURES, 1),
+        near,
         (s) => s.structureType === STRUCTURE_CONTAINER
     );
     if (!container) return true;
     if (container.store.getFreeCapacity(RESOURCE_ENERGY) > 0) return true;
 
-    const collectorLinks = creep.pos.findInRange(FIND_MY_STRUCTURES, 1, {
-        filter: (s) => s.structureType === STRUCTURE_LINK && s.isCollector(),
-    });
+    const collectorLinks = _.filter(
+        near,
+        (s) => s.structureType === STRUCTURE_LINK && s.my && s.isCollector()
+    );
     if (
         _.some(
             collectorLinks,
@@ -250,9 +255,10 @@ function hasDepositTarget(creep) {
         return true;
     }
 
-    const tower = creep.pos.findInRange(FIND_MY_STRUCTURES, 1, {
-        filter: (s) => s.structureType === STRUCTURE_TOWER,
-    })[0];
+    const tower = _.find(
+        near,
+        (s) => s.structureType === STRUCTURE_TOWER && s.my
+    );
     if (tower && tower.store.getFreeCapacity(RESOURCE_ENERGY) > 0) return true;
 
     return false;
@@ -266,18 +272,18 @@ function hasDepositTarget(creep) {
 // (buffers full, or spawn/ext already fed) so it doesn't rob creep production
 // for the last few percent. Order: tower to reserve -> collector link ->
 // container -> top the tower off (surplus only).
-function distribute(creep) {
+function distribute(creep, near) {
     // no CARRY -> nothing to forward (overflow drops straight into the container)
     if (creep.store.getCapacity(RESOURCE_ENERGY) === 0) return;
 
     const container = _.find(
-        creep.pos.findInRange(FIND_STRUCTURES, 1),
+        near,
         (s) => s.structureType === STRUCTURE_CONTAINER
     );
-    const collectorLinks = creep.pos.findInRange(FIND_MY_STRUCTURES, 1, {
-        filter: (s) =>
-            s.structureType === STRUCTURE_LINK && s.isCollector(),
-    });
+    const collectorLinks = _.filter(
+        near,
+        (s) => s.structureType === STRUCTURE_LINK && s.my && s.isCollector()
+    );
     const roomiestLink = _.max(collectorLinks, (l) =>
         l.store.getFreeCapacity(RESOURCE_ENERGY)
     );
@@ -286,9 +292,10 @@ function distribute(creep) {
         roomiestLink.store.getFreeCapacity(RESOURCE_ENERGY) > 0
             ? roomiestLink
             : null;
-    const tower = creep.pos.findInRange(FIND_MY_STRUCTURES, 1, {
-        filter: (s) => s.structureType === STRUCTURE_TOWER,
-    })[0];
+    const tower = _.find(
+        near,
+        (s) => s.structureType === STRUCTURE_TOWER && s.my
+    );
 
     // pull adjacent drops / container overflow into the store so it can be
     // forwarded (only useful when a link or a hungry tower is next to us)
@@ -432,7 +439,8 @@ var miner = {
 
         // don't mine into a full container with nobody else to feed - it
         // would just spill on the ground and decay away for nothing
-        if (hasDepositTarget(creep)) {
+        const near = creep.pos.findInRange(FIND_STRUCTURES, 1);
+        if (hasDepositTarget(creep, near)) {
             if (creep.harvest(source) === ERR_NOT_IN_RANGE && !seekingSeat) {
                 creep.memory.onContainer = false;
                 creep.moveTo(source, { reusePath: 5 });
@@ -440,7 +448,7 @@ var miner = {
         }
 
         // --- distribute what we mined -----------------------------------
-        distribute(creep);
+        distribute(creep, near);
     },
     // rough headcount for the population heuristic; the real per-source timing
     // lives in spawn() below

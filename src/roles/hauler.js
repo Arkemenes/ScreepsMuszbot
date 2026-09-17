@@ -10,12 +10,31 @@ const config = require("../utils/config");
 const resourceTiers = require("../utils/resourceTiers");
 const names = require("../utils/names");
 
+// Per-tick, per-room cache for the filtered structure lists below - every
+// hauler in a room was independently re-running the same filter over
+// roomCache.myStructures()/structuresByType() every tick (same duplication
+// utils/roomCache.js and utils/census.js already collapsed for raw find()
+// calls, just one layer up: on the derived lists built on top of them).
+let derivedTick = -1;
+let derivedCache = {};
+function derived(room) {
+    if (derivedTick !== Game.time) {
+        derivedTick = Game.time;
+        derivedCache = {};
+    }
+    return derivedCache[room.name] || (derivedCache[room.name] = {});
+}
+
 // Containers sitting next to an energy source - the piles a hauler drains.
 function sourceContainers(room) {
-    return _.filter(
-        roomCache.structuresByType(room, STRUCTURE_CONTAINER),
-        (c) => c.pos.findInRange(FIND_SOURCES, 1).length > 0
-    );
+    const d = derived(room);
+    if (!d.sourceContainers) {
+        d.sourceContainers = _.filter(
+            roomCache.structuresByType(room, STRUCTURE_CONTAINER),
+            (c) => c.pos.findInRange(FIND_SOURCES, 1).length > 0
+        );
+    }
+    return d.sourceContainers;
 }
 
 // ROADMAP 0065 follow-up: any source container built up past this bar is a
@@ -90,14 +109,34 @@ function towerDeliverable(s, room) {
 // below blocked this use case by accident when it was introduced). A
 // non-critical tower is NOT essential (ROADMAP 0054) - see toppableTower
 // below for that case.
+function spawnExtNeedingEnergy(room) {
+    const d = derived(room);
+    if (!d.spawnExt) {
+        d.spawnExt = _.filter(
+            roomCache.myStructures(room),
+            (s) =>
+                (s.structureType === STRUCTURE_SPAWN ||
+                    s.structureType === STRUCTURE_EXTENSION) &&
+                s.store.getFreeCapacity(RESOURCE_ENERGY) > 0
+        );
+    }
+    return d.spawnExt;
+}
+
+function criticalTowers(room) {
+    const d = derived(room);
+    if (!d.criticalTowers) {
+        d.criticalTowers = _.filter(roomCache.myStructures(room), (s) =>
+            isTowerCritical(s, room)
+        );
+    }
+    return d.criticalTowers;
+}
+
 function essentialConsumer(creep) {
-    return creep.pos.findClosestByRange(roomCache.myStructures(creep.room), {
-        filter: (s) =>
-            ((s.structureType === STRUCTURE_SPAWN ||
-                s.structureType === STRUCTURE_EXTENSION) &&
-                s.store.getFreeCapacity(RESOURCE_ENERGY) > 0) ||
-            isTowerCritical(s, creep.room),
-    });
+    return creep.pos.findClosestByRange(
+        spawnExtNeedingEnergy(creep.room).concat(criticalTowers(creep.room))
+    );
 }
 
 // Lab / factory / power spawn / controller container - genuinely optional,
@@ -108,31 +147,62 @@ function essentialConsumer(creep) {
 // resources for these three (mineral reagents/components, Power) are a
 // separate concern - see pickMineralJob() below, never mixed into this
 // energy-only cascade.
+function labFactoryPowerSpawnNeedingEnergy(room) {
+    const d = derived(room);
+    if (!d.labs) {
+        d.labs = _.filter(
+            roomCache.myStructures(room),
+            (s) =>
+                (s.structureType === STRUCTURE_LAB ||
+                    s.structureType === STRUCTURE_FACTORY ||
+                    s.structureType === STRUCTURE_POWER_SPAWN) &&
+                s.store.getFreeCapacity(RESOURCE_ENERGY) > 0
+        );
+    }
+    return d.labs;
+}
+
+// The controller's position never moves, so this range-3 lookup is the
+// same for every hauler in the room - cache it once per tick like the rest.
+function controllerContainerCandidates(room) {
+    const d = derived(room);
+    if (d.controllerContainers === undefined) {
+        d.controllerContainers = room.controller
+            ? room.controller.pos.findInRange(FIND_STRUCTURES, 3, {
+                  filter: (s) =>
+                      s.structureType === STRUCTURE_CONTAINER &&
+                      s.store.getFreeCapacity(RESOURCE_ENERGY) > 0,
+              })
+            : [];
+    }
+    return d.controllerContainers;
+}
+
 function optionalConsumer(creep) {
-    const lab = creep.pos.findClosestByRange(roomCache.myStructures(creep.room), {
-        filter: (s) =>
-            (s.structureType === STRUCTURE_LAB ||
-                s.structureType === STRUCTURE_FACTORY ||
-                s.structureType === STRUCTURE_POWER_SPAWN) &&
-            s.store.getFreeCapacity(RESOURCE_ENERGY) > 0,
-    });
+    const lab = creep.pos.findClosestByRange(
+        labFactoryPowerSpawnNeedingEnergy(creep.room)
+    );
     if (lab) return lab;
 
     if (!creep.room.controller) return null;
-    return creep.room.controller.pos.findInRange(FIND_STRUCTURES, 3, {
-        filter: (s) =>
-            s.structureType === STRUCTURE_CONTAINER &&
-            s.store.getFreeCapacity(RESOURCE_ENERGY) > 0,
-    })[0];
+    return controllerContainerCandidates(creep.room)[0];
 }
 
 // A non-critical tower still worth topping off (towerDeliverable) - also
 // genuinely optional, gated the same way as optionalConsumer above by the
 // caller (resourceTiers.aboveReserve).
+function toppableTowers(room) {
+    const d = derived(room);
+    if (!d.toppableTowers) {
+        d.toppableTowers = _.filter(roomCache.myStructures(room), (s) =>
+            towerDeliverable(s, room)
+        );
+    }
+    return d.toppableTowers;
+}
+
 function toppableTower(creep) {
-    return creep.pos.findClosestByRange(roomCache.myStructures(creep.room), {
-        filter: (s) => towerDeliverable(s, creep.room),
-    });
+    return creep.pos.findClosestByRange(toppableTowers(creep.room));
 }
 
 // ROADMAP 0074 (user request, refined same-day): a non-critical tower
@@ -330,14 +400,9 @@ function pickLoad(creep) {
     // energy pipeline outranks a single delivery cycle to spawn/ext.
     if (containersBackedUp(creep.room)) {
         const backedUpLink = creep.pos.findClosestByRange(
-            roomCache.myStructures(creep.room),
-            {
-                filter: (s) =>
-                    s.structureType === STRUCTURE_LINK &&
-                    !s.isCollector() &&
-                    s.store[RESOURCE_ENERGY] > 0 &&
-                    reservations.available(creep, s) >= 50,
-            }
+            nonCollectorLinksWithEnergy(creep.room).filter(
+                (s) => reservations.available(creep, s) >= 50
+            )
         );
         if (backedUpLink) {
             return { id: backedUpLink.id, act: "withdraw", dest: "storage" };
@@ -357,14 +422,9 @@ function pickLoad(creep) {
     // grabbing first when nothing is actually urgent.
     if (essentialConsumer(creep)) {
         const urgentLink = creep.pos.findClosestByRange(
-            roomCache.myStructures(creep.room),
-            {
-                filter: (s) =>
-                    s.structureType === STRUCTURE_LINK &&
-                    !s.isCollector() &&
-                    s.store[RESOURCE_ENERGY] > 0 &&
-                    reservations.available(creep, s) >= 50,
-            }
+            nonCollectorLinksWithEnergy(creep.room).filter(
+                (s) => reservations.available(creep, s) >= 50
+            )
         );
         if (urgentLink) return { id: urgentLink.id, act: "withdraw" };
 
@@ -396,13 +456,11 @@ function pickLoad(creep) {
     });
     if (ruin) return { id: ruin.id, act: "withdraw" };
 
-    const link = creep.pos.findClosestByRange(roomCache.myStructures(creep.room), {
-        filter: (s) =>
-            s.structureType === STRUCTURE_LINK &&
-            !s.isCollector() &&
-            s.store[RESOURCE_ENERGY] > 0 &&
-            reservations.available(creep, s) >= 50,
-    });
+    const link = creep.pos.findClosestByRange(
+        nonCollectorLinksWithEnergy(creep.room).filter(
+            (s) => reservations.available(creep, s) >= 50
+        )
+    );
     if (link) return { id: link.id, act: "withdraw" };
 
     if (creep.room.storage && creep.room.storage.store[RESOURCE_ENERGY] > 0) {
@@ -446,6 +504,20 @@ function pickLoad(creep) {
 // there already keeps it fed (miner.js distribute()), and a hauler
 // detouring all the way out to a source cluster just to top off a tower the
 // miner already handles is a wasted trip.
+function nonCollectorLinksWithEnergy(room) {
+    const d = derived(room);
+    if (!d.links) {
+        d.links = _.filter(
+            roomCache.myStructures(room),
+            (s) =>
+                s.structureType === STRUCTURE_LINK &&
+                !s.isCollector() &&
+                s.store[RESOURCE_ENERGY] > 0
+        );
+    }
+    return d.links;
+}
+
 function isSourceDefenseTower(structure) {
     const entries = planEntriesAt(
         structure.room.name,
@@ -463,17 +535,10 @@ function isSourceDefenseTower(structure) {
 function pickDeliver(creep) {
     // Production continuity comes before optional defense refill: a hungry
     // spawn/extension must win over a tower sitting below its refill ratio.
-    let target = creep.pos.findClosestByPath(roomCache.myStructures(creep.room), {
-        filter: (s) =>
-            (s.structureType === STRUCTURE_SPAWN ||
-                s.structureType === STRUCTURE_EXTENSION) &&
-            s.store.getFreeCapacity(RESOURCE_ENERGY) > 0,
-    });
+    let target = creep.pos.findClosestByPath(spawnExtNeedingEnergy(creep.room));
     if (target) return target.id;
 
-    target = creep.pos.findClosestByRange(roomCache.myStructures(creep.room), {
-        filter: (s) => isTowerCritical(s, creep.room),
-    });
+    target = creep.pos.findClosestByRange(criticalTowers(creep.room));
     if (target) return target.id;
 
     // keep a minimum emergency buffer in storage - below the reserve it
@@ -510,15 +575,24 @@ function pickDeliver(creep) {
     // capacity - not worth a dedicated trip, but with the hauler already
     // idle and nothing else to do, topping one off anyway beats sitting
     // full nearby.
-    target = creep.pos.findClosestByRange(roomCache.myStructures(creep.room), {
-        filter: (s) =>
-            s.structureType === STRUCTURE_TOWER &&
-            !isSourceDefenseTower(s) &&
-            s.store.getFreeCapacity(RESOURCE_ENERGY) > 0,
-    });
+    target = creep.pos.findClosestByRange(fallbackTowers(creep.room));
     if (target) return target.id;
 
     return null;
+}
+
+function fallbackTowers(room) {
+    const d = derived(room);
+    if (!d.fallbackTowers) {
+        d.fallbackTowers = _.filter(
+            roomCache.myStructures(room),
+            (s) =>
+                s.structureType === STRUCTURE_TOWER &&
+                !isSourceDefenseTower(s) &&
+                s.store.getFreeCapacity(RESOURCE_ENERGY) > 0
+        );
+    }
+    return d.fallbackTowers;
 }
 
 function idleNear(creep) {
