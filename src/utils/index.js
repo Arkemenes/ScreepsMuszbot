@@ -10,6 +10,8 @@ let utils = {
     terrain: require("./terrain"),
     planStore: require("./planStore"),
     traffic: require("./traffic"),
+    resourceTiers: require("./resourceTiers"),
+    priority: require("./priority"),
 };
 
 module.exports = utils;

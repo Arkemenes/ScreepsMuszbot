@@ -484,11 +484,12 @@ function pickDeliver(creep) {
     // ROADMAP 0074: a non-critical tower first, then whichever other
     // optional consumer needs it - lab/factory/power spawn, or the
     // controller's upkeep container (satisfactoryConsumer) - only while
-    // the reserve above is intact (resourceTiers.aboveReserve, checked
-    // just above - ROADMAP 0054). Defense readiness outranks a lab/
-    // factory errand or the controller's buffer even when neither is
-    // essential yet.
-    target = satisfactoryConsumer(creep);
+    // Optional consumers are paused whenever the room is economically
+    // critical, even if the normal storage reserve still exists. A creep
+    // already carrying a resource finishes its current delivery; this gate
+    // only controls selecting a new optional destination.
+    const economy = resourceTiers.getEconomySnapshot(creep.room);
+    if (economy.state !== "critical") target = satisfactoryConsumer(creep);
     if (target) return target.id;
 
     if (
@@ -687,6 +688,10 @@ function spawnsAndExtensionsFull(room) {
     );
 }
 
+function economyHasNoCriticalConsumer(room) {
+    return resourceTiers.getCriticalConsumers(room) === 0;
+}
+
 function pickMineralJob(room) {
     return (
         mineralContainerJob(room) ||
@@ -753,7 +758,7 @@ var hauler = {
         if (creep.memory.mineralJob) {
             const job = creep.memory.mineralJob;
             const carryingJobResource = creep.store[job.resourceType] > 0;
-            if (carryingJobResource || spawnsAndExtensionsFull(creep.room)) {
+            if (carryingJobResource || economyHasNoCriticalConsumer(creep.room)) {
                 runMineralJob(creep);
                 return;
             }
@@ -801,7 +806,7 @@ var hauler = {
             // link - but try a non-energy job first (ROADMAP 0051), this is
             // the ONLY place memory.mineralJob ever gets set
             if (carrying === 0) {
-                const mineralJob = spawnsAndExtensionsFull(creep.room)
+                const mineralJob = economyHasNoCriticalConsumer(creep.room)
                     ? pickMineralJob(creep.room)
                     : null;
                 if (mineralJob) {

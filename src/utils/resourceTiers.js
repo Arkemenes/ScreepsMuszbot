@@ -6,6 +6,26 @@
 // shape as the functions it replaces - never throws without a storage
 // (constitution §3).
 const config = require("./config");
+const roomCache = require("./roomCache");
+const { planEntriesAt } = require("./plan");
+
+let economyCacheTick = -1;
+let economyCache = {};
+
+function isSourceDefenseTower(structure) {
+    const entries = planEntriesAt(
+        structure.room.name,
+        structure.pos.x,
+        structure.pos.y
+    );
+    return !!(
+        entries &&
+        entries.some(
+            (entry) =>
+                entry.structureType === STRUCTURE_TOWER && entry.sourceDefense
+        )
+    );
+}
 
 function reserveFloor(room) {
     if (!room.storage) return 0;
@@ -62,4 +82,94 @@ function controllerCritical(room) {
     );
 }
 
-module.exports = { reserveFloor, aboveReserve, isStorageAbundant, controllerCritical };
+function computeEconomySnapshot(room) {
+    if (!room) return 0;
+    let count = 0;
+    let hasHungrySpawn = false;
+
+    if (controllerCritical(room)) count += 1;
+
+    if (room.storage && room.storage.store.energy <= reserveFloor(room)) {
+        count += 1;
+    }
+
+    if (typeof FIND_MY_STRUCTURES !== "undefined") {
+        const structures = roomCache.myStructures(room);
+        const spawnsAndExtensions = structures.filter((s) =>
+            (s.structureType === STRUCTURE_SPAWN ||
+                s.structureType === STRUCTURE_EXTENSION) &&
+            s.store.getFreeCapacity(RESOURCE_ENERGY) > 0
+        );
+        hasHungrySpawn = spawnsAndExtensions.length > 0;
+        if (spawnsAndExtensions.length) count += spawnsAndExtensions.length;
+
+        const criticalTowers = structures.filter((s) =>
+            s.structureType === STRUCTURE_TOWER &&
+            !isSourceDefenseTower(s) &&
+            s.store[RESOURCE_ENERGY] <
+                s.store.getCapacity(RESOURCE_ENERGY) *
+                    config.get("tower.criticalRatio", 0.5)
+        );
+        if (criticalTowers.length) count += criticalTowers.length;
+    }
+
+    const roomMem = Memory.rooms && Memory.rooms[room.name];
+    if (roomMem && roomMem.defenseActive) count += 1;
+
+    const reason = controllerCritical(room)
+        ? "controller"
+        : Memory.rooms && Memory.rooms[room.name] && Memory.rooms[room.name].defenseActive
+                ? "defense"
+            : hasHungrySpawn
+                ? "spawn"
+                : room.storage && room.storage.store.energy <= reserveFloor(room)
+                    ? "reserve"
+                    : "none";
+
+    const state = count > 0
+        ? "critical"
+        : isStorageAbundant(room)
+            ? "abundant"
+            : "stable";
+
+    return {
+        state,
+        reason,
+        criticalConsumers: Math.max(0, count),
+    };
+}
+
+function getEconomySnapshot(room) {
+    if (!room) {
+        return { state: "stable", reason: "none", criticalConsumers: 0 };
+    }
+    if (economyCacheTick !== Game.time) {
+        economyCacheTick = Game.time;
+        economyCache = {};
+    }
+    return economyCache[room.name] ||
+        (economyCache[room.name] = computeEconomySnapshot(room));
+}
+
+function getCriticalConsumers(room) {
+    return getEconomySnapshot(room).criticalConsumers;
+}
+
+function getEconomyReason(room) {
+    return getEconomySnapshot(room).reason;
+}
+
+function getEconomyState(room) {
+    return getEconomySnapshot(room).state;
+}
+
+module.exports = {
+    reserveFloor,
+    aboveReserve,
+    isStorageAbundant,
+    controllerCritical,
+    getEconomySnapshot,
+    getCriticalConsumers,
+    getEconomyReason,
+    getEconomyState,
+};

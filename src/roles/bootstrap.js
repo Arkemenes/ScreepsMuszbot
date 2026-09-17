@@ -4,6 +4,8 @@ const census = require("../utils/census");
 const { roomNeeds } = require("../rooms/needs");
 const reservations = require("../utils/reservations");
 const names = require("../utils/names");
+const priority = require("../utils/priority");
+const resourceTiers = require("../utils/resourceTiers");
 
 function findSource(creep) {
     if (creep.memory.source) {
@@ -23,16 +25,24 @@ function findSource(creep) {
 // Top priority: spawn or extension, whichever is closer - keeping the room
 // able to spawn always outranks topping off the link network / a container.
 function findSpawnOrExtension(creep) {
-    return creep.pos.findClosestByRange(FIND_MY_STRUCTURES, {
+    const economy = resourceTiers.getEconomySnapshot(creep.room);
+    const target = creep.pos.findClosestByRange(FIND_MY_STRUCTURES, {
         filter: (structure) =>
             (structure.structureType === STRUCTURE_SPAWN ||
                 structure.structureType === STRUCTURE_EXTENSION) &&
             structure.store.getFreeCapacity(RESOURCE_ENERGY) > 0,
     });
+    const selected = priority.pick([{
+        target,
+        tier: economy.criticalConsumers > 0 ? "critical" : "satisfactory",
+        priority: 3,
+        allowed: Boolean(target),
+    }]);
+    return selected ? selected.target : null;
 }
 
 function findEnergyDestination(creep) {
-    return creep.pos.findClosestByRange(FIND_MY_STRUCTURES, {
+    const target = creep.pos.findClosestByRange(FIND_MY_STRUCTURES, {
         filter: (structure) => {
             if (structure.structureType === STRUCTURE_LINK) {
                 return (
@@ -48,6 +58,13 @@ function findEnergyDestination(creep) {
             return false;
         },
     });
+    const selected = priority.pick([{
+        target,
+        tier: "satisfactory",
+        priority: 1,
+        allowed: Boolean(target),
+    }]);
+    return selected ? selected.target : null;
 }
 
 const bootstrap = {

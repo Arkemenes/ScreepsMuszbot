@@ -1,6 +1,6 @@
 # 0091 — Política global de tiers para recursos e ações
 
-- **Status:** spec
+- **Status:** done
 - **Owner:** usuário + assistente
 - **Created:** 2026-09-17
 

@@ -3,6 +3,7 @@
 const roomCache = require("./roomCache");
 const config = require("./config");
 const energyLedger = require("./energyLedger");
+const resourceTiers = require("./resourceTiers");
 
 // heap-resident, survives ticks but not a global reset - a reset just means
 // the very next call recomputes fresh instead of reusing a stale value, so
@@ -138,6 +139,10 @@ function exportStats() {
             roomStats.hatcheryUptime = hatcheryUptime(room);
             roomStats.avgBarrierHits = avgBarrierHits(room);
             roomStats.minerals = minerals(room);
+            const economy = resourceTiers.getEconomySnapshot(room);
+            roomStats.economyState = economy.state;
+            roomStats.economyReason = economy.reason;
+            roomStats.criticalConsumers = economy.criticalConsumers;
             // ROADMAP 0081: where the room's energy went this tick
             roomStats.energySpent = energyLedger.snapshot(roomName);
         }

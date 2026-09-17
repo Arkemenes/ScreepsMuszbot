@@ -1219,6 +1219,23 @@ function withFindLookup(pos, lists) {
     hauler.run(hLab);
     assert(hLab._to === "lab1",
         "hauler tops off a lab once towers/spawn/storage are all satisfied (ROADMAP 0043)");
+
+    const savedDowngradeTicks = controller.ticksToDowngrade;
+    controller.ticksToDowngrade = 1;
+    room.storage = Object.assign(new Structure(), {
+        id: "storcritlab", structureType: STRUCTURE_STORAGE, room,
+        pos: new RoomPosition(26, 24, "W1N1"), store: store(50000, 100000),
+    });
+    REG.storcritlab = room.storage;
+    Game.time++;
+    const hCriticalLab = makeCreep("HCriticalLab", "hauler", { store: store(200, 200) });
+    hCriticalLab.transfer = (t) => { hCriticalLab._to = t && t.id; return OK; };
+    hauler.run(hCriticalLab);
+    assert(hCriticalLab._to !== "lab1",
+        "a critical controller blocks new optional lab delivery (0091)");
+    controller.ticksToDowngrade = savedDowngradeTicks;
+    room.storage = null;
+    delete REG.storcritlab;
     findMap[FIND_MY_STRUCTURES] = findMap[FIND_MY_STRUCTURES].filter((s) => s.id !== "lab1");
 
     // storage below its own 5% reserve floor outranks topping that same lab
@@ -2954,6 +2971,52 @@ delete global.Memory.settings.allies;
     assert(config.get("nonexistent.path.at.all", "fallback") === "fallback",
         "config.get() falls back to the caller's default for an unknown path, never throws");
     delete global.Memory.settings.defender;
+}
+
+// --- 0091: global tier state and priority ordering --------------------
+{
+    const resourceTiers = require(path.join(PROJECT, "src/utils/resourceTiers"));
+    const priority = require(path.join(PROJECT, "src/utils/priority"));
+    const room = {
+        name: "W1N1",
+        storage: {
+            store: { energy: 2000, getCapacity: () => 10000 },
+        },
+        controller: { my: true, level: 5, ticksToDowngrade: 20000 },
+        find: () => [],
+    };
+    const criticalRoom = {
+        name: "W1N2",
+        storage: { store: { energy: 50, getCapacity: () => 10000 } },
+        controller: { my: true, level: 5, ticksToDowngrade: 1000 },
+        find: () => [],
+    };
+
+    assert(resourceTiers.getEconomyState(room) === "stable",
+        "resourceTiers.getEconomyState() is stable above reserve and without a critical controller");
+    assert(resourceTiers.getEconomyState(criticalRoom) === "critical",
+        "resourceTiers.getEconomyState() goes critical when the controller is at risk");
+    assert(resourceTiers.getEconomyReason(criticalRoom) === "controller",
+        "resourceTiers.getEconomyReason() reports the dominant critical trigger");
+    assert(resourceTiers.getEconomySnapshot(room) ===
+        resourceTiers.getEconomySnapshot(room),
+        "resourceTiers reuses one economy snapshot per room and tick");
+    assert(priority.pick([
+        { id: "lab", tier: "optional", priority: 2 },
+        { id: "tower", tier: "satisfactory", priority: 9 },
+        { id: "spawn", tier: "critical", priority: 1 },
+    ]).id === "spawn",
+        "priority.pick() prefers critical targets before satisfactory and optional ones");
+    assert(priority.pick([
+        { id: "a", tier: "satisfactory", priority: 2 },
+        { id: "b", tier: "satisfactory", priority: 2 },
+    ]).id === "a",
+        "priority.pick() preserves original order as the final tiebreaker");
+    assert(priority.pick([
+        { id: "blocked", tier: "critical", priority: 9, allowed: false },
+        { id: "open", tier: "satisfactory", priority: 1, allowed: true },
+    ]).id === "open",
+        "priority.pick() excludes declaratively disallowed candidates");
 }
 
 // --- rampart opens for an approaching ally --------------------------
@@ -5242,6 +5305,116 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
         assert(rhFallback._to === "rhtowerfallback",
             "remoteHauler tops off a tower when storage and spawn/extension are both full " +
                 "(ROADMAP 0059, got " + rhFallback._to + ")");
+
+        const savedSpawnStoreRemote = spawn.store;
+        const savedStorageRemote = room.storage;
+        spawn.store = Object.assign(store(0, 300), { getFreeCapacity: () => 300 });
+        room.storage = Object.assign(new Structure(), {
+            id: "rhstoragecritical", structureType: STRUCTURE_STORAGE, room,
+            pos: new RoomPosition(26, 24, "W1N1"), store: store(50000, 100000),
+        });
+        REG.rhstoragecritical = room.storage;
+        Game.time++;
+        const rhCritical = Object.assign(Object.create(Creep.prototype), {
+            id: "rhcritical", room,
+            pos: withMyStructuresLookup(new RoomPosition(20, 20, "W1N1"), [
+                spawn, room.storage,
+            ]),
+            store: store(100, 100),
+            body: [{ type: CARRY }, { type: MOVE }],
+            memory: { role: "remoteHauler", home: "W1N1", targetRoom: "W1N2", job: "deliver" },
+            moveTo: () => OK, suicide: () => OK,
+        });
+        rhCritical.transfer = (t) => { rhCritical._to = t && t.id; return OK; };
+        remoteHauler.run(rhCritical);
+        assert(rhCritical._to === "spawn1",
+            "remoteHauler delivers to a critical home-room spawn before storage (0091, got " +
+                rhCritical._to + ")");
+        spawn.store = savedSpawnStoreRemote;
+        room.storage = savedStorageRemote;
+        delete REG.rhstoragecritical;
+    }
+
+    // --- ROADMAP 0091: bootstrap keeps a critical spawn ahead of the
+    // collector link/container fallback --------------------------------
+    {
+        const bootstrap = require(path.join(PROJECT, "src/roles/bootstrap"));
+        const savedSpawnStoreBootstrap = spawn.store;
+        spawn.store = Object.assign(store(0, 300), { getFreeCapacity: () => 300 });
+        const bootstrapContainer = Object.assign(new StructureContainer(), {
+            id: "bootstrap-container", structureType: STRUCTURE_CONTAINER,
+            room, pos: new RoomPosition(22, 20, "W1N1"),
+            store: store(0, 2000),
+        });
+        const bootstrapLink = Object.assign(new StructureLink(), {
+            id: "bootstrap-link", structureType: STRUCTURE_LINK,
+            room, pos: new RoomPosition(21, 20, "W1N1"),
+            store: store(0, 800), isCollector: () => true,
+        });
+        const bootstrapPos = new RoomPosition(20, 20, "W1N1");
+        bootstrapPos.findClosestByRange = (type, opts) => {
+            if (type !== FIND_MY_STRUCTURES) return null;
+            const targets = [spawn, bootstrapLink, bootstrapContainer];
+            const filtered = opts && opts.filter ? targets.filter(opts.filter) : targets;
+            return filtered[0] || null;
+        };
+        bootstrapPos.findClosestByPath = () => null;
+        const bootstrapCreep = Object.assign(Object.create(Creep.prototype), {
+            id: "bootstrap-critical", room, pos: bootstrapPos,
+            body: [{ type: WORK }, { type: CARRY }, { type: MOVE }],
+            memory: { role: "bootstrap", source: source.id },
+            store: store(50, 50),
+            transfer: (target) => { bootstrapCreep._to = target && target.id; return OK; },
+            moveTo: () => OK, move: () => OK, drop: () => OK,
+        });
+        Game.time++;
+        bootstrap.run(bootstrapCreep);
+        assert(bootstrapCreep._to === "spawn1",
+            "bootstrap delivers to a critical spawn before link/container (0091)");
+        spawn.store = savedSpawnStoreBootstrap;
+    }
+
+    // --- ROADMAP 0091: optional mineral jobs are preemptible only before
+    // their resource has been withdrawn -----------------------------------
+    {
+        const savedSpawnStoreJob = spawn.store;
+        spawn.store = Object.assign(store(0, 300), { getFreeCapacity: () => 300 });
+        const emptyJob = makeCreep("MineralJobEmpty", "hauler", {
+            store: store(0, 200),
+        });
+        emptyJob.memory.mineralJob = {
+            resourceType: RESOURCE_HYDROGEN,
+            fromId: "missing-mineral-source", toId: "missing-mineral-dest",
+        };
+        Game.time++;
+        hauler.run(emptyJob);
+        assert(!emptyJob.memory.mineralJob,
+            "hauler abandons an unstarted mineral job for a critical spawn (0091)");
+
+        const mineralDest = Object.assign(new Structure(), {
+            id: "mineral-job-dest", room,
+            store: store(0, 1000),
+        });
+        REG[mineralDest.id] = mineralDest;
+        const loadedJob = makeCreep("MineralJobLoaded", "hauler", {
+            store: Object.assign(store(0, 200), { [RESOURCE_HYDROGEN]: 10 }),
+        });
+        loadedJob.memory.mineralJob = {
+            resourceType: RESOURCE_HYDROGEN,
+            fromId: "missing-mineral-source", toId: mineralDest.id,
+        };
+        loadedJob.transfer = (target, resourceType) => {
+            loadedJob._jobTarget = target && target.id;
+            loadedJob._jobResource = resourceType;
+            return OK;
+        };
+        Game.time++;
+        hauler.run(loadedJob);
+        assert(loadedJob._jobTarget === mineralDest.id &&
+            loadedJob._jobResource === RESOURCE_HYDROGEN,
+            "hauler finishes a loaded mineral job during a critical spawn (0091)");
+        spawn.store = savedSpawnStoreJob;
+        delete REG[mineralDest.id];
     }
 
     delete Memory.rooms.W1N1.remotes;

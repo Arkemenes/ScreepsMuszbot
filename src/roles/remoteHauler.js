@@ -17,6 +17,8 @@ const { roomNeeds } = require("../rooms/needs");
 const remotes = require("../rooms/remotes");
 const routing = require("../utils/routing");
 const names = require("../utils/names");
+const priority = require("../utils/priority");
+const resourceTiers = require("../utils/resourceTiers");
 
 function pickLoad(creep, targetRoomName) {
     const container = creep.pos.findClosestByRange(FIND_STRUCTURES, {
@@ -35,19 +37,31 @@ function pickLoad(creep, targetRoomName) {
 }
 
 function pickDeliver(creep) {
-    if (
-        creep.room.storage &&
-        creep.room.storage.store.getFreeCapacity(RESOURCE_ENERGY) > 0
-    ) {
-        return creep.room.storage;
-    }
+    const economy = resourceTiers.getEconomySnapshot(creep.room);
     const consumer = creep.pos.findClosestByPath(FIND_MY_STRUCTURES, {
         filter: (s) =>
             (s.structureType === STRUCTURE_SPAWN ||
                 s.structureType === STRUCTURE_EXTENSION) &&
             s.store.getFreeCapacity(RESOURCE_ENERGY) > 0,
     });
-    if (consumer) return consumer;
+    const target = priority.pick([
+        {
+            target: consumer,
+            tier: "critical",
+            priority: 3,
+            allowed: Boolean(consumer) && economy.criticalConsumers > 0,
+        },
+        {
+            target: creep.room.storage,
+            tier: "satisfactory",
+            priority: 2,
+            allowed: Boolean(
+                creep.room.storage &&
+                    creep.room.storage.store.getFreeCapacity(RESOURCE_ENERGY) > 0
+            ),
+        },
+    ]);
+    if (target) return target.target;
 
     // ROADMAP 0059 - last resort, same principle as hauler.js's own final
     // tower fallback: storage and spawn/extension are both full/absent, but

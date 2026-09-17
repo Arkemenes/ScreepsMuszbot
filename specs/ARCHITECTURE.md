@@ -75,6 +75,14 @@ pass those costs to `PathFinder`; empty `CARRY` parts do not generate fatigue,
 while loaded CARRY capacity contributes according to the current store load.
 Invalid or missing bodies use the existing fallback costs.
 
+### Economy policy snapshot
+
+`resourceTiers.getEconomySnapshot(room)` calcula uma vez por sala/tick os
+estados `critical`, `stable` ou `abundant`, a razão dominante e a quantidade
+de consumidores críticos. `stats`, `hauler`, `remoteHauler` e `bootstrap`
+reutilizam esse snapshot; terminal e transferências intersalas continuam fora
+do escopo do 0091.
+
 ### `src/prototypes/`
 
 `index.js` os requer por efeito colateral: `roomObject` (pilha de estados:
