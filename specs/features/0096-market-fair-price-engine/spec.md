@@ -67,18 +67,24 @@ compromete o orçamento de CPU do resto do bot.
   - `sellPrice` e `buyPrice` são medianas temporais ponderadas pela volumetria
     do melhor nível de cada snapshot. Cada snapshot tem peso máximo de
     `market.snapshotWeightCap` (default 1% do peso bruto total).
-  - `fairPrice` é o midpoint de `sellPrice` e `buyPrice`; fica `null` se um
-    dos lados não existir. Sem histórico próprio de snapshots suficiente,
-    calcula com os snapshots disponíveis e marca `confidence: "warming"`.
-- Console: um comando novo (nome exato a decidir no `plan.md`) que imprime,
-  para um `resourceType`, **um único `fairPrice` final**. Os VWAPs das duas
-  profundidades (`sell` e `buy`) e os dados brutos usados continuam no
-  snapshot/Grafana para diagnóstico, mas não são concatenados em uma segunda
-  "média" manipulável. Sem argumento, lista um resumo de todo o mercado com
-  um `fairPrice` por recurso que tenha histórico ou book.
+  - Para recursos primários, `fairPrice` é a mediana ponderada dos midpoints
+    de cada snapshot (`(bestBuy + bestSell) / 2`), e não o midpoint das duas
+    medianas independentes. Fica `null` se não houver snapshots com ambos os
+    lados; durante a janela incompleta, marca `confidence: "warming"`.
+- Console: `marketPrice(resourceType)` imprime todas as componentes; sem
+  argumento, lista somente `{resourceType, fairPrice}` dos recursos
+  precificáveis.
 - `src/utils/console.js` — nova seção "Mercado" com o(s) comando(s) novo(s).
-- `Memory.stats.market.fairPrice` — snapshot esparso dos recursos com volume,
-  para consumo pelo exporter/Grafana; não contém objetos do jogo.
+- `Memory.stats.market.fairPrice` — snapshot esparso para o exporter/Grafana;
+  não contém objetos do jogo.
+- Cotações atuais: `currentBuy` (maior BUY) e `currentSell` (menor SELL),
+  atualizadas a cada `market.currentInterval` ticks (default 100), sem alterar
+  a cadência horária da amostragem temporal.
+- Commodities: `buyPrice`, `sellPrice` e `fairPrice` são o custo derivado
+  recursivo dos mesmos preços dos insumos da receita nativa `COMMODITIES`, por
+  unidade produzida. Não há um segundo campo temporal da commodity que duplique
+  esses valores; `currentBuy`/`currentSell` mostram o book próprio para a
+  comparação contra fabricação.
 
 ## Out of scope
 
@@ -141,8 +147,9 @@ compromete o orçamento de CPU do resto do bot.
    mesmo padrão null-safe de `hauler.js`'s `terminalWithdrawable`.
 7. `node --check` limpo nos arquivos tocados; `test/smoke.js` verde;
    `npx grunt` builda.
-8. `Memory.stats.market.fairPrice` exporta apenas `buyPrice`, `sellPrice`,
-  `fairPrice`, `sampleCount`, `windowCoverageTicks` e `confidence`.
+8. `Memory.stats.market.fairPrice` exporta `buyPrice`, `sellPrice`,
+   `fairPrice`, `currentBuy`, `currentSell`, `sampleCount`,
+   `windowCoverageTicks` e `confidence`.
 9. `marketPrice(resourceType)` imprime todas as componentes do recurso; sem
   argumento, imprime somente itens com `fairPrice` não nulo.
 
@@ -192,5 +199,9 @@ compromete o orçamento de CPU do resto do bot.
   comando nunca chama `Game.market` diretamente nem força um scan fora do
   throttle; antes do primeiro scan, informa que ainda não há dados.
 - A mediana temporal usa pesos de volumetria do melhor nível, limitados a 1%
-  por snapshot; o `fairPrice` final é midpoint somente quando os dois lados
-  existem.
+  por snapshot. Para o fair primário, cada midpoint é calculado antes da
+  mediana; para commodity, o fair é o custo recursivo dos fairs dos insumos.
+- O book atual atualiza a cada 100 ticks, separado da amostra temporal a cada
+  3600 ticks. Para uma commodity, os preços de referência vêm da soma
+  recursiva de `recipe.components`, dividida por `recipe.amount`; somente os
+  campos `current*` ficam atrelados ao book próprio da commodity.

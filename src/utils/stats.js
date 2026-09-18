@@ -126,14 +126,16 @@ function exportStats() {
         for (const resourceType in marketSnapshot.resources) {
             const result = marketSnapshot.resources[resourceType];
             if (!result || (
-                !(result.averageDailyVolume > 0) &&
-                result.bestSell === null &&
-                result.bestBuy === null
+                result.fairPrice === null &&
+                result.currentBuy === null &&
+                result.currentSell === null
             )) continue;
             fairPrice[resourceType] = {
                 fairPrice: result.fairPrice,
                 buyPrice: result.buyPrice,
                 sellPrice: result.sellPrice,
+                currentBuy: result.currentBuy,
+                currentSell: result.currentSell,
                 sampleCount: result.sampleCount,
                 windowCoverageTicks: result.windowCoverageTicks,
                 confidence: result.confidence,

@@ -8,8 +8,10 @@ calculado em heap; nenhum caminho de execução de ordens será introduzido.
 `utils/market.js` reúne o universo nativo de recursos, lê uma vez o book completo
 quando o intervalo vence, captura o melhor nível de cada lado e mantém uma
 janela temporal compacta por `resourceType`. A mediana ponderada dos snapshots
-produz `buyPrice`/`sellPrice`, e o midpoint produz um único `fairPrice` quando
-ambos os lados existem. O módulo
+produz `buyPrice`/`sellPrice`, e a mediana dos midpoints por snapshot produz
+um único `fairPrice` quando ambos os lados existem. O topo atual do book atualiza a cada 100 ticks, sem
+criar uma amostra temporal nova; commodities substituem os preços de referência
+pela soma recursiva dos insumos por unidade produzida. O módulo
 mantém o último snapshot e o tick do scan em variáveis de módulo, permitindo que
 o loop apenas atualize o dado no ritmo configurado e que o console leia sem
 chamadas caras adicionais.
@@ -37,7 +39,7 @@ parciais ausentes.
 |------|--------|
 | `src/utils/index.js` | Exporta o módulo de mercado. |
 | `src/main.js` | Executa o scan throttled sob `guard`. |
-| `src/utils/config.js` | Adiciona intervalo e percentuais do VWAP. |
+| `src/utils/config.js` | Configura cadências atual/temporal e teto de peso. |
 | `src/utils/console.js` | Documenta `marketPrice(resourceType?)` em Mercado. |
 | `src/utils/stats.js` | Copia o snapshot esparso para `Memory.stats.market.fairPrice`. |
 | `test/smoke.js` | Mocka o mercado e cobre cálculo, agrupamento, throttle e console. |
@@ -49,7 +51,8 @@ parciais ausentes.
 - Snapshot heap: `{ tick, buyPrice, buyVolume, sellPrice, sellVolume }` por
   recurso, em uma janela circular de 604800 ticks.
 - `Memory.stats.market.fairPrice`: `{ buyPrice, sellPrice, fairPrice,
-  sampleCount, windowCoverageTicks, confidence }`.
+  currentBuy, currentSell, sampleCount,
+  windowCoverageTicks, confidence }`.
 - `Memory.stats.market.fairPrice`: mapa esparso por resource type com os
   campos numéricos do snapshot; recursos sem volume positivo são omitidos.
 - Config: `market.scanInterval` (100), `market.vwapDepthPercentLow` (0.01) e
@@ -57,8 +60,8 @@ parciais ausentes.
 
 ## How it satisfies the constitution
 
-- **CPU:** `getAllOrders()` é executado somente uma vez por intervalo; o
-  processamento temporal ocorre apenas quando há snapshot novo.
+- **CPU:** `getAllOrders()` é executado a cada 100 ticks para as cotações
+  atuais; a amostra temporal e a mediana só mudam a cada 3600 ticks.
 - **Memory:** cálculo e timestamp ficam no heap; apenas o snapshot numérico
   esparso necessário ao Grafana é serializado em `Memory.stats`.
 - **Fail-soft:** métodos ausentes, constantes incompletas, ordens inválidas e

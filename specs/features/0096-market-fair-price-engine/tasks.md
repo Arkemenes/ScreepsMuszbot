@@ -15,6 +15,8 @@ Ordenadas e verificáveis. Nenhuma tarefa chama `deal`, `createOrder` ou
   - verify: `node --check` nos arquivos tocados · `node test/smoke.js "$(pwd)"` · `npx grunt` · atualizar `ROADMAP.md`/`ARCHITECTURE.md` e marcar `done`
 - [x] 6. Exportar o resultado temporal em `Memory.stats.market.fairPrice` e cobrir o contrato no smoke.
   - verify: assertion de `Memory.stats.market.fairPrice` com buy/sell/fair/sample/confidence
+- [x] 7. Separar cotações atuais da janela temporal e derivar commodities pela receita.
+  - verify: smoke cobre `currentBuy`/`currentSell`, preço recursivo por unidade e exportação para Grafana
 
 ## Notes
 
@@ -23,4 +25,4 @@ Ordenadas e verificáveis. Nenhuma tarefa chama `deal`, `createOrder` ou
 - Decisão aprovada: não usar `getHistory()` nem transações próprias no preço
   final; capturar melhor BUY/SELL ao longo do tempo.
 - Decisão aprovada: mediana temporal ponderada pelo volume do melhor nível,
-  limite de peso de 1% por snapshot e midpoint somente com os dois lados.
+  limite de peso de 1% por snapshot e mediana dos midpoints ponto a ponto.

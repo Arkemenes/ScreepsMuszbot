@@ -1,6 +1,7 @@
 const config = require("./config");
 
-let lastScanTick = null;
+let lastCurrentScanTick = null;
+let lastSnapshotTick = null;
 let lastSnapshot = null;
 const temporalSnapshots = {};
 
@@ -99,11 +100,24 @@ function weightedMedian(samples) {
     capped.sort((left, right) => left.price - right.price);
     const target = capped.reduce((sum, sample) => sum + sample.volume, 0) / 2;
     let accumulated = 0;
-    for (const sample of capped) {
+    for (let index = 0; index < capped.length; index++) {
+        const sample = capped[index];
         accumulated += sample.volume;
+        if (accumulated === target && capped[index + 1]) {
+            return (sample.price + capped[index + 1].price) / 2;
+        }
         if (accumulated >= target) return sample.price;
     }
     return capped[capped.length - 1].price;
+}
+
+function pointwiseFairPrice(snapshots) {
+    return weightedMedian((Array.isArray(snapshots) ? snapshots : [])
+        .filter((sample) => sample.buyPrice !== null && sample.sellPrice !== null)
+        .map((sample) => ({
+            price: (sample.buyPrice + sample.sellPrice) / 2,
+            volume: (sample.buyVolume + sample.sellVolume) / 2,
+        })));
 }
 
 function temporalResource(resourceType, now) {
@@ -117,9 +131,7 @@ function temporalResource(resourceType, now) {
     return {
         buyPrice,
         sellPrice,
-        fairPrice: buyPrice !== null && sellPrice !== null
-            ? (buyPrice + sellPrice) / 2
-            : null,
+        fairPrice: pointwiseFairPrice(snapshots),
         sampleCount: snapshots.length,
         windowCoverageTicks: snapshots.length
             ? now - snapshots[0].tick
@@ -129,6 +141,49 @@ function temporalResource(resourceType, now) {
             ? "ready"
             : "warming",
     };
+}
+
+function derivedPrice(resourceType, resources, memo, visiting) {
+    if (memo[resourceType] !== undefined) return memo[resourceType];
+    if (visiting[resourceType]) return null;
+    const recipe = typeof COMMODITIES !== "undefined" && COMMODITIES[resourceType];
+    if (!recipe || !recipe.components || !(recipe.amount > 0)) {
+        return resources[resourceType] || null;
+    }
+    visiting[resourceType] = true;
+    const result = { buyPrice: 0, sellPrice: 0, fairPrice: 0 };
+    for (const componentType in recipe.components) {
+        const component = derivedPrice(componentType, resources, memo, visiting);
+        const amount = numberOrZero(recipe.components[componentType]);
+        if (!component || component.buyPrice === null || component.sellPrice === null ||
+            component.fairPrice === null || amount <= 0) {
+            delete visiting[resourceType];
+            memo[resourceType] = null;
+            return null;
+        }
+        result.buyPrice += component.buyPrice * amount;
+        result.sellPrice += component.sellPrice * amount;
+        result.fairPrice += component.fairPrice * amount;
+    }
+    delete visiting[resourceType];
+    result.buyPrice /= recipe.amount;
+    result.sellPrice /= recipe.amount;
+    result.fairPrice /= recipe.amount;
+    memo[resourceType] = result;
+    return result;
+}
+
+function applyCommodityPrices(resources) {
+    const memo = {};
+    for (const resourceType in resources) {
+        const recipe = typeof COMMODITIES !== "undefined" && COMMODITIES[resourceType];
+        if (!recipe) continue;
+        const current = resources[resourceType];
+        const derived = derivedPrice(resourceType, resources, memo, {});
+        current.buyPrice = derived ? derived.buyPrice : null;
+        current.sellPrice = derived ? derived.sellPrice : null;
+        current.fairPrice = derived ? derived.fairPrice : null;
+    }
 }
 
 function vwap(orders, expectedType, targetVolume, descending) {
@@ -188,8 +243,8 @@ function buildResource(resourceType, days, orders) {
     const buyLevel = bestOrderLevel(orders, buyType, true);
     return {
         resourceType,
-        bestSell: sellLevel.price,
-        bestBuy: buyLevel.price,
+        currentBuy: buyLevel.price,
+        currentSell: sellLevel.price,
         currentBuyVolume: buyLevel.volume,
         currentSellVolume: sellLevel.volume,
     };
@@ -204,8 +259,8 @@ function emptySnapshot() {
 }
 
 function scan() {
-    const interval = Math.max(1, Number(config.get("market.snapshotInterval", 3600)) || 3600);
-    if (lastSnapshot && lastScanTick !== null && Game.time - lastScanTick < interval) {
+    const currentInterval = Math.max(1, Number(config.get("market.currentInterval", 100)) || 100);
+    if (lastSnapshot && lastCurrentScanTick !== null && Game.time - lastCurrentScanTick < currentInterval) {
         return lastSnapshot;
     }
     const market = typeof Game !== "undefined" && Game.market;
@@ -215,19 +270,23 @@ function scan() {
     }
     const groupedOrders = groupOrders(orders);
     const resources = {};
+    const snapshotInterval = Math.max(1, Number(config.get("market.snapshotInterval", 3600)) || 3600);
+    const snapshotDue = lastSnapshotTick === null || Game.time - lastSnapshotTick >= snapshotInterval;
     for (const resourceType of resourceTypes()) {
         const sellType = typeof ORDER_SELL !== "undefined" ? ORDER_SELL : "sell";
         const buyType = typeof ORDER_BUY !== "undefined" ? ORDER_BUY : "buy";
         const sellLevel = bestOrderLevel(groupedOrders[resourceType], sellType, false);
         const buyLevel = bestOrderLevel(groupedOrders[resourceType], buyType, true);
         if (!temporalSnapshots[resourceType]) temporalSnapshots[resourceType] = [];
-        temporalSnapshots[resourceType].push({
-            tick: Game.time,
-            buyPrice: buyLevel.price,
-            buyVolume: buyLevel.volume,
-            sellPrice: sellLevel.price,
-            sellVolume: sellLevel.volume,
-        });
+        if (snapshotDue) {
+            temporalSnapshots[resourceType].push({
+                tick: Game.time,
+                buyPrice: buyLevel.price,
+                buyVolume: buyLevel.volume,
+                sellPrice: sellLevel.price,
+                sellVolume: sellLevel.volume,
+            });
+        }
         const windowTicks = Math.max(1, Number(config.get("market.snapshotWindowTicks", 604800)) || 604800);
         while (temporalSnapshots[resourceType].length &&
             Game.time - temporalSnapshots[resourceType][0].tick > windowTicks) {
@@ -240,7 +299,9 @@ function scan() {
         );
         Object.assign(resources[resourceType], temporalResource(resourceType, Game.time));
     }
-    lastScanTick = Game.time;
+    applyCommodityPrices(resources);
+    lastCurrentScanTick = Game.time;
+    if (snapshotDue) lastSnapshotTick = Game.time;
     lastSnapshot = { tick: Game.time, resources };
     return lastSnapshot;
 }
@@ -250,7 +311,8 @@ function snapshot() {
 }
 
 function reset() {
-    lastScanTick = null;
+    lastCurrentScanTick = null;
+    lastSnapshotTick = null;
     lastSnapshot = null;
     for (const resourceType in temporalSnapshots) delete temporalSnapshots[resourceType];
 }
@@ -289,5 +351,6 @@ module.exports = {
     vwapDepths,
     fairPrice,
     weightedMedian,
+    pointwiseFairPrice,
     marketPrice,
 };

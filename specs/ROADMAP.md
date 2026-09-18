@@ -84,7 +84,7 @@ detalhe.
 | 0074 | [Torre não-crítica vira prioridade satisfatória própria, à frente de lab/factory/container](features/0074-hauler-satisfactory-tier-unification/spec.md) | done | follow-up no mesmo dia do 0073: usuário pediu pra tratar torre 50%-100% como "prioridade satisfatória" em TODAS as comparações. Primeira versão de `satisfactoryConsumer(creep)` comparava torre não-crítica vs. lab/factory/container por distância (mais perto vence) — usuário corrigiu no mesmo dia: "Torres devem ser prioritárias vs lab/factory/container", não é sobre proximidade. Fix final: `satisfactoryConsumer(creep) = toppableTower(creep) \|\| optionalConsumer(creep)` — torre não-crítica sempre checada primeiro (prontidão de defesa pesa mais que um errand de lab), `optionalConsumer` só entra se nenhuma torre precisar; usada no gate booleano do `pickLoad` e na cascata do `pickDeliver`, que de brinde ganhou a cobertura de factory/power spawn que faltava no seu check de lab isolado |
 | 0075 | [Pré-cálculo de rota real vira padrão pra toda viagem multi-sala](features/0075-multiroom-route-precompute/spec.md) | done | usuário: quer o mecanismo do 0064 (`computeRealRoute`/`opts.realRoute` — valida terreno real ANTES de andar, em vez de descobrir reativamente que uma sala não tinha caminho) funcionando "pra todos os caminhos multi-sala", não só quem lembra de passar a flag. Duas frentes, escolhidas explicitamente pelo usuário (não só a mais barata): (1) `utils/routing.js`'s `opts.realRoute` vira opt-**out** (`!== false`) em vez de opt-in, tanto em `tryComputeRealRoute` quanto no bump de `maxOps`/`maxRooms` — `scout`'s exploração livre (sem destino fixo, sempre vizinho direto, alvo re-escolhido a cada ciclo) é a única exceção deliberada, com `realRoute: false` explícito; `reserver`/`raider`/`pioneer`/`squad` (já passavam `true`) perdem a flag agora redundante. (2) `roles/remoteHauler.js`/`roles/remoteMiner.js` — que nem usavam `utils/routing.moveToRoom()`, só `creep.moveTo()` cru + `remotes.roomCallback()`, sem validação prévia nem retreat/backtrack nenhum (uma sala remote com labirinto de parede natural entre a borda e o container deixava o creep preso em `ERR_NO_PATH` pra sempre, em silêncio) — migrados pro módulo de rota completo. Novo `opts.allowRoom(roomName) => boolean` em `utils/routing.js` (`findRoute`, `computeRealRoute`, `routeCostCallback`, `avoidCostCallback`) permite que `remoteHauler`/`remoteMiner` mantenham a mesma restrição "só sala minha/reservada" que `remotes.roomCallback` já impunha — reaproveitado como `remotes.allowRoom(destRoomName)`, exportado pra não duplicar a regra nos dois roles (constitution §5). **Follow-up no mesmo dia**: usuário pediu a limpeza de todo `console.log` de diagnóstico que a investigação ao vivo do 0064 tinha acumulado em `utils/routing.js` (10 chamadas, incluindo duas marcadas "deliberately permanent, do not strip" por uma sessão anterior — removidas mesmo assim, pedido explícito) — só sobrou `global.routeCheck()` (comando manual, não log automático); `routeCostCallback`'s `allowedRooms`/o wrapping de `queriedRooms` em `moveToRoom` removidos junto (só existiam pra alimentar esses logs) |
 | 0076 | [Beco sem saída confirmado vira compartilhado, não só por-creep](features/0076-shared-route-dead-end-cache/spec.md) | done | usuário reportou ao vivo, no mesmo dia do 0075: pioneers de E1N47 pra E1N45 entravam no E1N46, descobriam rampart/wall de um **aliado** bloqueando (confirmado pelo usuário — exatamente o gap que `ROADMAP.md`'s "Later" já documentava: `computeRealRoute` só valida terreno, nunca estrutura, e sala de aliado é isenta de propósito do filtro de "perigosa"), recuavam pro E1N47 e só então seguiam a rota certa (E0N47→E0N46→E0N45→E1N45) — recuo reativo funcionando certo, mas **por-creep** (`_routeAvoid`, ROADMAP 0062), então cada pioneer novo mandado de E1N47 repetia a mesma descoberta cara. Usuário escolheu explicitamente só uma de duas frentes discutidas: compartilhar o beco confirmado entre creeps (não tentar enxergar estrutura no pré-cálculo, que só ajudaria com visão já disponível na hora, raro nesse cenário). Fix: `utils/routing.js` ganha `isKnownDeadEnd(roomName)`/`markDeadEnd(roomName)` — `retreatFrom()` (que só confirma um beco com `creep.room.name` como ground truth, ROADMAP 0063, nunca mais um chute) chama `markDeadEnd` além do `_routeAvoid` de sempre, gravando `Memory.rooms[x].routeDeadEndUntil` (TTL, `routing.deadEndTicks`=10000); os quatro pontos que já filtram por `avoid`/`allowRoom`/hostil (`findRoute`, `computeRealRoute`, `routeCostCallback`, `avoidCostCallback`) ganham a mesma checagem; `moveToRoom()` recusa outright se o próprio destino já é um beco confirmado, mesmo pra um creep que nunca tentou. Revive o espírito do blacklist global do ROADMAP 0058 (morto pelo 0062 por adivinhar errado qual sala era a armadilha) — seguro agora porque 0063 já fez `retreatFrom()` nunca mais adivinhar, só confirmar. Console `clearRouteDeadEnd(roomName)` reseta a marca antes do TTL |
-| 0077 | [Roteamento multi-sala considera estrutura conhecida (não só terreno)](features/0077-cross-room-structure-aware-routing/spec.md) | done | fecha o gap "Later" de `computeRealRoute`/`routeCostCallback`/`avoidCostCallback` só enxergarem terreno, nunca `room.find(FIND_STRUCTURES)` — mesmo com a sala já em visão no tick. Fix: as três funções passam a devolver `utils/move.js`'s `roomMatrix(room)` (já cacheada por sala, versionada por estrutura+canteiro — zero `room.find` novo) pra qualquer sala com `Game.rooms[roomName]` presente, em vez do fallback terreno-only; sala sem visão continua idêntica a antes (fora de escopo, decisão já tomada: prever estrutura sem visão prévia). Rampart/wall de terceiro (inclusive de aliado — `isDangerousRoom` continua isentando posse de aliado de propósito, ROADMAP 0064) numa sala já visível agora bloqueia a CostMatrix direto, sem esperar o creep colidir fisicamente até o backtrack (0063)/dead-end compartilhado (0076) dispararem. 4 assertions pré-existentes do smoke quebraram de propósito (checavam identidade de objeto pra "sala sempre em vision" como prova de "permitida" — suposição que este spec invalida) e foram reescritas pra `!== false`, mesmo precedente do 0064. 789 assertions verdes (+6), `npx grunt` limpo |
+| 0077 | [Roteamento multi-sala considera estrutura conhecida (não só terreno)](features/0077-cross-room-structure-aware-routing/spec.md) | in-progress | implementação parcial de `knownStructureMatrix()`/callbacks existe, mas o bug operacional não foi fechado: em produção o creep ainda pode ficar parado e precisa do fallback paliativo de `move()`/passo cacheado. Reabrir a análise do caminho nativo multi-sala e adicionar uma reprodução que falhe sem a mitigação antes de marcar `done` |
 | 0078 | [Guard contra culpar sala errada como beco-sem-saída](features/0078-route-dead-end-false-blame-guard/spec.md) | done | **bug real em produção, reportado ao vivo mesmo dia**: usuário viu um pioneer parado na divisa entre E1N47 (sala própria, com spawn) e a sala bloqueada; `Memory.rooms['E1N47']` confirmou a suspeita do próprio usuário — `routeDeadEndUntil` setado na sala-mãe própria, bloqueando roteamento de/pra ela pra todo creep do império (ROADMAP 0076's cache compartilhado tinha marcado a sala errada). Causa raiz: quando `retreatWithoutBlame()` (0064) recua e não sobra sala anterior, `moveToRoom()` cai no fallback "tenta de novo pelo fluxo normal, a partir da MESMA sala" — se esse fluxo também falhar (`ERR_NO_PATH` por `noPathTicks` ticks), `retreatFrom()` dispara de novo culpando `creep.room.name`, que já não é mais o beco original e sim a sala de recuo (E1N47) — exatamente o padrão "search-space acumulado constrangido demais" que `retreatWithoutBlame()` existe pra não culpar, só que um nível abaixo, fora do alcance daquela proteção. Fix, dois guards independentes em `utils/routing.js`: (1) `hasEarlierRoom(creep)` novo — `retreatFrom()` delega pra `retreatWithoutBlame()` quando `_routeAvoid` já tem uma entrada de um beco anterior confirmado **e** não sobra sala mais antiga agora (um ciclo de recuo SEGUNDO-ou-posterior); nunca no primeiro travamento genuíno de uma viagem (`_routeAvoid` ainda vazio — preserva a culpa normal do 0063/testes pré-existentes mazeCreep/parkedCreep). (2) `markDeadEnd()` e o push no `_routeAvoid` por-creep de `retreatFrom()` recusam sala própria (`remotes.isMine`) incondicionalmente — `architect.js` sempre planeja estrada até toda saída, então uma sala própria nunca é um beco de verdade. Causa exata do `ERR_NO_PATH` repetido em E1N47 (se veio do `knownStructureMatrix` do 0077, que já estava no ar, ou de outra fonte transitória) fica como investigação futura — os dois guards tornam a CONSEQUÊNCIA impossível independente da causa. Ação manual necessária em produção: `clearRouteDeadEnd("E1N47")` no console (o fix previne recorrência, não limpa marca já gravada). 794 assertions verdes, `npx grunt` limpo |
 | 0079 | [Expandir `Memory.stats` para o dashboard Grafana](features/0079-grafana-dashboard-stats/spec.md) | in-progress | usuário já tem um dashboard Grafana **pré-configurado** (copiado pra `features/0079-grafana-dashboard-stats/screeps-dashboard.json`, achado em `~/Downloads`) alimentado por `Memory.stats` → `exporter.py` (fora do repo) → Prometheus — cada painel novo já cita no próprio JSON o caminho de `Memory.stats` que espera (correção de uma spec provisória anterior do usuário: `guard("stats", …)` em `main.js` já roda todo tick, sem throttle de 10 ticks). **Entregue** (a pedido do usuário, "vamos adicionar os itens fáceis e médios"): `memory.used`/`cpu.heap.{total,limit,used}_*`/`market.credits`/`rooms.<room>.totalEnergyAssets` (fácil); `rooms.<room>.hatcheryUptime`/`avgBarrierHits` (throttlado, `stats.barrierHitsInterval`)/`persistent.lastGlobalReset`/`rooms.<room>.minerals` (médio) — 807 assertions verdes, `npx grunt` limpo. De quebra, achado e corrigido um bug pré-existente no próprio smoke (`Game.rooms.LabRoom`/`FactoryRoom` restaurados com `= undefined` em vez de `delete`, deixando uma chave fantasma que quebra qualquer `for...in Game.rooms` rodado depois no arquivo — `utils/stats.js` foi o primeiro código a tropeçar nisso). **Pendente** (complexo, sem status `ready`): `persistent.lastMemoryReset` (sem sinal explícito de reset de Memory, precisa de canário) e `rooms.<room>.compoundsT3` (chaves dinâmicas). **`rooms.<room>.defcon` saiu do escopo desta spec** — usuário decidiu que vale mais como feature própria (ver "Later" abaixo) do que só um campo de stats. Fora de escopo definitivo: Expansion Ranking (sem painel no dashboard nem equivalente público); `market.transactions`/`terminalNetwork.transfers` (bot nunca chama `Game.market.deal()`/`terminal.send()` hoje) ligados à feature Market/terminal de "Later" |
 
@@ -105,25 +105,40 @@ detalhe.
 | 0093 | [Builder aguarda estabilidade econômica](features/0093-builder-stability-gate/spec.md) | done | construção de sites espera `stable`/`abundant`; reparo crítico continua permitido durante instabilidade |
 | 0094 | [Energy structures mais próximas do anchor de spawn](features/0094-spawn-near-storage/spec.md) | done | spawnCreep recebe spawns/extensions ordenados pelo storage, ou pelo spawn executor sem storage |
 | 0095 | [Coordenação de jobs não energéticos do hauler](features/0095-hauler-non-energy-coordination/spec.md) | done | mantém uma role; demanda sem energia acionável libera job preemptível; um hauler por sala assume output pressionado; piso temporário de 2 usa histerese 75%/50%; carga já retirada é preservada |
-| 0096 | [Motor de preço justo de mercado (fase 0: só cálculo)](features/0096-market-fair-price-engine/spec.md) | done | `utils/market.js`, snapshots temporais configuráveis; mediana ponderada pela volumetria do melhor BUY/SELL com limite de peso por snapshot; fair price midpoint; exportação esparsa para Grafana |
+| 0096 | [Motor de preço justo de mercado (fase 0: só cálculo)](features/0096-market-fair-price-engine/spec.md) | done | `utils/market.js`, current book a cada 100 ticks + snapshots horários; mediana ponderada, fair midpoint e custo recursivo de commodities; exportação esparsa para Grafana |
+| 0097 | [Balanceamento automático de energia entre salas](features/0097-inter-room-energy-balancing/spec.md) | spec | compara `critical`/`stable`/`abundant`, preserva reservas locais e cria transferências pelo módulo 0098; gatilho imediato para sala crítica ou diferença de 20 pontos percentuais; ciclo normal de 1000 ticks |
+| 0098 | [Operações de compra, venda e transferência pelo terminal](features/0098-terminal-trade-and-transfer-operations/spec.md) | spec | API única para comandos manuais e 0097; aloca hauler para storage → terminal → ação e terminal → storage para compras e recursos recebidos, inclusive de outro jogador |
 
 ## Fila atual
 
-`0032` (combat overhaul), `0036` (safe mode automático + assédio de
-remote), `0037` (resgate de sala sem spawn), `0044` (cortesia de
-tráfego "excuse-me"), `0045`-`0052` (paridade com `old_1`/`old_2`,
-nomes de creep, mineral/lab/factory/power spawn, `notifyWhenAttacked`)
-`0054` (logistics manager / tiers de recurso), `0055` (piso de 2 haulers
-com mineral + storage) e `0059` (princípio de cascata de gasto + fallback
-no `remoteHauler`) estão `done`. Do
-cardápio de `0032`, só ficam de fora (represados de propósito, sem
-bloquear nada): D7 (nuke — D5 boosts/lab virou o 0051), e as duas
-extensões fora de escopo (retaliação automática, montar força pra criar
-vantagem — próximo spec, ver combinado com o usuário). `0009` (scout
-hardening) e `0095` (coordenação de jobs não energéticos do hauler) também
-estão `done`. Próximo candidato: `0011` (build & tooling), ainda em `spec`.
+A fila contém somente trabalho ainda aberto. A ordem prioriza primeiro a
+correção de rota já mitigada em produção e depois respeita as dependências de
+terminal: 0098 fornece a operação física que 0097 consome.
 
-## Later (ainda sem spec)
+1. **0077 — Roteamento estrutural multi-sala (`in-progress`)**
+  - reproduzir o stall sem depender de `move()`/passo cacheado;
+  - identificar por que a CostMatrix conhecida não impede a falha do caminho
+    nativo;
+  - corrigir e adicionar uma assertion de regressão antes de fechar a feature.
+2. **0079 — Grafana stats (`in-progress`)**
+  - finalizar `persistent.lastMemoryReset` com canário sem falso positivo;
+  - decidir e implementar `rooms.<room>.compoundsT3`;
+  - atualizar os critérios restantes e criar `plan.md`/`tasks.md` para o
+    trecho complexo.
+3. **0011 — Build & tooling (`spec`)**
+  - revisar a spec e criar `plan.md`/`tasks.md` antes de implementar.
+4. **0098 — Operações de terminal (`spec`)**
+  - revisar a API de compra, venda, transferência e retirada de recebimentos;
+  - criar `plan.md`/`tasks.md`.
+5. **0097 — Balanceamento entre salas (`spec`)**
+  - revisar os gatilhos e volumes;
+  - criar `plan.md`/`tasks.md` depois de 0098, que é sua dependência de
+    execução.
+
+Features `0001`–`0096`, exceto 0077 e 0079, estão concluídas. Não entram novamente na
+fila por terem notas históricas de follow-up já resolvidas.
+
+## Ideias futuras (ainda sem spec)
 
 - **Nível de ameaça por sala (DEFCON) para orientar defesa/ataque** —
   retirado do escopo do [0079](features/0079-grafana-dashboard-stats/spec.md)
@@ -140,16 +155,6 @@ estão `done`. Próximo candidato: `0011` (build & tooling), ainda em `spec`.
 - **RoomManager / Empire** — um objeto reconstruído por tick que todo role lê
   (creeps por role, estruturas por tipo, canteiros, hostis). `census` +
   `roomCache` são a semente disso; consolidar.
-- **Market / terminal (compra/venda de verdade)** — fase seguinte do
-  [0096](features/0096-market-fair-price-engine/spec.md) (que só calcula
-  preço justo, sem executar nada): usar esse preço pra vender excedente,
-  comprar déficit, e eventualmente balancear energia entre salas próprias.
-  Quando essa fase existir e o bot passar a chamar
-  `Game.market.deal()`/`terminal.send()` de verdade, suas tasks herdam a
-  instrumentação de `Memory.stats.market.transactions` e
-  `Memory.stats.terminalNetwork.transfers` deixada fora de escopo em
-  [0079](features/0079-grafana-dashboard-stats/spec.md) por falta do que
-  interceptar ainda.
 - **Power Creep / GPL** — subir de nível um power creep e usar
   `operateFactory` é o único jeito de liberar nível 1-5 do factory
   (0051 só cobre nível 0, que não depende disso); sistema próprio do
@@ -163,10 +168,23 @@ estão `done`. Próximo candidato: `0011` (build & tooling), ainda em `spec`.
 - **Central traffic resolver** — só se o profiling de movimento mostrar
   engarrafamento real; reserva de intenção de move de 1 tick para hotspots
   (ver a discussão de movimento).
-- ~~**`computeRealRoute`/`routeCostCallback` incorporarem estrutura
-  conhecida, não só terreno**~~ — spec aberta, ver
-  [0077](features/0077-cross-room-structure-aware-routing/spec.md).
-  Histórico da investigação mantido abaixo. `utils/routing.js`'s `computeRealRoute`
+
+- **Extensões ofensivas do combat overhaul** — retaliação automática e
+  montagem de força para criar vantagem continuam sem spec e sem execução
+  automática. O antigo D7/nuke também permanece separado até haver uma
+  decisão de escopo própria.
+
+## Histórico de decisões e investigações encerradas
+
+Os registros abaixo não são pendências. Permanecem aqui apenas para preservar
+causas, decisões e correções que ajudam revisões futuras.
+
+- **Investigação de `computeRealRoute`/`routeCostCallback`** — a entrada
+  [0077](features/0077-cross-room-structure-aware-routing/spec.md) foi
+  reaberta: a CostMatrix de estruturas conhecidas existe parcialmente, mas o
+  stall operacional segue reproduzível. O histórico abaixo registra as
+  tentativas anteriores; a solução por `move()`/passo cacheado é mitigação,
+  não encerramento. `utils/routing.js`'s `computeRealRoute`
   (ROADMAP 0064) e a chamada nativa de `moveTo` (via `routeCostCallback`)
   só enxergam terreno (`Game.map.getRoomTerrain`/o `matrix` default que o
   motor passa pro `costCallback`), nunca `room.find(FIND_STRUCTURES)` —

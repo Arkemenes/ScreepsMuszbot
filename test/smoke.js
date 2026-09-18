@@ -532,6 +532,11 @@ assert(market.weightedMedian([
     { price: 80, volume: 100 },
 ]) === 70,
     "market temporal median is weighted by snapshot volume");
+assert(market.pointwiseFairPrice([
+    { buyPrice: 60, sellPrice: 100, buyVolume: 100, sellVolume: 100 },
+    { buyPrice: 100, sellPrice: 140, buyVolume: 100, sellVolume: 100 },
+]) === 100,
+    "market fairPrice is the median of pointwise buy/sell midpoints");
 const shallow = market.historyMetrics([{ avgPrice: 10, volume: 100 }]);
 const deep = market.historyMetrics([{ avgPrice: 10, volume: 1000 }]);
 assert(market.vwapDepths(deep.averageDailyVolume).low >
@@ -557,7 +562,11 @@ assert(orderGroups.energy.length === 1 && orderGroups.pixel.length === 1,
         },
     };
     Memory.settings = Memory.settings || {};
-    Memory.settings.market = { snapshotInterval: 10, snapshotWindowTicks: 1000 };
+    Memory.settings.market = {
+        currentInterval: 10,
+        snapshotInterval: 10,
+        snapshotWindowTicks: 1000,
+    };
     market.reset();
     Game.time += 100;
     const first = market.scan();
@@ -594,6 +603,57 @@ assert(orderGroups.energy.length === 1 && orderGroups.pixel.length === 1,
     assert(!marketCommandError,
         "marketPrice remains null-safe when Game.market is absent");
     Game.market = savedMarket;
+    delete Memory.settings.market;
+}
+
+// --- ROADMAP 0096 follow-up: current book vs derived commodity price ---
+{
+    const originalResources = RESOURCES_ALL;
+    const originalMarket = Game.market;
+    RESOURCES_ALL = [RESOURCE_ENERGY, "Z", "widgetA"];
+    Game.market = {
+        getAllOrders: () => [
+            { resourceType: RESOURCE_ENERGY, type: ORDER_BUY, price: 60, remainingAmount: 100 },
+            { resourceType: RESOURCE_ENERGY, type: ORDER_SELL, price: 70, remainingAmount: 100 },
+            { resourceType: "Z", type: ORDER_BUY, price: 10, remainingAmount: 100 },
+            { resourceType: "Z", type: ORDER_SELL, price: 20, remainingAmount: 100 },
+            { resourceType: "widgetA", type: ORDER_BUY, price: 500, remainingAmount: 100 },
+            { resourceType: "widgetA", type: ORDER_SELL, price: 600, remainingAmount: 100 },
+        ],
+    };
+    Memory.settings = Memory.settings || {};
+    Memory.settings.market = { currentInterval: 10, snapshotInterval: 1000 };
+    market.reset();
+    Game.time += 10;
+    const commoditySnapshot = market.scan();
+    const widget = commoditySnapshot.resources.widgetA;
+    assert(widget.currentBuy === 500 && widget.currentSell === 600,
+        "market currentBuy/currentSell expose the current best commodity orders");
+    assert(widget.buyPrice === 1400 && widget.sellPrice === 1800 && widget.fairPrice === 1600,
+        "commodity reference prices derive recursively from components per output unit");
+    const statsForCommodity = require(path.join(PROJECT, "src/utils/stats"));
+    statsForCommodity();
+    assert(Memory.stats.market.fairPrice.widgetA.currentBuy === 500 &&
+        Memory.stats.market.fairPrice.widgetA.currentSell === 600 &&
+        Memory.stats.market.fairPrice.widgetA.fairPrice === 1600,
+        "Grafana receives current and derived commodity reference prices");
+    Game.time += 10;
+    Game.market.getAllOrders = () => [
+        { resourceType: RESOURCE_ENERGY, type: ORDER_BUY, price: 61, remainingAmount: 100 },
+        { resourceType: RESOURCE_ENERGY, type: ORDER_SELL, price: 71, remainingAmount: 100 },
+        { resourceType: "Z", type: ORDER_BUY, price: 11, remainingAmount: 100 },
+        { resourceType: "Z", type: ORDER_SELL, price: 21, remainingAmount: 100 },
+        { resourceType: "widgetA", type: ORDER_BUY, price: 501, remainingAmount: 100 },
+        { resourceType: "widgetA", type: ORDER_SELL, price: 601, remainingAmount: 100 },
+    ];
+    const currentRefresh = market.scan();
+    assert(currentRefresh.resources.widgetA.currentBuy === 501 &&
+        currentRefresh.resources.widgetA.currentSell === 601,
+        "current prices refresh on their own interval");
+    assert(currentRefresh.resources.widgetA.sampleCount === 1,
+        "a current price refresh does not create an hourly temporal snapshot");
+    RESOURCES_ALL = originalResources;
+    Game.market = originalMarket;
     delete Memory.settings.market;
 }
 

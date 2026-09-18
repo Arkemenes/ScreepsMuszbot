@@ -1,6 +1,6 @@
 # 0077 — Roteamento multi-sala considera estrutura conhecida (não só terreno)
 
-- **Status:** done
+- **Status:** in-progress
 - **Owner:**
 - **Created:** 2026-09-14
 
@@ -114,6 +114,9 @@ prévia" permanece de fora, decisão já registrada no `ROADMAP.md`.
 
 ## Open questions
 
-Nenhuma pendente pro escopo definido acima — a extensão "prever estrutura
-sem visão prévia" fica de fora, decisão já tomada e registrada no
-`ROADMAP.md`.
+O bloqueio ainda não está encerrado: a CostMatrix de estruturas conhecidas e
+o fallback de passo direto (`move()`) existem, mas o stall do caminho nativo
+continua reproduzível em produção. A próxima investigação deve reproduzir o
+caso sem a mitigação e explicar por que a rota nativa ainda falha.
+
+- A extensão "prever estrutura sem visão prévia" continua fora de escopo.

@@ -9,6 +9,7 @@
 
 const defaults = {
     market: {
+        currentInterval: 100,
         snapshotInterval: 3600,
         snapshotWindowTicks: 604800,
         snapshotWeightCap: 0.01,
