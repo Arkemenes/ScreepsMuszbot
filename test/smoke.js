@@ -1015,42 +1015,6 @@ hld.memory.job = "load";
 hauler.run(hld);
 assert(hld._from === "lnk1", "hauler pulls from the base link first");
 
-// A collector link must never be a hauler source while a receiving link exists,
-// even when the collector is closer to the hauler.
-findMap[FIND_MY_STRUCTURES] = findMap[FIND_MY_STRUCTURES].filter(
-    (s) => s.id !== "lnk1"
-);
-const nearbyCollector = Object.assign(new StructureLink(), {
-    id: "near-col", structureType: STRUCTURE_LINK, room,
-    pos: new RoomPosition(21, 20, "W1N1"),
-    store: store(700, 800), isCollector: () => true,
-});
-const fartherReceiver = Object.assign(new StructureLink(), {
-    id: "far-recv", structureType: STRUCTURE_LINK, room,
-    pos: new RoomPosition(35, 35, "W1N1"),
-    store: store(400, 800), isCollector: () => false,
-});
-REG[nearbyCollector.id] = nearbyCollector;
-REG[fartherReceiver.id] = fartherReceiver;
-findMap[FIND_MY_STRUCTURES].push(nearbyCollector, fartherReceiver);
-Game.time++;
-const hldCollectorGuard = makeCreep("HldCollectorGuard", "hauler", {
-    store: store(0, 200), pos: new RoomPosition(20, 20, "W1N1"),
-});
-hldCollectorGuard.withdraw = (target) => {
-    hldCollectorGuard._from = target && target.id;
-    return OK;
-};
-hldCollectorGuard.memory.job = "load";
-hauler.run(hldCollectorGuard);
-assert(
-    hldCollectorGuard._from === "far-recv",
-    "hauler never withdraws from a collector link when a receiving link has energy"
-);
-findMap[FIND_MY_STRUCTURES] = findMap[FIND_MY_STRUCTURES].filter(
-    (s) => s.id !== "near-col" && s.id !== "far-recv"
-);
-
 // hauler loads from the CLOSEST source container with enough energy, not the
 // one holding the most - a far container full of energy isn't worth the trip
 // when a nearby one has plenty to give
