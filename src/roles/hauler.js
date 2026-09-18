@@ -512,6 +512,7 @@ function nonCollectorLinksWithEnergy(room) {
             roomCache.myStructures(room),
             (s) =>
                 s.structureType === STRUCTURE_LINK &&
+                typeof s.isCollector === "function" &&
                 !s.isCollector() &&
                 s.store[RESOURCE_ENERGY] > 0
         );
