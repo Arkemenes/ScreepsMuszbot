@@ -8,6 +8,7 @@ const { roomNeeds } = require("../rooms/needs");
 const reservations = require("../utils/reservations");
 const config = require("../utils/config");
 const resourceTiers = require("../utils/resourceTiers");
+const nonEnergyLogistics = require("../utils/nonEnergyLogistics");
 const names = require("../utils/names");
 
 // Per-tick, per-room cache for the filtered structure lists below - every
@@ -661,7 +662,7 @@ function mineralContainerJob(room) {
     if (!resourceType) return null;
     const to = mineralDeliveryTarget(room);
     if (!to) return null;
-    return { resourceType, from: container, to };
+    return { kind: "mineralContainer", resourceType, from: container, to };
 }
 
 function activeLabReaction(room) {
@@ -680,7 +681,12 @@ function labOutputJob(room) {
     }
     const to = mineralDeliveryTarget(room);
     if (!to) return null;
-    return { resourceType: output.mineralType, from: output, to };
+    return {
+        kind: "labOutput",
+        resourceType: output.mineralType,
+        from: output,
+        to,
+    };
 }
 
 // Top up whichever input lab is running low, from storage/terminal.
@@ -698,7 +704,7 @@ function labReagentJob(room) {
         if ((lab.store[resourceType] || 0) >= buffer) continue;
         const from = mineralWithdrawSource(room, resourceType);
         if (!from) continue;
-        return { resourceType, from, to: lab };
+        return { kind: "labReagent", resourceType, from, to: lab };
     }
     return null;
 }
@@ -716,7 +722,7 @@ function factoryOutputJob(room) {
     if (!factory || !factory.store[product]) return null;
     const to = mineralDeliveryTarget(room);
     if (!to) return null;
-    return { resourceType: product, from: factory, to };
+    return { kind: "factoryOutput", resourceType: product, from: factory, to };
 }
 
 // Stock a missing (non-energy) ingredient - energy itself is
@@ -734,7 +740,7 @@ function factoryComponentJob(room) {
         if ((factory.store[resourceType] || 0) >= need) continue;
         const from = mineralWithdrawSource(room, resourceType);
         if (!from) continue;
-        return { resourceType, from, to: factory };
+        return { kind: "factoryComponent", resourceType, from, to: factory };
     }
     return null;
 }
@@ -748,7 +754,12 @@ function powerFeedJob(room) {
     if (powerSpawn.store.getFreeCapacity(RESOURCE_POWER) <= 0) return null;
     const from = mineralWithdrawSource(room, RESOURCE_POWER);
     if (!from) return null;
-    return { resourceType: RESOURCE_POWER, from, to: powerSpawn };
+    return {
+        kind: "powerFeed",
+        resourceType: RESOURCE_POWER,
+        from,
+        to: powerSpawn,
+    };
 }
 
 // Gate for the whole non-energy cascade below: spawns/extensions still
@@ -764,10 +775,6 @@ function spawnsAndExtensionsFull(room) {
     );
 }
 
-function economyHasNoCriticalConsumer(room) {
-    return resourceTiers.getCriticalConsumers(room) === 0;
-}
-
 function pickMineralJob(room) {
     return (
         mineralContainerJob(room) ||
@@ -780,6 +787,54 @@ function pickMineralJob(room) {
     );
 }
 
+function pickPressuredJob(room) {
+    const pressured = nonEnergyLogistics.pressuredOutput(room);
+    if (!pressured) return null;
+    let job = null;
+    if (pressured.kind === "mineralContainer") job = mineralContainerJob(room);
+    else if (pressured.kind === "labOutput") job = labOutputJob(room);
+    else if (pressured.kind === "factoryOutput") job = factoryOutputJob(room);
+    return job && job.from.id === pressured.sourceId ? job : null;
+}
+
+function clearMineralJob(creep) {
+    delete creep.memory.mineralJob;
+    nonEnergyLogistics.release(creep);
+}
+
+function assignMineralJob(creep, job) {
+    if (!job || !nonEnergyLogistics.claim(creep)) return false;
+    reservations.release(creep);
+    creep.memory.mineralJob = {
+        kind: job.kind,
+        resourceType: job.resourceType,
+        fromId: job.from.id,
+        toId: job.to.id,
+        loaded: false,
+    };
+    return true;
+}
+
+function canReceive(target, resourceType) {
+    return !!(
+        target &&
+        target.store &&
+        target.store.getFreeCapacity(resourceType) > 0
+    );
+}
+
+function preserveMineralCargo(creep, resourceType) {
+    const anchor = creep.room.storage || creep.room.terminal;
+    if (!anchor) return;
+    if (!creep.pos.inRangeTo(anchor, 1)) {
+        creep.moveTo(anchor, { range: 1, reusePath: 10 });
+        return;
+    }
+    if (creep.ticksToLive <= config.get("mineralHauler.deathDropTtl", 10)) {
+        if (creep.drop(resourceType) === OK) clearMineralJob(creep);
+    }
+}
+
 // Picks up (if empty of the job's resource) or delivers (if carrying it) -
 // exactly one action per tick, same idiom as the rest of this file. Clears
 // memory.mineralJob once delivered, or if the source dried up before this
@@ -790,21 +845,30 @@ function runMineralJob(creep) {
     const resourceType = job.resourceType;
 
     if (creep.store[resourceType] > 0) {
-        const to = Game.getObjectById(job.toId);
+        job.loaded = true;
+        let to = Game.getObjectById(job.toId);
+        if (!canReceive(to, resourceType)) {
+            to = mineralDeliveryTarget(creep.room);
+            if (to) job.toId = to.id;
+        }
         if (!to) {
-            delete creep.memory.mineralJob;
+            preserveMineralCargo(creep, resourceType);
             return;
         }
         if (creep.transfer(to, resourceType) === ERR_NOT_IN_RANGE) {
             creep.moveTo(to, { range: 1, reusePath: 10 });
         }
-        if (!creep.store[resourceType]) delete creep.memory.mineralJob;
+        return;
+    }
+
+    if (job.loaded) {
+        clearMineralJob(creep);
         return;
     }
 
     const from = Game.getObjectById(job.fromId);
     if (!from || !(from.store && from.store[resourceType] > 0)) {
-        delete creep.memory.mineralJob;
+        clearMineralJob(creep);
         return;
     }
     const status = creep.withdraw(from, resourceType);
@@ -812,7 +876,25 @@ function runMineralJob(creep) {
         creep.moveTo(from, { range: 1, reusePath: 10 });
         return;
     }
-    if (status !== OK) delete creep.memory.mineralJob;
+    if (status === OK) job.loaded = true;
+    else clearMineralJob(creep);
+}
+
+function loadEnergy(creep, src) {
+    const target = Game.getObjectById(src.id);
+    if (!target) return false;
+    reservations.claim(creep, src.id);
+    if (src.dest) creep.memory.forcedDeliver = src.dest;
+    const status =
+        src.act === "pickup"
+            ? creep.pickup(target)
+            : creep.withdraw(target, RESOURCE_ENERGY, src.amount);
+    if (status === ERR_NOT_IN_RANGE) creep.moveTo(target, { range: 1 });
+    return true;
+}
+
+function hasPressureCapacity(room) {
+    return census.count(room.name, "hauler", 0) >= 2;
 }
 
 var hauler = {
@@ -834,11 +916,33 @@ var hauler = {
         if (creep.memory.mineralJob) {
             const job = creep.memory.mineralJob;
             const carryingJobResource = creep.store[job.resourceType] > 0;
-            if (carryingJobResource || economyHasNoCriticalConsumer(creep.room)) {
+            if (carryingJobResource || job.loaded) {
                 runMineralJob(creep);
                 return;
             }
-            delete creep.memory.mineralJob;
+
+            if (creep.store.getUsedCapacity() > 0) {
+                clearMineralJob(creep);
+            } else if (!nonEnergyLogistics.isOwner(creep)) {
+                clearMineralJob(creep);
+            } else {
+                const energySource = pickLoad(creep);
+                const pressuredJob = pickPressuredJob(creep.room);
+                if (pressuredJob) {
+                    assignMineralJob(creep, pressuredJob);
+                    if (!energySource || hasPressureCapacity(creep.room)) {
+                        runMineralJob(creep);
+                        return;
+                    }
+                }
+                if (!energySource) {
+                    runMineralJob(creep);
+                    return;
+                }
+                clearMineralJob(creep);
+                loadEnergy(creep, energySource);
+                return;
+            }
         }
 
         const carrying = creep.store[RESOURCE_ENERGY];
@@ -859,38 +963,28 @@ var hauler = {
         if (creep.memory.job === "load") {
             const src = pickLoad(creep);
             if (src) {
-                const target = Game.getObjectById(src.id);
-                if (target) {
-                    reservations.claim(creep, src.id);
-                    // sticky: don't clear a pending forced route just because
-                    // this tick's remaining capacity came from a different
-                    // pile than the one that set it (constitution §3 - don't
-                    // lose track of intent on a partial/mixed load)
-                    if (src.dest) creep.memory.forcedDeliver = src.dest;
-                    const res =
-                        src.act === "pickup"
-                            ? creep.pickup(target)
-                            : creep.withdraw(target, RESOURCE_ENERGY, src.amount);
-                    if (res === ERR_NOT_IN_RANGE) {
-                        creep.moveTo(target, { range: 1 });
-                    }
+                const pressuredJob = hasPressureCapacity(creep.room)
+                    ? pickPressuredJob(creep.room)
+                    : null;
+                if (
+                    creep.store.getUsedCapacity() === 0 &&
+                    pressuredJob &&
+                    assignMineralJob(creep, pressuredJob)
+                ) {
+                    runMineralJob(creep);
                     return;
                 }
+                loadEnergy(creep, src);
+                return;
             }
             reservations.release(creep);
             // nothing to pick up: deliver a partial load, else wait by a
             // link - but try a non-energy job first (ROADMAP 0051), this is
             // the ONLY place memory.mineralJob ever gets set
-            if (carrying === 0) {
-                const mineralJob = economyHasNoCriticalConsumer(creep.room)
-                    ? pickMineralJob(creep.room)
-                    : null;
-                if (mineralJob) {
-                    creep.memory.mineralJob = {
-                        resourceType: mineralJob.resourceType,
-                        fromId: mineralJob.from.id,
-                        toId: mineralJob.to.id,
-                    };
+            if (carrying === 0 && creep.store.getUsedCapacity() === 0) {
+                const mineralJob = pickPressuredJob(creep.room) ||
+                    pickMineralJob(creep.room);
+                if (assignMineralJob(creep, mineralJob)) {
                     runMineralJob(creep);
                     return;
                 }

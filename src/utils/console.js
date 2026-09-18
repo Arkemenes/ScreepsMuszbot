@@ -5,8 +5,8 @@
 // Each command is defined with `global.X = ...` in the module that owns it
 // (architect.js, builder.js, scout.js, hostiles.js, memory.js, remotes.js,
 // raiding.js, structures/observer.js, pioneering.js, rooms/needs.js,
-// roles/hauler.js, utils/census.js) - this file only prints a reference,
-// it doesn't define the commands themselves.
+// roles/hauler.js, utils/census.js, utils/move.js) - this file only prints
+// a reference, it doesn't define the commands themselves.
 // Keep this list in sync when adding/removing a console command.
 global.help = function () {
     const sections = [
@@ -17,6 +17,8 @@ global.help = function () {
                 ["destroyUnplannedRoads(roomName)", "destrói toda estrada construída que não está no plano atual"],
                 ["destroyUnplannedRoads(roomName, true)", "mesma coisa, mas só lista (dry run), não destrói"],
                 ["testSpawnPosition(roomName)", "calcula e desenha a melhor posição de spawn pro core da base (não altera o plano)"],
+                ["planVisual(ticks=50)", "muda o intervalo de refresh forçado da prévia visual do plano (ela também redesenha na hora que algo é construído/destruído)"],
+                ["planVisual(false)", "desliga a prévia visual do plano"],
             ],
         },
         {
@@ -104,6 +106,10 @@ global.help = function () {
                 ["findCreeps(role)", "lista nome e sala de todo creep vivo desse role, no império inteiro"],
                 ["GCStructureMemory()", "limpa Memory.structures de estruturas que não existem mais (rodar de vez em quando, ex.: a cada 10k ticks)"],
                 ["profile(ticks=100)", "liga o profiler (screeps-profiler) por N ticks, imprime o relatório de calls/tempo/média por função sozinho no fim e desliga o profiler de novo - não precisa mexer em Memory.settings.profiler na mão"],
+                ["moveStats(true/false)", "TEMPORARY (investigação de CPU) - liga/desliga o tally por role de por que utils/move.js repathou (ou não) no último tick"],
+                ["moveStats()", "imprime o tally do último tick fechado"],
+                ["builderStats(true/false)", "TEMPORARY (investigação de CPU) - liga/desliga a medição do CPU próprio de opportunisticWork() por tick"],
+                ["builderStats()", "imprime a medição do último tick fechado"],
                 ["resetTerminalLedger(roomName)", "reseta o ledger de retirada do terminal do hauler - usa quando o saldo já existente no terminal ficou preso como \"protegido pra sempre\" (ex.: build antigo, ou saldo de antes desse recurso existir); a partir do próximo tick o saldo atual vira a nova baseline, já liberado"],
             ],
         },

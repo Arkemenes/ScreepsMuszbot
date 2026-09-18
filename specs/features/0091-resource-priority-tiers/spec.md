@@ -165,6 +165,17 @@ motivo no `Memory.stats` para monitoramento.
   e, para walls/ramparts, `→ optimal`, com fallback quando houver capacidade
   real e nenhum candidato mais urgente.
 
+## Decisão posterior implementada em 0095
+
+[0095](../0095-hauler-non-energy-coordination/spec.md) revisará o critério 7
+somente para distinguir demanda crítica de energia acionável. Um job não
+energético continuará preemptível antes da retirada, mas poderá começar quando
+`pickLoad(creep)` não encontrar fonte utilizável. Com dois haulers, output
+próximo de bloquear produção será continuidade operacional crítica, reservará
+no máximo um hauler e não será tratado como gasto satisfatório de energia. A
+regra de tiers desta spec continua vigente para gasto de energia; 0095 só
+separa dela a continuidade operacional de outputs fisicamente bloqueáveis.
+
 ## Open questions
 
 - Nenhuma. A transferência e o balanceamento intersalas ficam explicitamente

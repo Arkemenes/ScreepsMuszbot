@@ -42,6 +42,7 @@ profiler só carrega quando `Memory.settings.profiler` está setado.
 | `census.js` | **Uma** varredura de `Game.creeps` por tick. `creepsByRole` / `count` (por sala), `all` / `total` (império-wide, para roles que vagueiam como o scout), `allInRoom(roomName)` (todo creep de qualquer role numa sala — ROADMAP 0045, usado por `rooms/spawning.js`'s renovação de creep no spawn). |
 | `names.js` | Nomes cosméticos de creep (ROADMAP 0048, paridade com `old_1` mas revisado a pedido do usuário) — `generate(key)` monta `"Nome Sobrenome,\nTítuloParte1 TítuloParte2"` (4 partes, mesmo formato do `old_1`); nome/sobrenome vêm de listas genéricas, mas as **duas** partes do título sempre vêm de um pool específico do role (`TITLE_POOLS[role]`, ou `TITLE_POOLS["role:mission"]` pro `reserver` — `reserve`/`claim`/`contest` têm pools diferentes) — nunca um vocativo genérico desconectado do que o creep faz, ao contrário do `old_1`. Tenta até 20 combinações livres contra `Game.creeps` antes de aceitar uma colisão residual (fail-soft já existente em `rooms/spawning.js`). Puramente cosmético — `Math.random()` nunca influencia corpo/role/alvo/contagem. Toda `spawnData()` de `src/roles/*.js` usa isso em vez de `"<Role>" + Game.time`. |
 | `roomCache.js` | Memo por tick de `room.find`: `structures`, `myStructures`, `constructionSites`, `structuresByType`, `minerals` (ROADMAP 0055 — antes `roles/mineralMiner.js` e `roles/hauler.js` cada um rodava seu próprio `FIND_MINERALS`). |
+| `nonEnergyLogistics.js` | Coordenação dos jobs não energéticos do `hauler` (ROADMAP 0095). Classifica pressão por sala/tick em ordem `mineralContainer → labOutput → factoryOutput`; mineral/lab usam ocupação do recurso e factory usa ocupação total. Um ledger mutável no heap, semeado de `census`, elege no máximo um owner por sala. |
 | `terrain.js` | `number[50][50]` de terreno por sala, cacheado no heap. Nunca na Memory. |
 | `planStore.js` | **Única porta** pro plano da cidade (`{buildings, mincutBoundries}`). Mora em `RawMemory.segments[id]` (id preguiçoso em `Memory.planSegments`, cada segment marcado com o nome da sala), cacheado no heap — parse do segment só 1×/sala/global-reset, não 1×/tick. `getPlan`/`setPlan`/`mutate`/`dropPlan`/`activate` (pede os segments ativos no `main`). Migra sozinho o formato antigo (`Memory.rooms[x].buildings`). `getPlan` recusa um segment cuja tag de sala não bate — uma colisão de id (ex.: depois de um `Memory.settings = {...}` no console) nunca devolve o plano de outra sala. |
 | `plan.js` | Índice `"x:y"` do plano da cidade (via `planStore`), por tick. `isPlanned(structure)`, `planEntriesAt`. |
@@ -86,6 +87,14 @@ decidir entre a reserva da torre de source e os buffers compartilhados, usando
 os thresholds globais `tower.criticalRatio*`. `builder` usa o mesmo snapshot
 para bloquear construção satisfatória em estado `critical`, mas preserva
 reparos críticos.
+
+`nonEnergyLogistics` separa demanda crítica de energia acionável (ROADMAP
+0095). Sem fonte retornada por `hauler.pickLoad`, um owner por sala pode fazer
+um job não energético preemptível. Com pelo menos dois haulers, output em 75%
+reserva um deles mesmo com energia acionável; o outro continua na energia.
+Output lab/factory pressionado eleva o piso para 2, mantido até cair abaixo de
+50%. Carga já retirada sempre é entregue; sem destino, espera e só dropa perto
+da morte.
 
 ### `src/prototypes/`
 

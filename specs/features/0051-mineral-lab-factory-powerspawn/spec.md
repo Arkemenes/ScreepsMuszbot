@@ -213,6 +213,16 @@ spawn com Power no store processa automaticamente.
   real de produção só existe no servidor real, o código nunca a hardcoda
   — ver acima).
 
+## Decisão posterior implementada em 0095
+
+[0095](../0095-hauler-non-energy-coordination/spec.md) preserva a decisão de
+não criar uma role dedicada, mas revisa o significado de "menor prioridade":
+demanda crítica sem energia acionável não bloqueará trabalho útil, e output de
+mineral/lab/factory próximo de lotar poderá reservar exatamente um hauler da
+sala. Reagentes, componentes e Power continuarão oportunistas. Enquanto 0095
+foi implementada, substituindo apenas esse gate de coordenação; extração,
+reação e produção entregues por esta spec permanecem vigentes.
+
 ## Open questions
 
 Nenhuma — escopo (A) fechado com o usuário antes desta spec; Power

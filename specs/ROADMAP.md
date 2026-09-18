@@ -104,6 +104,7 @@ detalhe.
 | 0092 | [Miner na cascata global de energia](features/0092-miner-global-energy-cascade/spec.md) | done | miner usa o estado econômico global e os thresholds compartilhados da torre para escolher torre de source, link ou container; defesa ativa mantém prioridade da torre |
 | 0093 | [Builder aguarda estabilidade econômica](features/0093-builder-stability-gate/spec.md) | done | construção de sites espera `stable`/`abundant`; reparo crítico continua permitido durante instabilidade |
 | 0094 | [Energy structures mais próximas do anchor de spawn](features/0094-spawn-near-storage/spec.md) | done | spawnCreep recebe spawns/extensions ordenados pelo storage, ou pelo spawn executor sem storage |
+| 0095 | [Coordenação de jobs não energéticos do hauler](features/0095-hauler-non-energy-coordination/spec.md) | done | mantém uma role; demanda sem energia acionável libera job preemptível; um hauler por sala assume output pressionado; piso temporário de 2 usa histerese 75%/50%; carga já retirada é preservada |
 
 ## Fila atual
 
@@ -118,8 +119,8 @@ cardápio de `0032`, só ficam de fora (represados de propósito, sem
 bloquear nada): D7 (nuke — D5 boosts/lab virou o 0051), e as duas
 extensões fora de escopo (retaliação automática, montar força pra criar
 vantagem — próximo spec, ver combinado com o usuário). `0009` (scout
-hardening) também está `done` agora. Próximo candidato: `0011` (build &
-tooling).
+hardening) e `0095` (coordenação de jobs não energéticos do hauler) também
+estão `done`. Próximo candidato: `0011` (build & tooling), ainda em `spec`.
 
 ## Later (ainda sem spec)
 

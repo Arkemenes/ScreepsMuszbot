@@ -83,6 +83,14 @@ mais se houver container de source sem link).
 - **§4 Testável offline:** os dois critérios de aceitação acima ganharam
   assertion em `test/smoke.js`.
 
+## Decisão posterior implementada em 0095
+
+[0095](../0095-hauler-non-energy-coordination/spec.md) mantém o piso de dois
+haulers para operação mineral ativa e o generaliza, com histerese 75%/50%,
+para output lab/factory sob pressão real. A população existente funcionará
+como latch, sem novo estado persistente. A operação mineral descrita aqui
+continua elevando o piso mesmo abaixo do threshold de pressão.
+
 ## Outcome
 
 Entregue. `utils/roomCache.js` ganhou `minerals(room)`; `mineralMiner.js` e

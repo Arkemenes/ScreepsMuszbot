@@ -128,7 +128,12 @@ function claim(creep, id) {
 }
 
 function release(creep) {
-    if (creep.memory.loadTarget) delete creep.memory.loadTarget;
+    const id = creep.memory.loadTarget;
+    if (!id) return;
+    delete creep.memory.loadTarget;
+    if (tick === Game.time && byTarget[id]) {
+        byTarget[id] = byTarget[id].filter((other) => other.name !== creep.name);
+    }
 }
 
 module.exports = {

@@ -10,6 +10,7 @@ const config = require("../utils/config");
 const observer = require("../utils/observer");
 const pioneering = require("./pioneering");
 const autoscale = require("../utils/autoscale");
+const nonEnergyLogistics = require("../utils/nonEnergyLogistics");
 
 let builtTick = -1;
 let cache = {};
@@ -140,6 +141,19 @@ function mineralOperationActive(room) {
             filter: (s) => s.structureType === STRUCTURE_CONTAINER,
         }).length > 0
     );
+}
+
+function pressuredOutputHaulerFloor(room, currentHaulers) {
+    if (!room.storage && !room.terminal) return 0;
+    const high = config.get("mineralHauler.pressureHigh", 0.75);
+    const hasOutputAt = (threshold) =>
+        nonEnergyLogistics.outputs(room).some(
+            (output) =>
+                output.kind !== "mineralContainer" && output.ratio >= threshold
+        );
+    if (hasOutputAt(high)) return 2;
+    const low = config.get("mineralHauler.pressureLow", 0.5);
+    return currentHaulers >= 2 && hasOutputAt(low) ? 2 : 0;
 }
 
 // source containers that don't yet have a collector link next to them - those
@@ -363,6 +377,7 @@ function compute(room) {
     if (room.storage && mineralOperationActive(room)) {
         hauler = Math.max(hauler, config.get("hauler.minCountWithMineral", 2));
     }
+    hauler = Math.max(hauler, pressuredOutputHaulerFloor(room, haulers));
 
     // --- bootstrap: emergency only ---
     const bootstrap = miners > 0 && (haulers > 0 || links) ? 0 : 1;
@@ -565,4 +580,4 @@ function roomNeeds(room) {
     return cache[room.name];
 }
 
-module.exports = { roomNeeds };
+module.exports = { roomNeeds, pressuredOutputHaulerFloor };

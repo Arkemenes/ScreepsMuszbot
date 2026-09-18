@@ -436,11 +436,14 @@ const defaults = {
         bucketThreshold: 10000,
     },
     mineralHauler: {
-        // roles/mineralHauler.js (ROADMAP 0051): minimum reagent stock to
+        // roles/hauler.js (ROADMAP 0051/0095): minimum reagent stock to
         // keep topped up in a lab reaction's input labs before another trip
         // is worth it - avoids a hauler shuttling tiny amounts back and
         // forth every tick once the lab is nearly full
         labBuffer: 500,
+        pressureHigh: 0.75,
+        pressureLow: 0.5,
+        deathDropTtl: 10,
     },
     powerSpawn: {
         // structures/powerSpawn.js (ROADMAP 0051): off switch - processPower()
