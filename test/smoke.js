@@ -39,6 +39,9 @@ const constants = {
     STRUCTURE_CONTROLLER: "controller", STRUCTURE_POWER_BANK: "powerBank",
     STRUCTURE_INVADER_CORE: "invaderCore",
     RESOURCE_ENERGY: "energy", RESOURCE_POWER: "power",
+    RESOURCES_ALL: ["energy", "power", "pixel"],
+    INTERSHARD_RESOURCES: ["pixel"],
+    ORDER_BUY: "buy", ORDER_SELL: "sell",
     WORK: "work", CARRY: "carry", MOVE: "move", TOUGH: "tough",
     HEAL: "heal", ATTACK: "attack", RANGED_ATTACK: "ranged_attack", CLAIM: "claim",
     BODYPART_COST: { work: 100, carry: 50, move: 50, tough: 10, heal: 250,
@@ -514,6 +517,83 @@ assert(global.Memory.stats.persistent &&
         "(module load = the only 'global reset' a single test process can see), " +
         "and stays there across the other 59 ticks (got " +
         (global.Memory.stats.persistent && global.Memory.stats.persistent.lastGlobalReset) + ")");
+
+// --- ROADMAP 0096: market fair-price engine ----------------------------
+const market = require(path.join(PROJECT, "src/utils/market"));
+const weighted = market.historyMetrics([
+    { avgPrice: 10, volume: 10 },
+    { avgPrice: 20, volume: 90 },
+]);
+assert(weighted.weightedHistory === 19,
+    "market history is weighted by volume (got " + weighted.weightedHistory + ")");
+const shallow = market.historyMetrics([{ avgPrice: 10, volume: 100 }]);
+const deep = market.historyMetrics([{ avgPrice: 10, volume: 1000 }]);
+assert(market.vwapDepths(deep.averageDailyVolume).low >
+    market.vwapDepths(shallow.averageDailyVolume).low,
+    "market VWAP depth scales with the resource's own daily volume");
+const orderGroups = market.groupOrders([
+    { resourceType: "energy", type: ORDER_SELL, price: 20, amount: 100 },
+    { resourceType: "pixel", type: ORDER_BUY, price: 500, amount: 2 },
+]);
+assert(orderGroups.energy.length === 1 && orderGroups.pixel.length === 1,
+    "market orders are grouped by resource, including an intershard resource");
+{
+    let historyCalls = 0;
+    let orderCalls = 0;
+    Game.market = {
+        getHistory: () => {
+            historyCalls++;
+            return [
+                { resourceType: "energy", history: [
+                    { avgPrice: 10, volume: 100 },
+                    { avgPrice: 20, volume: 900 },
+                ] },
+                { resourceType: "pixel", history: [{ avgPrice: 500, volume: 10 }] },
+            ];
+        },
+        getAllOrders: () => {
+            orderCalls++;
+            return [
+                { resourceType: "energy", type: ORDER_SELL, price: 21, amount: 1000 },
+                { resourceType: "energy", type: ORDER_BUY, price: 19, amount: 1000 },
+                { resourceType: "pixel", type: ORDER_BUY, price: 500, amount: 2 },
+            ];
+        },
+    };
+    Memory.settings = Memory.settings || {};
+    Memory.settings.market = { scanInterval: 10 };
+    Game.time += 100;
+    const first = market.scan();
+    market.scan();
+    assert(historyCalls === 1 && orderCalls === 1,
+        "market scan throttle avoids a second Game.market read in the interval");
+    assert(first.resources.energy.weightedHistory === 19,
+        "market snapshot exposes the weighted history for energy");
+    Game.time += 9;
+    market.scan();
+    assert(historyCalls === 1 && orderCalls === 1,
+        "market scan remains throttled before scanInterval elapses");
+    Game.time += 1;
+    market.scan();
+    assert(historyCalls === 2 && orderCalls === 2,
+        "market scan reads history and orders after scanInterval elapses");
+    const statsForMarket = require(path.join(PROJECT, "src/utils/stats"));
+    statsForMarket();
+    assert(Memory.stats.market.fairPrice.energy.weightedHistory === 19 &&
+        Memory.stats.market.fairPrice.energy.averageDailyVolume === 500 &&
+        Memory.stats.market.fairPrice.energy.vwapDepth.sell.low === 5 &&
+        Memory.stats.market.fairPrice.energy.vwap.sell["0.01"] === 21 &&
+        Memory.stats.market.fairPrice.energy.vwap.buy["0.01"] === 19,
+        "market fair-price snapshot is exported sparsely to Memory.stats for Grafana");
+    const savedMarket = Game.market;
+    delete Game.market;
+    let marketCommandError = null;
+    try { global.marketPrice("energy"); } catch (error) { marketCommandError = error; }
+    assert(!marketCommandError,
+        "marketPrice remains null-safe when Game.market is absent");
+    Game.market = savedMarket;
+    delete Memory.settings.market;
+}
 
 // --- rampart / tower plan checks --------------------------------------
 // 0007: the plan lives in a RawMemory segment behind planStore, not in Memory

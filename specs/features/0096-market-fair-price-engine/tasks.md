@@ -1,0 +1,22 @@
+# 0096 — Market fair-price engine — Tasks
+
+Ordenadas e verificáveis. Nenhuma tarefa chama `deal`, `createOrder` ou
+`cancelOrder`.
+
+- [x] 1. Adicionar os defaults de `market` e integrar `utils/market.js` ao índice e ao loop.
+  - verify: `node --check src/utils/market.js src/main.js` · scan protegido por `guard`
+- [x] 2. Implementar agrupamento, histórico ponderado, profundidade relativa e snapshot throttled.
+  - verify: smoke assertions para `(AC1)`, `(AC2)`, `(AC3)` e `(AC4)`
+- [x] 3. Registrar `marketPrice(resourceType?)` e a entrada de `help()`.
+  - verify: smoke assertion para `(AC6)` e grep manual sem operações de ordem `(AC5)`
+- [x] 4. Atualizar `test/smoke.js` com mock parcial e contadores do mercado.
+  - verify: `node test/smoke.js "$(pwd)"` verde
+- [x] 5. Rodar checks finais e fechar a documentação.
+  - verify: `node --check` nos arquivos tocados · `node test/smoke.js "$(pwd)"` · `npx grunt` · atualizar `ROADMAP.md`/`ARCHITECTURE.md` e marcar `done`
+- [x] 6. Exportar o snapshot esparso em `Memory.stats.market.fairPrice` e cobrir o contrato no smoke.
+  - verify: assertion de `Memory.stats.market.fairPrice` com histórico, profundidade e VWAP `(AC8)`
+
+## Notes
+
+- Decisão inicial: `marketPrice(resourceType?)`; sem argumento lista só recursos
+  com volume histórico positivo.

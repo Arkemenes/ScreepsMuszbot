@@ -8,6 +8,11 @@
 // any level just falls through (constitution §3).
 
 const defaults = {
+    market: {
+        scanInterval: 100,
+        vwapDepthPercentLow: 0.01,
+        vwapDepthPercentHigh: 0.1,
+    },
     defender: {
         maxCount: 3,
         // room.energyCapacityAvailable at/above which a defenderStriker +

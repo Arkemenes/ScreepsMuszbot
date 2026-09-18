@@ -203,6 +203,7 @@ module.exports.loop = function () {
                     Game.cpu.generatePixel();
                 }
             });
+            guard("market", () => utils.market.scan());
             guard("stats", () => utils.stats());
         });
     });

@@ -101,6 +101,12 @@ global.help = function () {
             ],
         },
         {
+            title: "Mercado",
+            commands: [
+                ["marketPrice(resourceType?)", "mostra o preco justo observado: historico ponderado, melhor compra/venda e VWAP sell/buy em duas profundidades; sem argumento lista recursos com volume"],
+            ],
+        },
+        {
             title: "Manutenção",
             commands: [
                 ["findCreeps(role)", "lista nome e sala de todo creep vivo desse role, no império inteiro"],

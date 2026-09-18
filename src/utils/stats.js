@@ -4,6 +4,7 @@ const roomCache = require("./roomCache");
 const config = require("./config");
 const energyLedger = require("./energyLedger");
 const resourceTiers = require("./resourceTiers");
+const market = require("./market");
 
 // heap-resident, survives ticks but not a global reset - a reset just means
 // the very next call recomputes fresh instead of reusing a stale value, so
@@ -115,6 +116,27 @@ function exportStats() {
     // real server, but guarded the same way hauler.js already guards
     // Game.market.incomingTransactions (constitution §3).
     Memory.stats.market.credits = (Game.market && Game.market.credits) || 0;
+
+    // ROADMAP 0096: publish only liquid resources so the Grafana-facing
+    // Memory snapshot stays sparse while the expensive calculation remains
+    // heap-only in utils/market.js.
+    const marketSnapshot = market.snapshot();
+    if (marketSnapshot && marketSnapshot.resources) {
+        const fairPrice = {};
+        for (const resourceType in marketSnapshot.resources) {
+            const result = marketSnapshot.resources[resourceType];
+            if (!result || !(result.averageDailyVolume > 0)) continue;
+            fairPrice[resourceType] = {
+                weightedHistory: result.weightedHistory,
+                averageDailyVolume: result.averageDailyVolume,
+                bestSell: result.bestSell,
+                bestBuy: result.bestBuy,
+                vwapDepth: result.vwapDepth,
+                vwap: result.vwap,
+            };
+        }
+        Memory.stats.market.fairPrice = fairPrice;
+    }
 
     // Collect room stats
     for (let roomName in Game.rooms) {

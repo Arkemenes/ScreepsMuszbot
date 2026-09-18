@@ -12,6 +12,7 @@ let utils = {
     traffic: require("./traffic"),
     resourceTiers: require("./resourceTiers"),
     priority: require("./priority"),
+    market: require("./market"),
 };
 
 module.exports = utils;

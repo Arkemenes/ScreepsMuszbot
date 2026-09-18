@@ -105,6 +105,7 @@ detalhe.
 | 0093 | [Builder aguarda estabilidade econômica](features/0093-builder-stability-gate/spec.md) | done | construção de sites espera `stable`/`abundant`; reparo crítico continua permitido durante instabilidade |
 | 0094 | [Energy structures mais próximas do anchor de spawn](features/0094-spawn-near-storage/spec.md) | done | spawnCreep recebe spawns/extensions ordenados pelo storage, ou pelo spawn executor sem storage |
 | 0095 | [Coordenação de jobs não energéticos do hauler](features/0095-hauler-non-energy-coordination/spec.md) | done | mantém uma role; demanda sem energia acionável libera job preemptível; um hauler por sala assume output pressionado; piso temporário de 2 usa histerese 75%/50%; carga já retirada é preservada |
+| 0096 | [Motor de preço justo de mercado (fase 0: só cálculo)](features/0096-market-fair-price-engine/spec.md) | done | `utils/market.js`, throttled, escaneia todo o mercado (`RESOURCES_ALL`+`INTERSHARD_RESOURCES`); histórico ponderado por volume + VWAP do book em profundidade relativa ao volume do próprio recurso; snapshot esparso em `Memory.stats.market.fairPrice`; sem taxas, sem compra/venda |
 
 ## Fila atual
 
@@ -139,8 +140,11 @@ estão `done`. Próximo candidato: `0011` (build & tooling), ainda em `spec`.
 - **RoomManager / Empire** — um objeto reconstruído por tick que todo role lê
   (creeps por role, estruturas por tipo, canteiros, hostis). `census` +
   `roomCache` são a semente disso; consolidar.
-- **Market / terminal** — vender excedente, comprar déficit, balancear energia
-  entre salas próprias. Quando essa spec existir e o bot passar a chamar
+- **Market / terminal (compra/venda de verdade)** — fase seguinte do
+  [0096](features/0096-market-fair-price-engine/spec.md) (que só calcula
+  preço justo, sem executar nada): usar esse preço pra vender excedente,
+  comprar déficit, e eventualmente balancear energia entre salas próprias.
+  Quando essa fase existir e o bot passar a chamar
   `Game.market.deal()`/`terminal.send()` de verdade, suas tasks herdam a
   instrumentação de `Memory.stats.market.transactions` e
   `Memory.stats.terminalNetwork.transfers` deixada fora de escopo em
