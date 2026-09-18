@@ -125,14 +125,18 @@ function exportStats() {
         const fairPrice = {};
         for (const resourceType in marketSnapshot.resources) {
             const result = marketSnapshot.resources[resourceType];
-            if (!result || !(result.averageDailyVolume > 0)) continue;
+            if (!result || (
+                !(result.averageDailyVolume > 0) &&
+                result.bestSell === null &&
+                result.bestBuy === null
+            )) continue;
             fairPrice[resourceType] = {
-                weightedHistory: result.weightedHistory,
-                averageDailyVolume: result.averageDailyVolume,
-                bestSell: result.bestSell,
-                bestBuy: result.bestBuy,
-                vwapDepth: result.vwapDepth,
-                vwap: result.vwap,
+                fairPrice: result.fairPrice,
+                buyPrice: result.buyPrice,
+                sellPrice: result.sellPrice,
+                sampleCount: result.sampleCount,
+                windowCoverageTicks: result.windowCoverageTicks,
+                confidence: result.confidence,
             };
         }
         Memory.stats.market.fairPrice = fairPrice;

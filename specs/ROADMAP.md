@@ -105,7 +105,7 @@ detalhe.
 | 0093 | [Builder aguarda estabilidade econômica](features/0093-builder-stability-gate/spec.md) | done | construção de sites espera `stable`/`abundant`; reparo crítico continua permitido durante instabilidade |
 | 0094 | [Energy structures mais próximas do anchor de spawn](features/0094-spawn-near-storage/spec.md) | done | spawnCreep recebe spawns/extensions ordenados pelo storage, ou pelo spawn executor sem storage |
 | 0095 | [Coordenação de jobs não energéticos do hauler](features/0095-hauler-non-energy-coordination/spec.md) | done | mantém uma role; demanda sem energia acionável libera job preemptível; um hauler por sala assume output pressionado; piso temporário de 2 usa histerese 75%/50%; carga já retirada é preservada |
-| 0096 | [Motor de preço justo de mercado (fase 0: só cálculo)](features/0096-market-fair-price-engine/spec.md) | done | `utils/market.js`, throttled, escaneia todo o mercado (`RESOURCES_ALL`+`INTERSHARD_RESOURCES`); histórico ponderado por volume + VWAP do book em profundidade relativa ao volume do próprio recurso; snapshot esparso em `Memory.stats.market.fairPrice`; sem taxas, sem compra/venda |
+| 0096 | [Motor de preço justo de mercado (fase 0: só cálculo)](features/0096-market-fair-price-engine/spec.md) | done | `utils/market.js`, snapshots temporais configuráveis; mediana ponderada pela volumetria do melhor BUY/SELL com limite de peso por snapshot; fair price midpoint; exportação esparsa para Grafana |
 
 ## Fila atual
 

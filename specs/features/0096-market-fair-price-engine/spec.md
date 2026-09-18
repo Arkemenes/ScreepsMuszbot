@@ -51,9 +51,6 @@ compromete o orçamento de CPU do resto do bot.
   `rooms/needs.js`).
 - Escaneia **todo o mercado**: `RESOURCES_ALL` (constante nativa) +
   `INTERSHARD_RESOURCES` (constante nativa) — nunca uma lista hardcoded.
-- Uma chamada `Game.market.getHistory()` **sem argumento** por ciclo (a API
-  devolve histórico de todos os recursos de uma vez — mais barato que uma
-  chamada por recurso).
 - Uma chamada `Game.market.getAllOrders()` **sem filtro** por ciclo, agrupada
   por `resourceType` no lado do JS (a alternativa — uma chamada filtrada por
   recurso, ~150+ chamadas — foi descartada por hipótese mas não medida; ver
@@ -62,26 +59,23 @@ compromete o orçamento de CPU do resto do bot.
   módulo decide quando recalcular, mesmo idioma de `planScanDue()` do
   [0079-adjacente] `rooms/architect.js`/`structures/observer.js` desta mesma
   sessão) — nunca roda todo tick.
-- Fórmula do preço justo, por recurso:
-  - **Histórico ponderado por volume**: `Σ(avgPrice_i × volume_i) / Σ(volume_i)`
-    sobre os até 14 dias que `getHistory()` devolve — um dia com pouquíssimas
-    transações pesa proporcionalmente menos que um dia líquido, sem inventar
-    um segundo eixo de "confiança" ainda.
-  - **VWAP do book em duas profundidades relativas ao volume do próprio
-    recurso** (não um número fixo de unidades — 1.000 unidades é irrelevante
-    pra energia, que negocia em ordens de até ~750.000, e pode ser gigante
-    pra Power): a profundidade é uma fração do volume diário médio do
-    recurso (`getHistory()`'s `volume`) — por exemplo 1% e 10% desse volume
-    — computada tanto pro lado `sell` (quanto custaria comprar essa fatia)
-    quanto pro lado `buy` (quanto renderia vender essa fatia).
-  - Nenhuma detecção de manipulação, persistência de ordem, ou custo de
-    produção ainda — ver Out of scope.
+- Fórmula temporal do preço, por recurso:
+  - A cada `market.snapshotInterval` ticks, captura somente o melhor SELL e o
+    melhor BUY e soma o `remainingAmount` disponível naquele preço.
+  - Mantém uma janela circular heap-only de `market.snapshotWindowTicks`
+    (default 604800, aproximadamente 7 dias a 1 tick/segundo).
+  - `sellPrice` e `buyPrice` são medianas temporais ponderadas pela volumetria
+    do melhor nível de cada snapshot. Cada snapshot tem peso máximo de
+    `market.snapshotWeightCap` (default 1% do peso bruto total).
+  - `fairPrice` é o midpoint de `sellPrice` e `buyPrice`; fica `null` se um
+    dos lados não existir. Sem histórico próprio de snapshots suficiente,
+    calcula com os snapshots disponíveis e marca `confidence: "warming"`.
 - Console: um comando novo (nome exato a decidir no `plan.md`) que imprime,
-  para um `resourceType`, o histórico ponderado, o VWAP das duas
-  profundidades (`sell` e `buy`), e os dados brutos usados (melhor
-  sell/buy, volume do dia). Sem argumento, lista um resumo de todo o
-  mercado (ou os recursos com volume > 0 — a decidir no `plan.md`, dado o
-  limite de linha do console do Screeps).
+  para um `resourceType`, **um único `fairPrice` final**. Os VWAPs das duas
+  profundidades (`sell` e `buy`) e os dados brutos usados continuam no
+  snapshot/Grafana para diagnóstico, mas não são concatenados em uma segunda
+  "média" manipulável. Sem argumento, lista um resumo de todo o mercado com
+  um `fairPrice` por recurso que tenha histórico ou book.
 - `src/utils/console.js` — nova seção "Mercado" com o(s) comando(s) novo(s).
 - `Memory.stats.market.fairPrice` — snapshot esparso dos recursos com volume,
   para consumo pelo exporter/Grafana; não contém objetos do jogo.
@@ -114,10 +108,10 @@ compromete o orçamento de CPU do resto do bot.
   confiança** — todo o resto do catálogo levantado na pesquisa prévia. Só
   entra numa fase futura se o preço justo desta fase se mostrar
   insuficiente na prática.
-- **Transações de mercado/terminal em `Memory.stats`** — continuam fora de
-  escopo porque o bot não executa `deal()`/`terminal.send()`. O snapshot
-  observacional de preço justo em `Memory.stats.market.fairPrice` é a exceção
-  adicionada para alimentar o Grafana sem instrumentar execução.
+- **Histórico oficial `getHistory()` e transações próprias** — não entram no
+  fair price temporal; o primeiro é considerado manipulável e o segundo não
+  representa o mercado global. `getHistory()` pode continuar sendo usado em
+  análises futuras, fora desta fórmula.
 - **Qualquer resourceType não presente em `RESOURCES_ALL`/
   `INTERSHARD_RESOURCES`** — não deveria existir, mas se a API devolver algo
   fora dessas listas (fail-soft: ignora, não lança).
@@ -138,7 +132,7 @@ compromete o orçamento de CPU do resto do bot.
 4. O throttle interno (`market.scanInterval`) só recalcula quando o
    intervalo configurado passou — `test/smoke.js`: duas chamadas no mesmo
    tick (ou dentro do intervalo) não disparam uma segunda leitura de
-   `Game.market`.
+  `Game.market`.
 5. Nenhuma chamada a `Game.market.deal()`/`createOrder()`/`cancelOrder()`
    existe em `utils/market.js` ou em qualquer código tocado por esta spec —
    checagem manual (grep) na revisão, já que é o próprio ponto da fase 0.
@@ -147,25 +141,19 @@ compromete o orçamento de CPU do resto do bot.
    mesmo padrão null-safe de `hauler.js`'s `terminalWithdrawable`.
 7. `node --check` limpo nos arquivos tocados; `test/smoke.js` verde;
    `npx grunt` builda.
-8. `Memory.stats.market.fairPrice` exporta os valores do snapshot para cada
-  recurso com volume positivo, sem lançar quando o snapshot ainda não existe
-  — `test/smoke.js`.
+8. `Memory.stats.market.fairPrice` exporta apenas `buyPrice`, `sellPrice`,
+  `fairPrice`, `sampleCount`, `windowCoverageTicks` e `confidence`.
+9. `marketPrice(resourceType)` imprime todas as componentes do recurso; sem
+  argumento, imprime somente itens com `fairPrice` não nulo.
 
 ## Constitution check
 
-- **CPU (§1):** a chamada a `Game.market` mais cara (`getAllOrders()` sem
-  filtro, documentada como `// slow` pela própria Screeps) só roda a cada
-  `market.scanInterval` ticks (default 100), nunca por tick — mesmo
-  princípio de throttle que `rooms/architect.js`'s scan de canteiros e
-  `structures/observer.js`'s exploração já usam (implementados na mesma
-  sessão). Medir com `profile()` antes de considerar a spec fechada de
-  verdade (o "measure before optimizing" do princípio já é hábito deste
-  projeto).
-- **Memory (§2):** o cálculo continua no heap e o snapshot é copiado de forma
-  esparsa para `Memory.stats.market.fairPrice` apenas porque o Grafana precisa
-  de uma série persistida; só números e strings de resource type são gravados,
-  nunca objetos do jogo. O timestamp de coleta permanece no heap.
-- **Fail-soft (§3):** toda leitura de `Game.market`/`getHistory`/
+- **CPU (§1):** `getAllOrders()` sem filtro só roda quando o intervalo do
+  snapshot vence (default 100), nunca por tick. O book é percorrido uma vez
+  por ciclo e a janela temporal é mantida em heap.
+- **Memory (§2):** snapshots compactos ficam no heap; `Memory.stats` recebe
+  apenas o resultado temporal atual, sem ordens brutas.
+- **Fail-soft (§3):** toda leitura de `Game.market`/`getHistory(resourceType)`/
   `getAllOrders` é null-safe (mesmo padrão de `hauler.js`'s
   `terminalWithdrawable` guardando `Game.market` ausente) — um resultado
   vazio/parcial não lança, só produz um preço justo baseado em menos dado.
@@ -181,11 +169,9 @@ compromete o orçamento de CPU do resto do bot.
 
 ## Open questions
 
-- `getAllOrders()` sem filtro vs. uma chamada filtrada por recurso (~150+
-  chamadas) — decidido por hipótese ("uma chamada tende a ser mais barata
-  que 150"), não por medição. Resolver com `profile()` assim que a
-  implementação rodar em produção; se a hipótese estiver errada, trocar a
-  estratégia é uma mudança isolada dentro de `utils/market.js`.
+- O intervalo padrão é 3600 ticks, aproximadamente uma hora a 1 tick/segundo;
+  pode ser reduzido temporariamente via `Memory.settings.market` durante
+  debug sem alterar a fórmula.
 - Nome exato do(s) comando(s) de console e o formato exato do resumo
   "mercado inteiro" (cabe no limite de linha do console do Screeps listando
   ~150 recursos? Provavelmente não — decidir paginação/filtro no `plan.md`).
@@ -197,14 +183,14 @@ compromete o orçamento de CPU do resto do bot.
 ## Decisions for phase 0
 
 - O comando será `marketPrice(resourceType?)`. Com argumento, imprime o
-  snapshot completo do recurso; sem argumento, imprime uma linha resumida por
+  único `fairPrice` do recurso; sem argumento, imprime uma linha resumida por
   recurso que tenha pelo menos um dia de histórico com volume positivo. O
   resumo evita estourar o limite de linhas do console com recursos sem
-  liquidez, mas inclui recursos de `INTERSHARD_RESOURCES` quando houver dado.
+  liquidez, mas inclui recursos de `INTERSHARD_RESOURCES` quando houver
+  histórico ou book atual.
 - O ciclo de scan publica o snapshot mais recente no heap do módulo. O
   comando nunca chama `Game.market` diretamente nem força um scan fora do
   throttle; antes do primeiro scan, informa que ainda não há dados.
-- Para o VWAP, o volume diário médio é a média aritmética dos dias válidos do
-  histórico (volume numérico e maior que zero). A profundidade-alvo é essa
-  média multiplicada por cada percentual configurado. Ordens são consumidas
-  por preço (sell ascendente, buy descendente), com a última ordem parcial.
+- A mediana temporal usa pesos de volumetria do melhor nível, limitados a 1%
+  por snapshot; o `fairPrice` final é midpoint somente quando os dois lados
+  existem.

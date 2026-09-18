@@ -2,6 +2,7 @@ const config = require("./config");
 
 let lastScanTick = null;
 let lastSnapshot = null;
+const temporalSnapshots = {};
 
 function numberOrZero(value) {
     return typeof value === "number" && isFinite(value) ? value : 0;
@@ -37,18 +38,6 @@ function groupOrders(orders) {
     return grouped;
 }
 
-function historyByResource(history) {
-    const grouped = {};
-    if (!Array.isArray(history)) return grouped;
-    for (const entry of history) {
-        if (!entry || typeof entry.resourceType !== "string") continue;
-        grouped[entry.resourceType] = Array.isArray(entry.history)
-            ? entry.history
-            : [];
-    }
-    return grouped;
-}
-
 function historyMetrics(days) {
     let volume = 0;
     let weightedTotal = 0;
@@ -71,12 +60,83 @@ function orderType(order, expected) {
     return order && (order.type === expected || order.orderType === expected);
 }
 
+function orderAmount(order) {
+    return numberOrZero(
+        order && typeof order.remainingAmount === "number"
+            ? order.remainingAmount
+            : order && order.amount
+    );
+}
+
+function bestOrderLevel(orders, expectedType, descending) {
+    const eligible = (Array.isArray(orders) ? orders : [])
+        .filter((order) => orderType(order, expectedType))
+        .filter((order) => numberOrZero(order.price) > 0 && orderAmount(order) > 0)
+        .sort((left, right) => descending
+            ? right.price - left.price
+            : left.price - right.price);
+    if (!eligible.length) return { price: null, volume: 0 };
+    const price = eligible[0].price;
+    return {
+        price,
+        volume: eligible
+            .filter((order) => order.price === price)
+            .reduce((sum, order) => sum + orderAmount(order), 0),
+    };
+}
+
+function weightedMedian(samples) {
+    const valid = (Array.isArray(samples) ? samples : [])
+        .filter((sample) => numberOrZero(sample.price) > 0 && numberOrZero(sample.volume) > 0)
+        .map((sample) => ({ price: sample.price, volume: sample.volume }));
+    if (!valid.length) return null;
+    const totalWeight = valid.reduce((sum, sample) => sum + sample.volume, 0);
+    const maxWeight = totalWeight * config.get("market.snapshotWeightCap", 0.01);
+    const capped = valid.map((sample) => ({
+        price: sample.price,
+        volume: Math.min(sample.volume, maxWeight),
+    }));
+    capped.sort((left, right) => left.price - right.price);
+    const target = capped.reduce((sum, sample) => sum + sample.volume, 0) / 2;
+    let accumulated = 0;
+    for (const sample of capped) {
+        accumulated += sample.volume;
+        if (accumulated >= target) return sample.price;
+    }
+    return capped[capped.length - 1].price;
+}
+
+function temporalResource(resourceType, now) {
+    const snapshots = temporalSnapshots[resourceType] || [];
+    const buySamples = snapshots.filter((sample) => sample.buyPrice !== null)
+        .map((sample) => ({ price: sample.buyPrice, volume: sample.buyVolume }));
+    const sellSamples = snapshots.filter((sample) => sample.sellPrice !== null)
+        .map((sample) => ({ price: sample.sellPrice, volume: sample.sellVolume }));
+    const buyPrice = weightedMedian(buySamples);
+    const sellPrice = weightedMedian(sellSamples);
+    return {
+        buyPrice,
+        sellPrice,
+        fairPrice: buyPrice !== null && sellPrice !== null
+            ? (buyPrice + sellPrice) / 2
+            : null,
+        sampleCount: snapshots.length,
+        windowCoverageTicks: snapshots.length
+            ? now - snapshots[0].tick
+            : 0,
+        confidence: snapshots.length && now - snapshots[0].tick >=
+            config.get("market.snapshotWindowTicks", 604800)
+            ? "ready"
+            : "warming",
+    };
+}
+
 function vwap(orders, expectedType, targetVolume, descending) {
     if (targetVolume <= 0 || !Array.isArray(orders)) return null;
     const expected = expectedType;
     const eligible = orders
         .filter((order) => orderType(order, expected))
-        .filter((order) => numberOrZero(order.price) > 0 && numberOrZero(order.amount) > 0)
+        .filter((order) => numberOrZero(order.price) > 0 && orderAmount(order) > 0)
         .sort((left, right) => descending
             ? right.price - left.price
             : left.price - right.price);
@@ -84,7 +144,7 @@ function vwap(orders, expectedType, targetVolume, descending) {
     let amount = 0;
     let value = 0;
     for (const order of eligible) {
-        const taken = Math.min(remaining, numberOrZero(order.amount));
+        const taken = Math.min(remaining, orderAmount(order));
         amount += taken;
         value += taken * order.price;
         remaining -= taken;
@@ -111,30 +171,27 @@ function bestPrice(orders, expectedType, descending) {
     return descending ? Math.max.apply(null, prices) : Math.min.apply(null, prices);
 }
 
+function fairPrice(vwasp, buyVwap, bestSell, bestBuy) {
+    if (numberOrZero(vwasp) > 0) return vwasp;
+    if (numberOrZero(buyVwap) > 0) return buyVwap;
+    if (numberOrZero(bestSell) > 0 && numberOrZero(bestBuy) > 0) {
+        return (bestSell + bestBuy) / 2;
+    }
+    return numberOrZero(bestSell) > 0 ? bestSell :
+        numberOrZero(bestBuy) > 0 ? bestBuy : null;
+}
+
 function buildResource(resourceType, days, orders) {
-    const metrics = historyMetrics(days);
-    const lowPercent = config.get("market.vwapDepthPercentLow", 0.01);
-    const highPercent = config.get("market.vwapDepthPercentHigh", 0.1);
-    const depths = vwapDepths(metrics.averageDailyVolume);
     const sellType = typeof ORDER_SELL !== "undefined" ? ORDER_SELL : "sell";
     const buyType = typeof ORDER_BUY !== "undefined" ? ORDER_BUY : "buy";
+    const sellLevel = bestOrderLevel(orders, sellType, false);
+    const buyLevel = bestOrderLevel(orders, buyType, true);
     return {
         resourceType,
-        weightedHistory: metrics.weightedHistory,
-        averageDailyVolume: metrics.averageDailyVolume,
-        bestSell: bestPrice(orders, sellType, false),
-        bestBuy: bestPrice(orders, buyType, true),
-        vwapDepth: { sell: depths, buy: depths },
-        vwap: {
-            sell: {
-                [lowPercent]: vwap(orders, sellType, depths.low, false),
-                [highPercent]: vwap(orders, sellType, depths.high, false),
-            },
-            buy: {
-                [lowPercent]: vwap(orders, buyType, depths.low, true),
-                [highPercent]: vwap(orders, buyType, depths.high, true),
-            },
-        },
+        bestSell: sellLevel.price,
+        bestBuy: buyLevel.price,
+        currentBuyVolume: buyLevel.volume,
+        currentSellVolume: sellLevel.volume,
     };
 }
 
@@ -147,28 +204,41 @@ function emptySnapshot() {
 }
 
 function scan() {
-    const interval = Math.max(1, Number(config.get("market.scanInterval", 100)) || 100);
+    const interval = Math.max(1, Number(config.get("market.snapshotInterval", 3600)) || 3600);
     if (lastSnapshot && lastScanTick !== null && Game.time - lastScanTick < interval) {
         return lastSnapshot;
     }
     const market = typeof Game !== "undefined" && Game.market;
-    let history = [];
     let orders = [];
-    if (market && typeof market.getHistory === "function") {
-        try { history = market.getHistory() || []; } catch (error) { history = []; }
-    }
     if (market && typeof market.getAllOrders === "function") {
         try { orders = market.getAllOrders() || []; } catch (error) { orders = []; }
     }
-    const histories = historyByResource(history);
     const groupedOrders = groupOrders(orders);
     const resources = {};
     for (const resourceType of resourceTypes()) {
+        const sellType = typeof ORDER_SELL !== "undefined" ? ORDER_SELL : "sell";
+        const buyType = typeof ORDER_BUY !== "undefined" ? ORDER_BUY : "buy";
+        const sellLevel = bestOrderLevel(groupedOrders[resourceType], sellType, false);
+        const buyLevel = bestOrderLevel(groupedOrders[resourceType], buyType, true);
+        if (!temporalSnapshots[resourceType]) temporalSnapshots[resourceType] = [];
+        temporalSnapshots[resourceType].push({
+            tick: Game.time,
+            buyPrice: buyLevel.price,
+            buyVolume: buyLevel.volume,
+            sellPrice: sellLevel.price,
+            sellVolume: sellLevel.volume,
+        });
+        const windowTicks = Math.max(1, Number(config.get("market.snapshotWindowTicks", 604800)) || 604800);
+        while (temporalSnapshots[resourceType].length &&
+            Game.time - temporalSnapshots[resourceType][0].tick > windowTicks) {
+            temporalSnapshots[resourceType].shift();
+        }
         resources[resourceType] = buildResource(
             resourceType,
-            histories[resourceType],
+            [],
             groupedOrders[resourceType]
         );
+        Object.assign(resources[resourceType], temporalResource(resourceType, Game.time));
     }
     lastScanTick = Game.time;
     lastSnapshot = { tick: Game.time, resources };
@@ -177,6 +247,12 @@ function scan() {
 
 function snapshot() {
     return lastSnapshot;
+}
+
+function reset() {
+    lastScanTick = null;
+    lastSnapshot = null;
+    for (const resourceType in temporalSnapshots) delete temporalSnapshots[resourceType];
 }
 
 function marketPrice(resourceType) {
@@ -192,13 +268,10 @@ function marketPrice(resourceType) {
     }
     const summary = Object.keys(current.resources)
         .map((key) => current.resources[key])
-        .filter((result) => result.averageDailyVolume > 0)
+        .filter((result) => result.fairPrice !== null)
         .map((result) => ({
             resourceType: result.resourceType,
-            weightedHistory: result.weightedHistory,
-            bestSell: result.bestSell,
-            bestBuy: result.bestBuy,
-            averageDailyVolume: result.averageDailyVolume,
+            fairPrice: result.fairPrice,
         }));
     console.log(JSON.stringify(summary));
     return summary;
@@ -209,9 +282,12 @@ global.marketPrice = marketPrice;
 module.exports = {
     scan,
     snapshot,
+    reset,
     groupOrders,
     historyMetrics,
     vwap,
     vwapDepths,
+    fairPrice,
+    weightedMedian,
     marketPrice,
 };

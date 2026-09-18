@@ -526,6 +526,12 @@ const weighted = market.historyMetrics([
 ]);
 assert(weighted.weightedHistory === 19,
     "market history is weighted by volume (got " + weighted.weightedHistory + ")");
+assert(market.weightedMedian([
+    { price: 60, volume: 100 },
+    { price: 70, volume: 100 },
+    { price: 80, volume: 100 },
+]) === 70,
+    "market temporal median is weighted by snapshot volume");
 const shallow = market.historyMetrics([{ avgPrice: 10, volume: 100 }]);
 const deep = market.historyMetrics([{ avgPrice: 10, volume: 1000 }]);
 assert(market.vwapDepths(deep.averageDailyVolume).low >
@@ -541,50 +547,46 @@ assert(orderGroups.energy.length === 1 && orderGroups.pixel.length === 1,
     let historyCalls = 0;
     let orderCalls = 0;
     Game.market = {
-        getHistory: () => {
-            historyCalls++;
-            return [
-                { resourceType: "energy", history: [
-                    { avgPrice: 10, volume: 100 },
-                    { avgPrice: 20, volume: 900 },
-                ] },
-                { resourceType: "pixel", history: [{ avgPrice: 500, volume: 10 }] },
-            ];
-        },
         getAllOrders: () => {
             orderCalls++;
             return [
-                { resourceType: "energy", type: ORDER_SELL, price: 21, amount: 1000 },
-                { resourceType: "energy", type: ORDER_BUY, price: 19, amount: 1000 },
+                { resourceType: "energy", type: ORDER_SELL, price: 70, remainingAmount: 1000, amount: 2000 },
+                { resourceType: "energy", type: ORDER_BUY, price: 60, remainingAmount: 1000, amount: 2000 },
                 { resourceType: "pixel", type: ORDER_BUY, price: 500, amount: 2 },
             ];
         },
     };
     Memory.settings = Memory.settings || {};
-    Memory.settings.market = { scanInterval: 10 };
+    Memory.settings.market = { snapshotInterval: 10, snapshotWindowTicks: 1000 };
+    market.reset();
     Game.time += 100;
     const first = market.scan();
     market.scan();
-    assert(historyCalls === 1 && orderCalls === 1,
-        "market scan throttle avoids a second Game.market read in the interval");
-    assert(first.resources.energy.weightedHistory === 19,
-        "market snapshot exposes the weighted history for energy");
+    assert(orderCalls === 1,
+        "market snapshot reads one unfiltered order book");
+    assert(first.resources.energy.sellPrice === 70 &&
+        first.resources.energy.buyPrice === 60 &&
+        first.resources.energy.fairPrice === 65 &&
+        first.resources.energy.sampleCount === 1,
+        "market snapshot exposes temporal buy/sell medians and fair price");
     Game.time += 9;
     market.scan();
-    assert(historyCalls === 1 && orderCalls === 1,
+    assert(orderCalls === 1,
         "market scan remains throttled before scanInterval elapses");
     Game.time += 1;
     market.scan();
-    assert(historyCalls === 2 && orderCalls === 2,
-        "market scan reads history and orders after scanInterval elapses");
+    assert(orderCalls === 2 && market.snapshot().resources.energy.sampleCount === 2,
+        "market scan records another temporal snapshot after snapshotInterval elapses");
     const statsForMarket = require(path.join(PROJECT, "src/utils/stats"));
     statsForMarket();
-    assert(Memory.stats.market.fairPrice.energy.weightedHistory === 19 &&
-        Memory.stats.market.fairPrice.energy.averageDailyVolume === 500 &&
-        Memory.stats.market.fairPrice.energy.vwapDepth.sell.low === 5 &&
-        Memory.stats.market.fairPrice.energy.vwap.sell["0.01"] === 21 &&
-        Memory.stats.market.fairPrice.energy.vwap.buy["0.01"] === 19,
-        "market fair-price snapshot is exported sparsely to Memory.stats for Grafana");
+    assert(Memory.stats.market.fairPrice.energy.fairPrice === 65 &&
+        Memory.stats.market.fairPrice.energy.buyPrice === 60 &&
+        Memory.stats.market.fairPrice.energy.sellPrice === 70,
+        "temporal fair-price snapshot is exported sparsely to Memory.stats for Grafana");
+    const marketSummary = global.marketPrice();
+    assert(marketSummary.length === 1 && marketSummary[0].resourceType === "energy" &&
+        marketSummary[0].fairPrice === 65,
+        "marketPrice() without a resource lists only items with temporal fair prices");
     const savedMarket = Game.market;
     delete Game.market;
     let marketCommandError = null;
