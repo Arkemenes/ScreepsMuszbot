@@ -7,7 +7,7 @@
 ## Problem
 
 O bot não tem noção nenhuma de "preço justo" de mercado hoje — nenhum código
-em `src/` chama `Game.market.getHistory()`, `getAllOrders()` ou `deal()`
+em `src/` chama `Game.market.getAllOrders()` ou `deal()`
 (confirmado ao investigar o [0079](../0079-grafana-dashboard-stats/spec.md),
 que por isso deixou `market.transactions`/`terminalNetwork.transfers` de fora
 do `Memory.stats`). O usuário quer eventualmente automatizar compra/venda,
@@ -55,7 +55,7 @@ compromete o orçamento de CPU do resto do bot.
   por `resourceType` no lado do JS (a alternativa — uma chamada filtrada por
   recurso, ~150+ chamadas — foi descartada por hipótese mas não medida; ver
   Open questions).
-- Throttle interno (`config.get("market.scanInterval", 100)`, o próprio
+- Throttle interno (`config.get("market.currentInterval", 100)`, o próprio
   módulo decide quando recalcular, mesmo idioma de `planScanDue()` do
   [0079-adjacente] `rooms/architect.js`/`structures/observer.js` desta mesma
   sessão) — nunca roda todo tick.
@@ -103,12 +103,6 @@ compromete o orçamento de CPU do resto do bot.
   de mercado em si (mesma separação "fair value" vs. "execution price" já
   levantada na pesquisa que embasou esta spec). O preço justo desta fase é
   sempre o preço de mercado bruto, sem taxa nenhuma embutida.
-- **Histórico próprio de snapshots** (a ideia mais forte da pesquisa prévia
-  pra robustez contra manipulação) — decisão
-  explícita do usuário: começar só com `getHistory()` (14 dias oficiais,
-  zero infraestrutura nova), aceitando a divergência que isso pode causar
-  frente a um histórico mais longo/granular. Documentado como risco
-  conhecido abaixo, não um gap silencioso.
 - **Detecção de manipulação, persistência de ordem, custo de produção
   (árvore `COMMODITIES`/`REACTIONS`), demanda derivada, bandas de
   confiança** — todo o resto do catálogo levantado na pesquisa prévia. Só
@@ -116,41 +110,32 @@ compromete o orçamento de CPU do resto do bot.
   insuficiente na prática.
 - **Histórico oficial `getHistory()` e transações próprias** — não entram no
   fair price temporal; o primeiro é considerado manipulável e o segundo não
-  representa o mercado global. `getHistory()` pode continuar sendo usado em
-  análises futuras, fora desta fórmula.
+  representa o mercado global.
 - **Qualquer resourceType não presente em `RESOURCES_ALL`/
   `INTERSHARD_RESOURCES`** — não deveria existir, mas se a API devolver algo
   fora dessas listas (fail-soft: ignora, não lança).
 
 ## Acceptance criteria
 
-1. `utils/market.js`'s função de histórico ponderado por volume produz o
-   valor esperado dado um mock de `getHistory()` com dias de volume
-   desigual (um dia de volume alto puxa a média mais que um dia de volume
-   baixo) — `test/smoke.js`.
-2. A função de profundidade do VWAP calcula quantidade-alvo como fração do
-   volume diário do próprio recurso (não um número fixo), dado dois mocks
-   com volumes diários bem diferentes — `test/smoke.js`: a profundidade em
-   unidades absolutas difere entre os dois casos.
-3. O agrupamento de `getAllOrders()` por `resourceType` bate com um mock de
+1. O agrupamento de `getAllOrders()` por `resourceType` bate com um mock de
    ordens de recursos variados, incluindo pelo menos um `INTERSHARD_RESOURCES`
    (ex.: `pixel`) — `test/smoke.js`.
-4. O throttle interno (`market.scanInterval`) só recalcula quando o
+2. O throttle interno (`market.currentInterval`) só recalcula quando o
    intervalo configurado passou — `test/smoke.js`: duas chamadas no mesmo
    tick (ou dentro do intervalo) não disparam uma segunda leitura de
   `Game.market`.
-5. Nenhuma chamada a `Game.market.deal()`/`createOrder()`/`cancelOrder()`
+3. Nenhuma chamada a `Game.market.deal()`/`createOrder()`/`cancelOrder()`
    existe em `utils/market.js` ou em qualquer código tocado por esta spec —
    checagem manual (grep) na revisão, já que é o próprio ponto da fase 0.
-6. O comando de console novo imprime o resultado sem lançar, mesmo com
+4. O comando de console novo imprime o resultado sem lançar, mesmo com
    `Game.market` ausente/incompleto (mock parcial) — `test/smoke.js`,
    mesmo padrão null-safe de `hauler.js`'s `terminalWithdrawable`.
-7. `node --check` limpo nos arquivos tocados; `test/smoke.js` verde;
+5. `node --check` limpo nos arquivos tocados; `test/smoke.js` verde;
    `npx grunt` builda.
-8. `Memory.stats.market.fairPrice` exporta `buyPrice`, `sellPrice`,
+6. `Memory.stats.market.fairPrice` exporta `buyPrice`, `sellPrice`,
    `fairPrice`, `currentBuy`, `currentSell`, `sampleCount`,
    `windowCoverageTicks` e `confidence`.
-9. `marketPrice(resourceType)` imprime todas as componentes do recurso; sem
+7. `marketPrice(resourceType)` imprime todas as componentes do recurso; sem
   argumento, imprime somente itens com `fairPrice` não nulo.
 
 ## Constitution check
@@ -160,16 +145,14 @@ compromete o orçamento de CPU do resto do bot.
   por ciclo e a janela temporal é mantida em heap.
 - **Memory (§2):** snapshots compactos ficam no heap; `Memory.stats` recebe
   apenas o resultado temporal atual, sem ordens brutas.
-- **Fail-soft (§3):** toda leitura de `Game.market`/`getHistory(resourceType)`/
-  `getAllOrders` é null-safe (mesmo padrão de `hauler.js`'s
+- **Fail-soft (§3):** toda leitura de `Game.market`/`getAllOrders` é null-safe
+  (mesmo padrão de `hauler.js`'s
   `terminalWithdrawable` guardando `Game.market` ausente) — um resultado
   vazio/parcial não lança, só produz um preço justo baseado em menos dado.
-- **Testável offline (§4):** `test/smoke.js` precisa de um mock de
-  `Game.market.getHistory`/`getAllOrders` — não existe ainda no harness,
-  entra como parte desta feature.
-- **Config over hardcode (§6):** `market.scanInterval` (100),
-  `market.vwapDepthPercentLow`/`vwapDepthPercentHigh` (1%/10%) via
-  `utils/config.js` — nunca literais espalhados.
+- **Testável offline (§4):** `test/smoke.js` mocka `Game.market.getAllOrders`
+  e constantes do mercado para cobrir a janela temporal.
+- **Config over hardcode (§6):** cadências e janela temporal ficam em
+  `Memory.settings.market`/`utils/config.js` — nunca em literais espalhados.
 - **Prefer the no-op (§7):** nenhum role/creep novo — puro cálculo em
   `utils/market.js`, chamado do loop do `main.js` como mais um `guard()`.
 - **Spec before code (§8):** esta spec.
@@ -182,10 +165,8 @@ compromete o orçamento de CPU do resto do bot.
 - Nome exato do(s) comando(s) de console e o formato exato do resumo
   "mercado inteiro" (cabe no limite de linha do console do Screeps listando
   ~150 recursos? Provavelmente não — decidir paginação/filtro no `plan.md`).
-- Risco aceito e documentado: `getHistory()` (14 dias agregados, sem trade
-  individual) pode divergir de um histórico próprio mais granular — aceito
-  nesta fase, revisitar se a fase de compra/venda mostrar decisões ruins
-  rastreáveis a essa limitação.
+- Risco aceito e documentado: a janela heap-only recomeça num global reset;
+  a confiança permanece `warming` até cobrir a janela configurada.
 
 ## Decisions for phase 0
 

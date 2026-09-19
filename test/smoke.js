@@ -520,12 +520,6 @@ assert(global.Memory.stats.persistent &&
 
 // --- ROADMAP 0096: market fair-price engine ----------------------------
 const market = require(path.join(PROJECT, "src/utils/market"));
-const weighted = market.historyMetrics([
-    { avgPrice: 10, volume: 10 },
-    { avgPrice: 20, volume: 90 },
-]);
-assert(weighted.weightedHistory === 19,
-    "market history is weighted by volume (got " + weighted.weightedHistory + ")");
 assert(market.weightedMedian([
     { price: 60, volume: 100 },
     { price: 70, volume: 100 },
@@ -537,11 +531,11 @@ assert(market.pointwiseFairPrice([
     { buyPrice: 100, sellPrice: 140, buyVolume: 100, sellVolume: 100 },
 ]) === 100,
     "market fairPrice is the median of pointwise buy/sell midpoints");
-const shallow = market.historyMetrics([{ avgPrice: 10, volume: 100 }]);
-const deep = market.historyMetrics([{ avgPrice: 10, volume: 1000 }]);
-assert(market.vwapDepths(deep.averageDailyVolume).low >
-    market.vwapDepths(shallow.averageDailyVolume).low,
-    "market VWAP depth scales with the resource's own daily volume");
+assert(!Object.prototype.hasOwnProperty.call(market, "historyMetrics") &&
+    !Object.prototype.hasOwnProperty.call(market, "vwap") &&
+    !Object.prototype.hasOwnProperty.call(market, "vwapDepths") &&
+    !Object.prototype.hasOwnProperty.call(market, "fairPrice"),
+    "market exports only the active temporal fair-price API");
 const orderGroups = market.groupOrders([
     { resourceType: "energy", type: ORDER_SELL, price: 20, amount: 100 },
     { resourceType: "pixel", type: ORDER_BUY, price: 500, amount: 2 },

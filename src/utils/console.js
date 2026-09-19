@@ -103,7 +103,7 @@ global.help = function () {
         {
             title: "Mercado",
             commands: [
-                ["marketPrice(resourceType?)", "mostra o preco justo observado: historico ponderado, melhor compra/venda e VWAP sell/buy em duas profundidades; sem argumento lista recursos com volume"],
+                ["marketPrice(resourceType?)", "mostra o preco justo temporal e melhor compra/venda atuais; sem argumento lista recursos com preco calculado"],
             ],
         },
         {

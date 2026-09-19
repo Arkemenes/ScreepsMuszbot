@@ -29,7 +29,7 @@ parciais ausentes.
 
 | Path | Responsibility |
 |------|----------------|
-| `src/utils/market.js` | Universo, agrupamento, histórico ponderado, VWAP, throttle, snapshot e comando `marketPrice`. |
+| `src/utils/market.js` | Universo, agrupamento, snapshots temporais, mediana ponderada, throttle e comando `marketPrice`. |
 | `specs/features/0096-market-fair-price-engine/plan.md` | Decisões técnicas da fase. |
 | `specs/features/0096-market-fair-price-engine/tasks.md` | Sequência verificável de implementação. |
 
@@ -55,8 +55,8 @@ parciais ausentes.
   windowCoverageTicks, confidence }`.
 - `Memory.stats.market.fairPrice`: mapa esparso por resource type com os
   campos numéricos do snapshot; recursos sem volume positivo são omitidos.
-- Config: `market.scanInterval` (100), `market.vwapDepthPercentLow` (0.01) e
-  `market.vwapDepthPercentHigh` (0.1).
+- Config: `market.currentInterval` (100), `market.snapshotInterval` (3600),
+  `market.snapshotWindowTicks` (604800) e `market.snapshotWeightCap` (0.01).
 
 ## How it satisfies the constitution
 
@@ -74,7 +74,7 @@ parciais ausentes.
 | Risk | Mitigation |
 |------|------------|
 | `getAllOrders()` pode custar mais CPU que o esperado | Uma chamada é throttled e o custo fica explícito para profiling posterior. |
-| Book manipulado ou sem liquidez | Histórico ponderado é exibido junto dos dois VWAPs; nenhuma decisão automática é tomada. |
+| Book manipulado ou sem liquidez | A janela temporal reduz o peso de um snapshot isolado; nenhuma decisão automática é tomada. |
 | API ausente em shard/teste | Guardas locais retornam snapshot vazio e o console não lança. |
 
 ## Rollback

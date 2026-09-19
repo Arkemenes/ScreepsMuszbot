@@ -13,8 +13,6 @@ const defaults = {
         snapshotInterval: 3600,
         snapshotWindowTicks: 604800,
         snapshotWeightCap: 0.01,
-        vwapDepthPercentLow: 0.01,
-        vwapDepthPercentHigh: 0.1,
     },
     defender: {
         maxCount: 3,

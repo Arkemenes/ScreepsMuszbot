@@ -39,24 +39,6 @@ function groupOrders(orders) {
     return grouped;
 }
 
-function historyMetrics(days) {
-    let volume = 0;
-    let weightedTotal = 0;
-    let validDays = 0;
-    for (const day of Array.isArray(days) ? days : []) {
-        const dayVolume = numberOrZero(day && day.volume);
-        const averagePrice = numberOrZero(day && day.avgPrice);
-        if (dayVolume <= 0 || averagePrice <= 0) continue;
-        volume += dayVolume;
-        weightedTotal += averagePrice * dayVolume;
-        validDays++;
-    }
-    return {
-        weightedHistory: volume > 0 ? weightedTotal / volume : null,
-        averageDailyVolume: validDays > 0 ? volume / validDays : 0,
-    };
-}
-
 function orderType(order, expected) {
     return order && (order.type === expected || order.orderType === expected);
 }
@@ -186,56 +168,6 @@ function applyCommodityPrices(resources) {
     }
 }
 
-function vwap(orders, expectedType, targetVolume, descending) {
-    if (targetVolume <= 0 || !Array.isArray(orders)) return null;
-    const expected = expectedType;
-    const eligible = orders
-        .filter((order) => orderType(order, expected))
-        .filter((order) => numberOrZero(order.price) > 0 && orderAmount(order) > 0)
-        .sort((left, right) => descending
-            ? right.price - left.price
-            : left.price - right.price);
-    let remaining = targetVolume;
-    let amount = 0;
-    let value = 0;
-    for (const order of eligible) {
-        const taken = Math.min(remaining, orderAmount(order));
-        amount += taken;
-        value += taken * order.price;
-        remaining -= taken;
-        if (remaining <= 0) break;
-    }
-    return amount > 0 ? value / amount : null;
-}
-
-function vwapDepths(averageDailyVolume) {
-    const lowPercent = config.get("market.vwapDepthPercentLow", 0.01);
-    const highPercent = config.get("market.vwapDepthPercentHigh", 0.1);
-    return {
-        low: averageDailyVolume * lowPercent,
-        high: averageDailyVolume * highPercent,
-    };
-}
-
-function bestPrice(orders, expectedType, descending) {
-    const prices = (Array.isArray(orders) ? orders : [])
-        .filter((order) => orderType(order, expectedType))
-        .map((order) => numberOrZero(order.price))
-        .filter((price) => price > 0);
-    if (!prices.length) return null;
-    return descending ? Math.max.apply(null, prices) : Math.min.apply(null, prices);
-}
-
-function fairPrice(vwasp, buyVwap, bestSell, bestBuy) {
-    if (numberOrZero(vwasp) > 0) return vwasp;
-    if (numberOrZero(buyVwap) > 0) return buyVwap;
-    if (numberOrZero(bestSell) > 0 && numberOrZero(bestBuy) > 0) {
-        return (bestSell + bestBuy) / 2;
-    }
-    return numberOrZero(bestSell) > 0 ? bestSell :
-        numberOrZero(bestBuy) > 0 ? bestBuy : null;
-}
-
 function buildResource(resourceType, days, orders) {
     const sellType = typeof ORDER_SELL !== "undefined" ? ORDER_SELL : "sell";
     const buyType = typeof ORDER_BUY !== "undefined" ? ORDER_BUY : "buy";
@@ -346,10 +278,6 @@ module.exports = {
     snapshot,
     reset,
     groupOrders,
-    historyMetrics,
-    vwap,
-    vwapDepths,
-    fairPrice,
     weightedMedian,
     pointwiseFairPrice,
     marketPrice,
