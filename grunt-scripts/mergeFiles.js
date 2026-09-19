@@ -1,6 +1,7 @@
 let modConcat = require("module-concat");
 let { gitDescribeSync } = require("git-describe");
 let path = require("path");
+let fs = require("fs");
 
 module.exports = function (grunt) {
     grunt.registerTask(
@@ -43,12 +44,19 @@ module.exports = function (grunt) {
                             "ScreepsMuszbot"
                         );
                         grunt.file.mkdir(localScriptsDir);
-                        grunt.file.copy(
-                            path.join(outputDir, outputFile),
-                            path.join(localScriptsDir, outputFile)
-                        );
-                        grunt.log.writeln(
-                            "\nCopied " + outputFile + " to " + localScriptsDir
+                        let copied = false;
+                        try {
+                            fs.copyFileSync(
+                                path.join(outputDir, outputFile),
+                                path.join(localScriptsDir, outputFile)
+                            );
+                            copied = true;
+                        } catch (copyError) {
+                            grunt.log.warn("Could not copy to the local Screeps client directory: " + copyError.message);
+                        }
+                        grunt.log.writeln(copied
+                            ? "\nCopied " + outputFile + " to " + localScriptsDir
+                            : "\nSkipped copy to " + localScriptsDir
                         );
                     } else {
                         grunt.log.writeln(

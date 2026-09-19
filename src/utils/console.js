@@ -104,6 +104,11 @@ global.help = function () {
             title: "Mercado",
             commands: [
                 ["marketPrice(resourceType?)", "mostra o preco justo temporal e melhor compra/venda atuais; sem argumento lista recursos com preco calculado"],
+                ["terminalTransfer(fromRoom, toRoom, resourceType, amount)", "cria uma transferência storage → terminal → destino; valida recurso, salas e energia de taxa antes de enfileirar"],
+                ["terminalBuy(roomName, resourceType, amount, maxUnitPrice)", "compra pelas SELL orders de menor custo líquido dentro do teto; lista o saldo restante quando possível"],
+                ["terminalSell(roomName, resourceType, amount, minUnitPrice)", "vende pelas BUY orders de maior retorno líquido acima do piso; lista o saldo restante quando possível"],
+                ["terminalOperations()", "lista as operações de terminal persistentes e seus estados"],
+                ["cancelTerminalOperation(id)", "cancela a operação; uma ordem pública gerenciada pelo bot também é cancelada"],
             ],
         },
         {

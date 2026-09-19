@@ -5,6 +5,8 @@ const config = require("./config");
 const energyLedger = require("./energyLedger");
 const resourceTiers = require("./resourceTiers");
 const market = require("./market");
+const terminalOps = require("./terminalOps");
+const energyBalancing = require("../rooms/energyBalancing");
 
 // heap-resident, survives ticks but not a global reset - a reset just means
 // the very next call recomputes fresh instead of reusing a stale value, so
@@ -173,6 +175,8 @@ function exportStats() {
             roomStats.criticalConsumers = economy.criticalConsumers;
             // ROADMAP 0081: where the room's energy went this tick
             roomStats.energySpent = energyLedger.snapshot(roomName);
+            roomStats.terminalOperations = terminalOps.stats(roomName);
+            roomStats.energyBalancing = energyBalancing.stats(roomName);
         }
     }
 

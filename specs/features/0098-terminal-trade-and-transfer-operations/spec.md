@@ -1,6 +1,6 @@
 # 0098 — Operações de compra, venda e transferência pelo terminal
 
-- **Status:** spec
+- **Status:** ready
 - **Owner:** usuário + assistente
 - **Created:** 2026-09-18
 
@@ -154,15 +154,30 @@ pronto e deixa a operação observável e cancelável.
 - **Spending cascade:** retirada de recurso recebido não pode consumir reserva
   local nem roubar uma carga já comprometida com consumidor crítico.
 
-## Open questions
+## Review decisions (2026-09-19)
 
-- Confirmar os nomes finais dos comandos de console e se `terminalSell` deve
-  aceitar `orderId` obrigatório ou escolher a melhor ordem usando 0096.
-- Decidir se `Terminal.send()` de outro jogador deve ser aceito
-  automaticamente ou apenas quando o recurso recebido não estiver marcado como
-  reserva manual.
-- Definir como distinguir uma entrada recebida de uma carga previamente
-  depositada no terminal quando o processo inicia com saldo existente.
-- Definir timeout e política de recuperação quando o hauler morrer com carga.
-- Definir se a venda padrão sempre prepara a carga a partir do storage ou se o
-  jogador poderá escolher explicitamente `sellFromTerminal`.
+- APIs públicas: `terminalTransfer(from, to, resource, amount)`,
+  `terminalBuy(room, resource, amount, maxUnitPrice)` e
+  `terminalSell(room, resource, amount, minUnitPrice)`. Compra/venda usam as
+  melhores ordens existentes que respeitam o limite econômico e listam apenas
+  o saldo restante.
+- O limite sempre é líquido: energia de transação vale `fairPrice(energy)`;
+  preço de ordem própria incorpora a taxa de criação de 5%. Compra usa
+  `buyPrice`, venda usa `sellPrice`, com um passo competitivo configurável de
+  `0.001 Cr`. Sem cotação necessária, espera.
+- O terminal é trânsito, nunca storage: recebimentos de qualquer origem vão ao
+  storage; uma baseline zero trata saldo não reservado como recebido. Carga de
+  saída é rastreada pela operação e nunca é recolhida por engano.
+- SELL listada é indefinida e mantém só `min(10000, 10% da capacidade)` no
+  terminal, reposto do storage. Ordens gerenciadas pelo bot podem ser
+  reutilizadas/estendidas por nova intenção; ordens manuais nunca são tocadas.
+- O comando valida tudo atomicamente e retorna disponível/reservado/necessário
+  quando não puder iniciar. Compra realiza deals já elegíveis e só deixa de
+  listar o restante se faltar crédito para a taxa; não executa preço fora do
+  limite.
+- Cancelar uma SELL cancela a ordem e devolve saldo não vendido. Creep morto
+  entra em recuperação com timeout configurável. Prioridade é recuperação,
+  manual, recebimento e automático; capacidade pode forçar o escoamento mínimo
+  de um recebimento para liberar o trabalho prioritário.
+- `Memory.stats` expõe agregados deslizantes de 60 ticks por sala/tipo:
+  quantidade, créditos, energia de taxa, pendências, espera e último erro.

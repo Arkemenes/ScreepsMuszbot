@@ -10,6 +10,7 @@ const config = require("../utils/config");
 const resourceTiers = require("../utils/resourceTiers");
 const nonEnergyLogistics = require("../utils/nonEnergyLogistics");
 const names = require("../utils/names");
+const terminalOps = require("../utils/terminalOps");
 
 // Per-tick, per-room cache for the filtered structure lists below - every
 // hauler in a room was independently re-running the same filter over
@@ -904,6 +905,7 @@ var hauler = {
         if (creep.memory.role === "harvester") creep.memory.role = "hauler";
 
         if (takeCover(creep)) return;
+        if (terminalOps.runHauler(creep)) return;
 
         // ROADMAP 0051: finish an in-progress non-energy job before
         // touching energy logic again - see the block's own comment above.

@@ -467,6 +467,43 @@ assert(Game.creeps.Harv1.memory.role === "hauler",
     "legacy harvester creep was folded into the hauler role");
 assert(global.Memory.rooms.W1N1.numberOfHaulers >= 1, "census counted the migrated hauler");
 
+// ROADMAP 0098: public API rejects malformed requests without persisting an
+// operation or scheduling a terminal intent.
+{
+    const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
+    const before = Memory.terminalOps && Object.keys(Memory.terminalOps.operations || {}).length;
+    const invalid = terminalOps.transfer("missing", "also-missing", RESOURCE_ENERGY, 0);
+    const after = Memory.terminalOps && Object.keys(Memory.terminalOps.operations || {}).length;
+    assert(!invalid.ok && before === after,
+        "0098 terminalTransfer rejects invalid rooms/amount without persisting an operation");
+
+    const savedRooms = Game.rooms;
+    const terminalStore = (energy, capacity) => ({
+        [RESOURCE_ENERGY]: energy,
+        getFreeCapacity: () => capacity - energy,
+        getUsedCapacity: () => energy,
+        getCapacity: () => capacity,
+    });
+    const makeTerminalRoom = (name, energy) => {
+        const testRoom = new Room(name);
+        testRoom.controller = { my: true };
+        testRoom.storage = { id: name + "-storage", store: terminalStore(energy, 300000) };
+        testRoom.terminal = { id: name + "-terminal", cooldown: 0, store: terminalStore(0, 300000), send: () => {
+            throw new Error("transfer creation must not call send");
+        } };
+        return testRoom;
+    };
+    const from = makeTerminalRoom("W8N8", 10000);
+    const to = makeTerminalRoom("W8N9", 0);
+    Game.rooms = Object.assign({}, savedRooms, { W8N8: from, W8N9: to });
+    const created = terminalOps.transfer("W8N8", "W8N9", RESOURCE_ENERGY, 1000);
+    assert(created.ok && Memory.terminalOps.operations[created.id].state === "queued" &&
+        Memory.terminalOps.operations[created.id].sourceRoom === "W8N8" &&
+        Memory.terminalOps.operations[created.id].targetRoom === "W8N9",
+    "0098 terminalTransfer persists source, destination, resource, amount and queued state without send()");
+    Game.rooms = savedRooms;
+}
+
 {
     const traffic = require(path.join(PROJECT, "src/utils/traffic"));
     const traceCreep = Game.creeps.Harv1;
@@ -9709,3 +9746,163 @@ origLog("\nplan: buildings=" + B.length +
     "  mincutBoxes=" + bnd.length);
 origLog("\nMemory:", memStr.length, "bytes  |  rooms.W1N1 keys:",
     Object.keys(global.Memory.rooms.W1N1).join(","));
+// ROADMAP 0098 dedicated assertions are kept at the end so they run after
+// the broad regression phases without changing their fixtures.
+{
+    const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
+    const makeStore = (energy, capacity) => ({ [RESOURCE_ENERGY]: energy, getFreeCapacity: () => capacity - energy, getUsedCapacity: () => energy, getCapacity: () => capacity });
+    const makeRoom = (name, energy) => ({ name, controller: { my: true }, storage: { id: name + "-storage", store: makeStore(energy, 300000) }, terminal: { id: name + "-terminal", cooldown: 0, store: makeStore(0, 300000), send: () => OK } });
+    const oldRooms = Game.rooms;
+    const a = makeRoom("W7N7", 20000), b = makeRoom("W7N8", 0);
+    Game.rooms = Object.assign({}, oldRooms, { W7N7: a, W7N8: b });
+    const first = terminalOps.transfer("W7N7", "W7N8", RESOURCE_ENERGY, 1000);
+    const duplicate = terminalOps.transfer("W7N7", "W7N8", RESOURCE_ENERGY, 1000);
+    assert(first.ok && !duplicate.ok, "0098 lock rejects a duplicate transfer for the same terminal/resource");
+    const op = Memory.terminalOps.operations[first.id];
+    assert(!Object.values(op).some((value) => value && typeof value === "object" && value.id && value.store), "0098 operation persists metadata, never a game object");
+    const cancelled = global.cancelTerminalOperation(first.id);
+    assert(cancelled.ok && op.state === "cancelled", "0098 cancellation releases an unloaded operation");
+    Game.rooms = oldRooms;
+}
+// ROADMAP 0097: balance policy, idempotency and observability.
+{
+    const energyBalancing = require(path.join(PROJECT, "src/rooms/energyBalancing"));
+    const makeStore = (energy, capacity) => ({ [RESOURCE_ENERGY]: energy, getFreeCapacity: () => capacity - energy, getUsedCapacity: () => energy, getCapacity: () => capacity });
+    const makeRoom = (name, energy) => ({ name, controller: { my: true }, find: () => [], storage: { id: name + "-storage", store: makeStore(energy, 30000) }, terminal: { id: name + "-terminal", cooldown: 0, store: makeStore(0, 30000), send: () => OK } });
+    const oldRooms = Game.rooms, oldMyRooms = Game.myRooms, oldBalancing = Memory.energyBalancing;
+    const source = makeRoom("W7N1", 25000), target = makeRoom("W7N2", 0);
+    Game.rooms = Object.assign({}, oldRooms, { W7N1: source, W7N2: target });
+    Game.myRooms = [source, target];
+    Memory.energyBalancing = { lastRun: 0, pending: {}, observations: {} };
+    const before = Object.keys(Memory.terminalOps.operations).length;
+    energyBalancing.run();
+    const pending = Object.keys(Memory.terminalOps.operations).filter((id) => Memory.terminalOps.operations[id].automatic);
+    energyBalancing.run();
+    assert(pending.length === 1 && Object.keys(Memory.terminalOps.operations).filter((id) => Memory.terminalOps.operations[id].automatic).length === 1, "0097 creates one automatic operation and remains idempotent");
+    assert(Memory.energyBalancing.pending.W7N2 && Memory.energyBalancing.observations.W7N2.requestedAmount > 0, "0097 persists pending operation and requested amount for observability");
+    assert(Object.keys(Memory.terminalOps.operations).length === before + 1, "0097 delegates exactly one transfer to terminalOps");
+    Game.rooms = oldRooms; Game.myRooms = oldMyRooms; Memory.energyBalancing = oldBalancing;
+}
+// ROADMAP 0098 regression coverage for the execution and recovery states.
+{
+    const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
+    const makeStore = (energy, capacity) => ({ [RESOURCE_ENERGY]: energy, getFreeCapacity: () => capacity - energy, getUsedCapacity: () => energy, getCapacity: () => capacity });
+    const makeRoom = (name, storageEnergy, terminalEnergy) => ({ name, controller: { my: true }, find: () => [], storage: { id: name + "-storage", store: makeStore(storageEnergy, 30000) }, terminal: { id: name + "-terminal", cooldown: 0, store: makeStore(terminalEnergy, 30000), send: () => { makeRoom.sendCalls++; return OK; } } });
+    makeRoom.sendCalls = 0;
+    const oldRooms = Game.rooms, oldMarket = Game.market, oldOps = Memory.terminalOps;
+    const source = makeRoom("W7N3", 20000, 500), target = makeRoom("W7N4", 0, 0);
+    Game.rooms = Object.assign({}, oldRooms, { W7N3: source, W7N4: target });
+    Memory.terminalOps = { nextId: 1, operations: {}, seenIncoming: {}, events: [], terminalBalance: {} };
+    const partial = terminalOps.transfer("W7N3", "W7N4", RESOURCE_ENERGY, 1000);
+    const partialOp = Memory.terminalOps.operations[partial.id];
+    partialOp.loadedAmount = 500; partialOp.state = "atTerminal";
+    terminalOps.tick();
+    assert(makeRoom.sendCalls === 0 && ["queued", "waiting"].indexOf(partialOp.state) >= 0, "0098 partial transfer schedules the remaining load instead of sending early");
+    const cooldown = terminalOps.transfer("W7N3", "W7N4", RESOURCE_ENERGY, 1000);
+    assert(!cooldown.ok, "0098 lock prevents a second transfer while the partial one is active");
+    partialOp.state = "atTerminal"; partialOp.loadedAmount = partialOp.amount; source.terminal.cooldown = 1;
+    terminalOps.tick();
+    assert(partialOp.state === "waiting" && /cooldown/.test(partialOp.error), "0098 cooldown keeps a loaded transfer waiting without duplicating send");
+    Memory.terminalOps = { nextId: 1, operations: {}, seenIncoming: {}, events: [], terminalBalance: {} };
+    source.terminal.cooldown = 0; source.terminal.store[RESOURCE_ENERGY] = 200;
+    terminalOps.tick();
+    const receipt = Object.values(Memory.terminalOps.operations).find((op) => op.kind === "receipt");
+    assert(receipt && ["waiting", "unloading"].indexOf(receipt.state) >= 0, "0098 baseline-zero receipt becomes a retryable operation when no hauler is available");
+    Memory.terminalOps.events = [{ tick: Game.time - 10, room: "W7N3", kind: "transfer", amount: 7, credits: 0, transactionEnergy: 2 }];
+    assert(terminalOps.stats("W7N3").amount === 7, "0098 stats expose the recent operation window");
+    Game.rooms = oldRooms; Game.market = oldMarket; Memory.terminalOps = oldOps;
+}
+// ROADMAP 0098 market execution never consumes more SELL cargo than the
+// operation loaded and moves BUY operations to receipt handling.
+{
+    const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
+    const makeStore = (energy, capacity) => ({ [RESOURCE_ENERGY]: energy, getFreeCapacity: () => capacity - energy, getUsedCapacity: () => energy, getCapacity: () => capacity });
+    const marketRoom = { name: "W7N5", controller: { my: true }, find: () => [], storage: { id: "W7N5-storage", store: makeStore(20000, 30000) }, terminal: { id: "W7N5-terminal", cooldown: 0, store: makeStore(500, 30000) } };
+    const oldRooms = Game.rooms, oldMarket = Game.market, oldOps = Memory.terminalOps;
+    Game.rooms = Object.assign({}, oldRooms, { W7N5: marketRoom });
+    let dealAmount = 0;
+    Game.market = { credits: 100000, incomingTransactions: [], orders: {}, calcTransactionCost: () => 0, getAllOrders: () => [{ id: "order-1", roomName: "W7N6", price: 1, remainingAmount: 100 }], deal: (id, value) => { dealAmount = value; return OK; } };
+    Memory.terminalOps = { nextId: 1, operations: {}, seenIncoming: {}, events: [], terminalBalance: {} };
+    Memory.terminalOps.operations.sellTest = { id: "sellTest", kind: "sell", sourceRoom: "W7N5", resourceType: RESOURCE_ENERGY, amount: 100, remaining: 100, loadedAmount: 20, limit: 1, energyFairPrice: 0, state: "atTerminal", sentAmount: 0, createdTick: Game.time, updatedTick: Game.time };
+    terminalOps.tick();
+    assert(dealAmount === 20, "0098 SELL deals only the operation's tracked terminal cargo");
+    Memory.terminalOps.operations.buyTest = { id: "buyTest", kind: "buy", sourceRoom: "W7N5", resourceType: RESOURCE_ENERGY, amount: 100, remaining: 100, loadedAmount: 0, limit: 2, energyFairPrice: 0, state: "queued", sentAmount: 0, createdTick: Game.time, updatedTick: Game.time };
+    terminalOps.tick();
+    assert(Memory.terminalOps.operations.buyTest.state === "awaitingReceipt" && dealAmount === 100, "0098 BUY deal transitions to receipt handling");
+    Game.rooms = oldRooms; Game.market = oldMarket; Memory.terminalOps = oldOps;
+}
+// 0098 send boundary: a loaded transfer issues one native intent.
+{
+    const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
+    const makeStore = (energy, capacity) => ({ [RESOURCE_ENERGY]: energy, getFreeCapacity: () => capacity - energy, getUsedCapacity: () => energy, getCapacity: () => capacity });
+    let sends = 0;
+    const source = { name: "W7N9", controller: { my: true }, find: () => [], storage: { id: "W7N9-storage", store: makeStore(10000, 30000) }, terminal: { id: "W7N9-terminal", cooldown: 0, store: makeStore(1000, 30000), send: () => { sends++; return OK; } } };
+    const target = { name: "W7N10", controller: { my: true }, find: () => [], storage: { id: "W7N10-storage", store: makeStore(0, 30000) }, terminal: { id: "W7N10-terminal", cooldown: 0, store: makeStore(0, 30000), send: () => OK } };
+    const oldRooms = Game.rooms, oldOps = Memory.terminalOps;
+    Game.rooms = Object.assign({}, oldRooms, { W7N9: source, W7N10: target });
+    Memory.terminalOps = { nextId: 1, operations: {}, seenIncoming: {}, events: [], terminalBalance: {} };
+    const created = terminalOps.transfer("W7N9", "W7N10", RESOURCE_ENERGY, 1000);
+    const op = Memory.terminalOps.operations[created.id]; op.loadedAmount = op.amount; op.state = "atTerminal";
+    terminalOps.tick();
+    assert(sends === 1 && op.state === "awaitingReceipt", "0098 loaded transfer calls Terminal.send exactly once");
+    Game.rooms = oldRooms; Memory.terminalOps = oldOps;
+}
+// ROADMAP 0098/0097 regressions for receipt recovery, aggregation and zero need.
+{
+    const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
+    const energyBalancing = require(path.join(PROJECT, "src/rooms/energyBalancing"));
+    const makeStore = (energy, capacity) => ({ [RESOURCE_ENERGY]: energy, getFreeCapacity: () => capacity - energy, getUsedCapacity: () => energy, getCapacity: () => capacity });
+    const target = { name: "W7N11", controller: { my: true }, find: () => [], storage: { id: "W7N11-storage", store: makeStore(0, 30000) }, terminal: { id: "W7N11-terminal", cooldown: 0, store: makeStore(100, 30000), send: () => OK } };
+    const oldRooms = Game.rooms, oldMarket = Game.market, oldCreeps = Game.creeps, oldGetObject = Game.getObjectById, oldMyRooms = Game.myRooms, oldOps = Memory.terminalOps, oldBalancing = Memory.energyBalancing;
+    Game.rooms = Object.assign({}, oldRooms, { W7N11: target });
+    Memory.terminalOps = { nextId: 1, operations: {}, seenIncoming: {}, events: [], terminalBalance: {} };
+    const receipt = { id: "receipt-test", kind: "receipt", sourceRoom: null, targetRoom: "W7N11", resourceType: RESOURCE_ENERGY, amount: 100, receivedAmount: 0, state: "unloading", haulerName: "DeadReceiptHauler", updatedTick: Game.time };
+    Memory.terminalOps.operations[receipt.id] = receipt;
+    Game.creeps = {};
+    terminalOps.tick();
+    assert(receipt.state === "waiting" && receipt.receivedAmount === 0, "0098 dead receipt hauler returns to a retryable unload state");
+    const creep = { name: "PartialReceiptHauler", memory: { terminalJob: { operationId: receipt.id, direction: "unload", fromId: target.terminal.id, toId: target.storage.id, resourceType: RESOURCE_ENERGY, amount: 100 } }, store: makeStore(50, 100), transfer: () => OK, withdraw: () => OK };
+    Game.creeps = { PartialReceiptHauler: creep };
+    Game.getObjectById = (id) => id === target.terminal.id ? target.terminal : id === target.storage.id ? target.storage : null;
+    receipt.haulerName = creep.name; receipt.state = "unloading";
+    terminalOps.runHauler(creep);
+    assert(receipt.state === "waiting" && receipt.receivedAmount === 50, "0098 partial receipt unload remains retryable with the remaining amount");
+    Memory.terminalOps = { nextId: 1, operations: {}, seenIncoming: {}, events: [], terminalBalance: {} };
+    Game.creeps = {};
+    Game.market = { incomingTransactions: [{ transactionId: "tx-a", to: "W7N11", resourceType: RESOURCE_ENERGY, amount: 100 }, { transactionId: "tx-b", to: "W7N11", resourceType: RESOURCE_ENERGY, amount: 50 }] };
+    terminalOps.tick();
+    const aggregate = Object.values(Memory.terminalOps.operations).find((op) => op.kind === "receipt");
+    assert(aggregate && aggregate.amount === 150 && Memory.terminalOps.seenIncoming["tx-b"], "0098 aggregates simultaneous receipts and preserves both transaction ids");
+    const source = { name: "W7N12", controller: { my: true }, find: () => [], storage: { id: "W7N12-storage", store: makeStore(27000, 30000) }, terminal: { id: "W7N12-terminal", cooldown: 0, store: makeStore(0, 30000), send: () => OK } };
+    const stable = { name: "W7N13", controller: { my: true }, find: () => [], storage: { id: "W7N13-storage", store: makeStore(21000, 30000) }, terminal: { id: "W7N13-terminal", cooldown: 0, store: makeStore(0, 30000), send: () => OK } };
+    Game.rooms = Object.assign({}, oldRooms, { W7N12: source, W7N13: stable }); Game.myRooms = [source, stable];
+    Memory.terminalOps = { nextId: 1, operations: {}, seenIncoming: {}, events: [], terminalBalance: {} }; Memory.energyBalancing = { lastRun: 0, pending: {}, observations: {} };
+    energyBalancing.run();
+    assert(Object.keys(Memory.terminalOps.operations).length === 0, "0097 does not send the maximum when normal target need is zero");
+    Game.rooms = oldRooms; Game.market = oldMarket; Game.creeps = oldCreeps; Game.getObjectById = oldGetObject; Game.myRooms = oldMyRooms; Memory.terminalOps = oldOps; Memory.energyBalancing = oldBalancing;
+}
+// 0098 receipt aggregation keeps the BUY parent and old terminal records do
+// not grow Memory forever.
+{
+    const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
+    const makeStore = (energy, capacity) => ({ [RESOURCE_ENERGY]: energy, getFreeCapacity: () => capacity - energy, getUsedCapacity: () => energy, getCapacity: () => capacity });
+    const room = { name: "W7N14", controller: { my: true }, find: () => [], storage: { id: "W7N14-storage", store: makeStore(0, 30000) }, terminal: { id: "W7N14-terminal", cooldown: 0, store: makeStore(0, 30000), send: () => OK } };
+    const oldRooms = Game.rooms, oldMarket = Game.market, oldOps = Memory.terminalOps;
+    Game.rooms = Object.assign({}, oldRooms, { W7N14: room });
+    Memory.terminalOps = { nextId: 1, operations: { buyParent: { id: "buyParent", kind: "buy", sourceRoom: "W7N14", targetRoom: null, resourceType: RESOURCE_ENERGY, amount: 150, remaining: 0, state: "awaitingReceipt", createdTick: Game.time, updatedTick: Game.time }, old: { id: "old", kind: "receipt", targetRoom: "W7N14", resourceType: RESOURCE_ENERGY, amount: 1, state: "completed", createdTick: Game.time - 20000, updatedTick: Game.time - 20000 } }, seenIncoming: {}, events: [], terminalBalance: {} };
+    Game.market = { incomingTransactions: [{ transactionId: "buy-tx-a", to: "W7N14", resourceType: RESOURCE_ENERGY, amount: 100 }, { transactionId: "buy-tx-b", to: "W7N14", resourceType: RESOURCE_ENERGY, amount: 50 }] };
+    terminalOps.tick();
+    const receipt = Object.values(Memory.terminalOps.operations).find((op) => op.kind === "receipt");
+    assert(receipt && receipt.parentId === "buyParent" && receipt.amount === 150, "0098 aggregated receipts retain the pending BUY parent");
+    assert(!Memory.terminalOps.operations.old, "0098 garbage-collects finalized operations after retention");
+    Game.rooms = oldRooms; Game.market = oldMarket; Memory.terminalOps = oldOps;
+}
+// 0098 recovery timeout is bounded by terminalOps.recoveryTicks.
+{
+    const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
+    const oldOps = Memory.terminalOps;
+    Memory.terminalOps = { nextId: 1, operations: { timeoutReceipt: { id: "timeoutReceipt", kind: "receipt", sourceRoom: null, targetRoom: "W7N11", resourceType: RESOURCE_ENERGY, amount: 10, receivedAmount: 0, state: "waiting", recoveryStartedTick: Game.time - 10001, updatedTick: Game.time } }, seenIncoming: {}, events: [], terminalBalance: {} };
+    terminalOps.tick();
+    assert(Memory.terminalOps.operations.timeoutReceipt.state === "failed", "0098 recovery timeout fails a stuck receipt deterministically");
+    Memory.terminalOps = oldOps;
+}

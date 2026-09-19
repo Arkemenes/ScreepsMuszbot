@@ -148,6 +148,8 @@ module.exports.loop = function () {
             _.forEach(Game.myRooms, (r) =>
                 guard("spawn:" + r.name, () => roomLogic.spawning(r))
             );
+            guard("terminalOps", () => utils.terminalOps.tick());
+            guard("energyBalancing", () => utils.energyBalancing.run());
             // automatic safe mode when a spawn is in real danger (ROADMAP
             // 0032 D6) - conservative gate, see rooms/defense.js
             _.forEach(Game.myRooms, (r) =>

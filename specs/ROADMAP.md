@@ -106,8 +106,8 @@ detalhe.
 | 0094 | [Energy structures mais próximas do anchor de spawn](features/0094-spawn-near-storage/spec.md) | done | spawnCreep recebe spawns/extensions ordenados pelo storage, ou pelo spawn executor sem storage |
 | 0095 | [Coordenação de jobs não energéticos do hauler](features/0095-hauler-non-energy-coordination/spec.md) | done | mantém uma role; demanda sem energia acionável libera job preemptível; um hauler por sala assume output pressionado; piso temporário de 2 usa histerese 75%/50%; carga já retirada é preservada |
 | 0096 | [Motor de preço justo de mercado (fase 0: só cálculo)](features/0096-market-fair-price-engine/spec.md) | done | `utils/market.js`, current book a cada 100 ticks + snapshots horários; mediana ponderada, fair midpoint e custo recursivo de commodities; exportação esparsa para Grafana |
-| 0097 | [Balanceamento automático de energia entre salas](features/0097-inter-room-energy-balancing/spec.md) | spec | compara `critical`/`stable`/`abundant`, preserva reservas locais e cria transferências pelo módulo 0098; gatilho imediato para sala crítica ou diferença de 20 pontos percentuais; ciclo normal de 1000 ticks |
-| 0098 | [Operações de compra, venda e transferência pelo terminal](features/0098-terminal-trade-and-transfer-operations/spec.md) | spec | API única para comandos manuais e 0097; aloca hauler para storage → terminal → ação e terminal → storage para compras e recursos recebidos, inclusive de outro jogador |
+| 0097 | [Balanceamento automático de energia entre salas](features/0097-inter-room-energy-balancing/spec.md) | done | snapshots storage+terminal, reservas/taxa, intervalo, gatilho crítico, escolha determinística, idempotência, cancelamento seguro, observabilidade por sala e integração exclusiva com a API 0098 concluídos; smoke e checks finais verdes. |
+| 0098 | [Operações de compra, venda e transferência pelo terminal](features/0098-terminal-trade-and-transfer-operations/spec.md) | done | API/console, locks por terminal/recurso, máquina de estado, hauler, transfer, BUY/SELL, buffer SELL, recebimentos deduplicados, baseline zero, recuperação de carga, repricing competitivo e métricas de janela concluídos; smoke, `node --check` e `npx grunt` verdes. A cópia opcional para o cliente Screeps pode ser ignorada sob `EPERM`. |
 | 0099 | [Limpeza do cálculo temporal de fair price](features/0099-market-temporal-cleanup/spec.md) | done | remove APIs/config/assertions VWAP e histórico sem uso; preserva snapshots temporais e commodities; `npx grunt` validado no ambiente do usuário |
 | 0100 | [Preço direto para ciclos de commodities](features/0100-market-commodity-cycle-prices/spec.md) | in-progress | preserva preços temporais de energy/minerais em receitas reversíveis e mantém custo derivado para commodities acíclicas |
 
@@ -129,13 +129,12 @@ terminal: 0098 fornece a operação física que 0097 consome.
     trecho complexo.
 3. **0011 — Build & tooling (`spec`)**
   - revisar a spec e criar `plan.md`/`tasks.md` antes de implementar.
-4. **0098 — Operações de terminal (`spec`)**
-  - revisar a API de compra, venda, transferência e retirada de recebimentos;
-  - criar `plan.md`/`tasks.md`.
-5. **0097 — Balanceamento entre salas (`spec`)**
-  - revisar os gatilhos e volumes;
-  - criar `plan.md`/`tasks.md` depois de 0098, que é sua dependência de
-    execução.
+4. **0098 — Operações de terminal (`planned`)**
+  - implementar API, estados, logística de hauler e execução de mercado;
+  - cobrir recebimentos e observabilidade no smoke.
+5. **0097 — Balanceamento entre salas (`done`)**
+  - concluído após a API 0098;
+  - smoke cobre reservas, taxa, escolha, idempotência e observabilidade.
 
 Features `0001`–`0096`, exceto 0077 e 0079, estão concluídas. Não entram novamente na
 fila por terem notas históricas de follow-up já resolvidas.
@@ -274,3 +273,4 @@ Destilado da análise completa em
 `~/.claude/plans/fa-a-uma-an-lise-completa-radiant-engelbart.md`. As tags de
 severidade originais (C1–C4, A1–A7, M1–M10) são referenciadas nas specs
 individuais.
+> 0097 concluído em 2026-09-19: balanceamento com idempotência, cancelamento pré-retirada, observabilidade por sala e smoke dedicado implementados; usa exclusivamente a API 0098.

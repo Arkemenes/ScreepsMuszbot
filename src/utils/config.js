@@ -148,6 +148,23 @@ const defaults = {
         // "what's withdrawable in theory" bookkeeping (ROADMAP 0043), not a
         // replacement for it.
         terminalReserveRatio: 0.1,
+        // ROADMAP 0097: normal rebalancing and its hard per-transfer cap.
+        balanceEnabled: true,
+        balanceInterval: 1000,
+        balanceGapRatio: 0.2,
+        balanceMaxAmount: 50000,
+    },
+    terminalOps: {
+        // ROADMAP 0098: the terminal is transit, so a public SELL order only
+        // keeps a small, replenishable committed buffer there.
+        enabled: true,
+        recoveryTicks: 10000,
+        marketPriceStep: 0.001,
+        repriceInterval: 1000,
+        saleBufferAmount: 10000,
+        saleBufferCapacityRatio: 0.1,
+        statsWindowTicks: 60,
+        operationRetentionTicks: 10000,
     },
     hauler: {
         // a source container needs more than this much energy before a

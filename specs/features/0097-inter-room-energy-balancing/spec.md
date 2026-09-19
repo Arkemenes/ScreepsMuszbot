@@ -1,6 +1,6 @@
 # 0097 — Balanceamento automático de energia entre salas
 
-- **Status:** spec
+- **Status:** ready
 - **Owner:** usuário + assistente
 - **Created:** 2026-09-18
 
@@ -120,12 +120,14 @@ remetente estável em crítica.
 - **Spending cascade:** a origem só usa energia excedente após os consumidores
   críticos e as reservas locais; uma sala crítica nunca é usada como origem.
 
-## Open questions
+## Review decisions (2026-09-19)
 
-- Definir se `balanceGapRatio` será comparado contra `storage` somente ou contra
-  `storage + terminal` na versão final; a spec usa ambos para elegibilidade e
-  mantém `storage` como métrica principal de capacidade.
-- Definir se uma sala crítica pode receber múltiplas transferências parciais no
-  mesmo ciclo quando uma única origem não cobre sua necessidade.
-- Definir o formato exato de observabilidade em `Memory.stats` antes da
-  implementação.
+- Ratio e elegibilidade usam energia/capacidade agregada de `storage +
+  terminal`, preservando as reservas de cada estrutura.
+- Uma sala recebe no máximo uma operação pendente por vez. Após completar, uma
+  sala crítica é reavaliada de imediato.
+- Para energia, o volume enviado é resolvido contra `amount +
+  calcTransactionCost(amount, from, to)`: a taxa pertence à origem e nunca
+  pode violar sua reserva.
+- A observabilidade usa a janela consolidada de 60 ticks de 0098, incluindo
+  operação pendente, origem, destino, quantidade, enviado e último erro.

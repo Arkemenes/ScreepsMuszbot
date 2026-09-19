@@ -13,6 +13,8 @@ let utils = {
     resourceTiers: require("./resourceTiers"),
     priority: require("./priority"),
     market: require("./market"),
+    terminalOps: require("./terminalOps"),
+    energyBalancing: require("../rooms/energyBalancing"),
 };
 
 module.exports = utils;

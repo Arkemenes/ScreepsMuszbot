@@ -35,6 +35,23 @@ profiler só carrega quando `Memory.settings.profiler` está setado.
 
 ## Modules
 
+### Terminal operations and energy balancing (ROADMAP 0098/0097 done)
+
+`utils/terminalOps.js` is already the single entry point for terminal work:
+it owns persisted operation metadata, console commands, hauler `terminalJob`s,
+incoming-terminal detection and the current market/transfer state machine.
+`rooms/energyBalancing.js` is policy-only and calls that API rather than
+`Terminal.send()` directly. `terminalOps` owns locks, active recovery, partial
+receipts, BUY parent links, operation retention and market repricing. Recovery
+searches use `utils/roomCache.droppedResources()` and balancing state is exposed
+through `Memory.stats.rooms.<room>.energyBalancing`.
+
+`terminalOps` garbage-collects finalized operations after the configured
+retention window, retries partial receipts and aggregates concurrent incoming
+transactions. Recovery searches use `utils/roomCache.droppedResources()` so
+the one-`room.find`-per-tick rule remains intact. `energyBalancing` exposes its
+decision and operation state through `Memory.stats.rooms.<room>.energyBalancing`.
+
 ### `src/utils/`
 
 | Module | Responsibility |

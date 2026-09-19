@@ -40,6 +40,12 @@ function minerals(room) {
     return s.minerals;
 }
 
+function droppedResources(room) {
+    const s = slot(room);
+    if (!s.droppedResources) s.droppedResources = room.find(FIND_DROPPED_RESOURCES);
+    return s.droppedResources;
+}
+
 // Structures of a given type, derived from the cached full list.
 function structuresByType(room, structureType) {
     const s = slot(room);
@@ -59,4 +65,5 @@ module.exports = {
     constructionSites,
     structuresByType,
     minerals,
+    droppedResources,
 };
