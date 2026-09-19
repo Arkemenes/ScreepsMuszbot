@@ -60,6 +60,27 @@ function isStorageAbundant(room) {
     );
 }
 
+function storageRatio(room) {
+    if (!room || !room.storage) return null;
+    const capacity = room.storage.store.getCapacity(RESOURCE_ENERGY);
+    if (!capacity) return null;
+    return room.storage.store.energy / capacity;
+}
+
+// Defensive repair uses stricter, purpose-specific gates than the general
+// economy state. Keep these comparisons here so builder and tower cannot
+// drift apart, and do not change isStorageAbundant(): its 50% threshold is
+// also part of link/economy policy.
+function isStorageAbove(room, ratio) {
+    const current = storageRatio(room);
+    return current !== null && current > ratio;
+}
+
+function isStorageAtLeast(room, ratio) {
+    const current = storageRatio(room);
+    return current !== null && current >= ratio;
+}
+
 // The controller is genuinely at risk of downgrading - the one condition
 // that overrides every other reserve/stability gate in this module (losing
 // RCL always outranks a comfortable buffer). Shared by structures/link.js
@@ -167,6 +188,8 @@ module.exports = {
     reserveFloor,
     aboveReserve,
     isStorageAbundant,
+    isStorageAbove,
+    isStorageAtLeast,
     controllerCritical,
     getEconomySnapshot,
     getCriticalConsumers,

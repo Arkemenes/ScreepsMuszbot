@@ -142,6 +142,13 @@ const defaults = {
         // "storage is genuinely comfortable" bar, rather than inventing a
         // second, differently-tuned number that answers the same question.
         storageSatisfactoryRatio: 0.5,
+        // Defensive repair gates (ROADMAP 0101): walls/ramparts in the
+        // satisfactory tier need more than this storage fill, while their
+        // unbounded optimal-tier hardening needs at least the stronger bar.
+        // These are intentionally separate from storageSatisfactoryRatio,
+        // which also drives controller-link/economy classification.
+        rampartHealthyStorageRatio: 0.1,
+        rampartHardeningStorageRatio: 0.7,
         // roles/hauler.js's terminalWithdrawable(): never let the
         // ledger-credited withdrawable slice drain the terminal below this
         // fraction of its own capacity - a floor on TOP of the ledger's own

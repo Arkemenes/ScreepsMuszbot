@@ -228,8 +228,13 @@ var builder = {
         if (creep.store[RESOURCE_ENERGY] == 0) {
             // don't take a pile an economy creep (hauler / bootstrap) is going
             // for while the room still wants spawn / extensions filled
+            const piles = energyPiles(creep.room);
+            const linkSafe = reservations.economyStable(creep.room);
+            const eligiblePiles = linkSafe
+                ? piles
+                : _.filter(piles, (p) => p.structureType !== STRUCTURE_LINK);
             const pile = creep.pos.findClosestByPath(
-                reservations.usable(creep, energyPiles(creep.room))
+                reservations.usable(creep, eligiblePiles)
             );
             if (pile) {
                 reservations.claim(creep, pile.id);
@@ -247,9 +252,11 @@ var builder = {
             // because a hauler's claim keeps eating the link's spare energy
             // tick after tick) helps no one - a partial, opportunistic
             // withdraw beats idling forever.
-            const link = receivingLink(creep.room, creep.pos, {
-                awayFromController: true,
-            });
+            const link = reservations.economyStable(creep.room)
+                ? receivingLink(creep.room, creep.pos, {
+                    awayFromController: true,
+                })
+                : null;
             if (link) {
                 if (!creep.pos.inRangeTo(link, 1)) {
                     creep.moveTo(link, { range: 1 });
@@ -360,4 +367,3 @@ var builder = {
 };
 
 module.exports = builder;
-

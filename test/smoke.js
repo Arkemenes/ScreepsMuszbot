@@ -2329,9 +2329,8 @@ assert(
 );
 findMap[FIND_STRUCTURES] = findMap[FIND_STRUCTURES].filter((s) => s.id !== "coll1");
 
-// a receiving link that reservations denies this tick (a hauler's claim eats
-// all its spare energy) still gets drained once the builder is parked next
-// to it waiting - it shouldn't just sit there forever next to real energy
+// a receiving link is protected while spawn/extensions are critical, even
+// when reservations would otherwise deny the link to this builder.
 const dryLink = Object.assign(new StructureLink(), {
     id: "drylnk", structureType: STRUCTURE_LINK, my: true,
     pos: new RoomPosition(23, 24, "W1N1"), room,
@@ -2354,8 +2353,22 @@ bld3.withdraw = (t) => { bld3._withdrew = t && t.id; return OK; };
 builder.run(bld3);
 assert(
     (!bld3.memory.stack || !bld3.memory.stack.length) &&
-        bld3._withdrew === "drylnk",
-    "a builder parked next to a receiving link the reservation math denied still drains it instead of idling forever"
+        bld3._withdrew === null,
+    "a builder does not withdraw from a receiving link while spawn/extensions are critical"
+);
+room.energyAvailable = 300;
+findMap[FIND_STRUCTURES] = findMap[FIND_STRUCTURES].filter((s) => s.id !== "drylnk");
+Game.time++;
+const bld4 = makeCreep("Bld12", "builder", {
+    store: store(0, 100), pos: new RoomPosition(23, 25, "W1N1"),
+});
+bld4._withdrew = null;
+bld4.withdraw = (t) => { bld4._withdrew = t && t.id; return OK; };
+builder.run(bld4);
+assert(
+    (!bld4.memory.stack || !bld4.memory.stack.length) &&
+        bld4._withdrew === "drylnk",
+    "a builder may withdraw from a receiving link once spawn/extensions are stable"
 );
 delete Game.creeps.DryHaul;
 findMap[FIND_STRUCTURES] = findMap[FIND_STRUCTURES].filter((s) => s.id !== "drylnk");
@@ -3467,11 +3480,9 @@ findMap[FIND_HOSTILE_CREEPS] = [];
     // ratio, tier-dependent - critical needs tower.repairEnergyRatio
     // (50%), satisfactory/optimal need
     // tower.satisfactoryRepairEnergyRatio (70%) - PLUS, for a rampart/wall
-    // specifically in the optimal tier, the room's storage must be
-    // genuinely abundant (utils/resourceTiers.isStorageAbundant, 50% fill
-    // via logistics.storageSatisfactoryRatio) - replaces ROADMAP 0069's
-    // aboveReserve gate for the satisfactory tier entirely, and ROADMAP
-    // 0068's blanket "tower never touches optimal" rule for this one case.
+    // satisfactory defensive repair requires storage >10%; optimal defensive
+    // hardening requires storage >=70%. These gates are separate from the
+    // general 50% economy/link threshold.
     const C = mkTestRampart("c", 500, 1000000);
     const H = mkTestRampart("h", 5000, 1000000);
     const S = mkTestRampart("s", 50000, 1000000);
@@ -3493,7 +3504,8 @@ findMap[FIND_HOSTILE_CREEPS] = [];
                 "below the critical gate (49.9%)");
     }
     {
-        const { tower, getRepaired } = mkTestTower([H], null, 700); // 70% energy, NO storage at all
+ const satisfactoryStorage = { store: store(110, 1000) }; // >10% fill
+ const { tower, getRepaired } = mkTestTower([H], satisfactoryStorage, 700); // 70% energy
         Game.time++;
         towerMod.run(tower);
         assert(getRepaired() === H,
@@ -3509,8 +3521,8 @@ findMap[FIND_HOSTILE_CREEPS] = [];
         assert(getRepaired() === null,
             "a satisfactory target is NOT repaired with tower energy at " +
                 "60% - above the critical gate but below the satisfactory " +
-                "one; 50%-70% is a real, narrower dead zone now, entirely " +
-                "about the tower's own energy (ROADMAP 0072)");
+                "one; the target also remains blocked without the " +
+                "defensive storage gate (ROADMAP 0101)");
     }
     {
         const { tower, getRepaired } = mkTestTower([S], null, 1000); // full tower energy, NO storage at all
@@ -3523,29 +3535,27 @@ findMap[FIND_HOSTILE_CREEPS] = [];
                 "real abundance, not just critical/satisfactory energy)");
     }
     {
-        const belowAbundant = { store: store(400, 1000) }; // 40% fill - below the 50% abundance bar
+ const belowAbundant = { store: store(600, 1000) }; // 60% fill - below the 70% hardening bar
         const { tower, getRepaired } = mkTestTower([S], belowAbundant, 1000);
         Game.time++;
         towerMod.run(tower);
         assert(getRepaired() === null,
             "an optimal-tier rampart is still NOT repaired with storage " +
-                "at 40% fill - below the 50% abundance bar " +
-                "(logistics.storageSatisfactoryRatio)");
+                "at 60% fill - below the 70% defensive hardening bar " +
+                "(defensive hardening uses logistics.rampartHardeningStorageRatio)");
     }
     {
-        const abundant = { store: store(600, 1000) }; // 60% fill - above the 50% abundance bar
+        const abundant = { store: store(700, 1000) }; // 70% fill - hardening gate
         const { tower, getRepaired } = mkTestTower([S], abundant, 1000);
         Game.time++;
         towerMod.run(tower);
         assert(getRepaired() === S,
             "an optimal-tier rampart IS repaired once storage is " +
-                "genuinely abundant (>=50% fill) and the tower itself has " +
-                "at least the satisfactory energy floor - new since " +
-                "ROADMAP 0072; the old ROADMAP 0068 rule never let the " +
-                "tower touch the optimal tier at all, under any condition");
+                "at least 70% storage and the tower itself has " +
+                "the satisfactory energy floor");
     }
     {
-        const abundant = { store: store(600, 1000) };
+ const abundant = { store: store(700, 1000) };
         const { tower, getRepaired } = mkTestTower([C, H, S], abundant, 1000);
         Game.time++;
         towerMod.run(tower);
@@ -3692,6 +3702,15 @@ findMap[FIND_HOSTILE_CREEPS] = [];
             (threw ? "\n      " + (threw.stack || threw) : ""));
     }
 
+    {
+        const exactHealthyGate = { store: store(100, 1000) };
+        const { tower, getRepaired } = mkTestTower([H], exactHealthyGate, 1000);
+        Game.time++;
+        towerMod.run(tower);
+        assert(getRepaired() === null,
+            "a satisfactory rampart is NOT repaired at exactly 10% storage");
+    }
+
     // --- builder: rampart repair (opportunistic AND the dead-last
     // damagedRamparts fallback) reads the exact same utils/rampartRepair
     // tiers/gate as structures/tower.js above - one shared rule instead of
@@ -3745,6 +3764,27 @@ findMap[FIND_HOSTILE_CREEPS] = [];
         }
 
         const RCap = mkBCapRampart(5000000, 100000000); // 5% - past the healthy tier
+        const RHealthy = mkBCapRampart(500000, 100000000); // 0.5% - satisfactory
+        RHealthy.id = "bcap-healthy";
+        REG[RHealthy.id] = RHealthy;
+        REG[RCap.id] = RCap;
+
+        {
+            const exactHealthyGate = { store: store(100, 1000) };
+            const { creep, getRepairs } = mkBCapCreep([RHealthy], exactHealthyGate);
+            Game.time++;
+            builder.run(creep);
+            assert(!getRepairs().includes(RHealthy),
+                "builder does not repair a satisfactory rampart at exactly 10% storage");
+        }
+        {
+            const aboveHealthyGate = { store: store(110, 1000) };
+            const { creep, getRepairs } = mkBCapCreep([RHealthy], aboveHealthyGate);
+            Game.time++;
+            builder.run(creep);
+            assert(getRepairs().includes(RHealthy),
+                "builder repairs a satisfactory rampart above the 10% storage gate");
+        }
 
         {
             const { creep, getRepairs } = mkBCapCreep([RCap], null);
@@ -3758,7 +3798,7 @@ findMap[FIND_HOSTILE_CREEPS] = [];
                     "alone (got " + JSON.stringify(getRepairs().map((r) => r && r.id)) + ")");
         }
         {
-            const fullEnoughStorage = { store: store(600, 1000) }; // 60% fill
+ const fullEnoughStorage = { store: store(700, 1000) }; // 70% fill
             const { creep, getRepairs } = mkBCapCreep([RCap], fullEnoughStorage);
             Game.time++;
             let threw = null;
@@ -3800,7 +3840,7 @@ findMap[FIND_HOSTILE_CREEPS] = [];
                     "same as a rampart would be");
         }
         {
-            const fullEnoughStorage = { store: store(600, 1000) }; // 60% fill
+            const fullEnoughStorage = { store: store(700, 1000) }; // 70% fill
             const { creep, getRepairs } = mkBCapCreep([WCap], fullEnoughStorage);
             Game.time++;
             let threw = null;
@@ -9339,7 +9379,10 @@ function mineralStore(resources, freeCap) {
 
     function upFind(structures) {
         return (type, opts) => {
-            let list = type === FIND_STRUCTURES ? structures : [];
+            let list =
+                type === FIND_STRUCTURES || type === FIND_MY_STRUCTURES
+                    ? structures
+                    : [];
             if (opts && typeof opts.filter === "function") list = list.filter(opts.filter);
             return list;
         };
@@ -9357,6 +9400,14 @@ function mineralStore(resources, freeCap) {
             id: "up-cont", structureType: STRUCTURE_CONTAINER,
             pos: new RoomPosition(25, 24, "UpTiersRoom"),
             store: store(2000, 2000),
+        });
+    }
+
+    function mkUpLink() {
+        return Object.assign(new StructureLink(), {
+            id: "up-link", structureType: STRUCTURE_LINK,
+            pos: new RoomPosition(25, 24, "UpTiersRoom"),
+            store: store(500, 800), isCollector: () => false,
         });
     }
 
@@ -9436,6 +9487,65 @@ function mineralStore(resources, freeCap) {
                 JSON.stringify(creep.memory.stack) + ")"
         );
     }
+
+    function runUpLinkScenario(energyAvailable) {
+        const link = mkUpLink();
+        REG[link.id] = link;
+        const upRoom = Object.assign(new Room("UpTiersRoom"), {
+            controller: mkUpController(194864), storage: null,
+            energyAvailable, energyCapacityAvailable: 550,
+            find: upFind([link]),
+        });
+        const creep = mkUpCreep(upRoom);
+        creep.withdraw = (target) => {
+            creep.withdrawnFrom = target && target.id;
+            return OK;
+        };
+        withFindLookup(creep.pos, { [FIND_STRUCTURES]: [link] });
+        Game.time++;
+        upgraderMod.run(creep);
+        return creep;
+    }
+
+    {
+        const creep = runUpLinkScenario(0);
+        assert(creep.withdrawnFrom !== "up-link",
+            "upgrader does not withdraw from a non-collector link while spawn/extensions are critical");
+    }
+    {
+        const creep = runUpLinkScenario(550);
+        assert(creep.withdrawnFrom === "up-link",
+            "upgrader may withdraw from a non-collector link once spawn/extensions are stable");
+    }
+}
+
+// An upgrader converted to builder occupies one economy slot; the next
+// desired-upgrader calculation must account for that conversion once the
+// temporary zero override is removed.
+{
+    const upgraderMod = require(path.join(PROJECT, "src/roles/upgrader"));
+    const savedLevel = controller.level;
+    const savedTicks = controller.ticksToDowngrade;
+    controller.level = 8;
+    controller.ticksToDowngrade = 199999; // base formula wants one upgrader
+    setWanted(room.name, "upgrader", 0); // trigger conversion this tick
+    const converted = makeCreep("ConvertedUpgrader", "upgrader", {
+        store: store(0, 50),
+    });
+    Game.creeps.ConvertedUpgrader = converted;
+    Game.time++;
+    upgraderMod.run(converted);
+    assert(converted.memory.role === "builder" &&
+        converted.memory.convertedFrom === "upgrader",
+        "an upgrader conversion marks the creep as a builder-derived worker");
+    clearWanted(room.name, "upgrader");
+    Game.time++;
+    assert(needs.roomNeeds(room).upgrader === 0,
+        "a converted upgrader reduces the next desired-upgrader count by one");
+    delete Game.creeps.ConvertedUpgrader;
+    delete Memory.creeps.ConvertedUpgrader;
+    controller.level = savedLevel;
+    controller.ticksToDowngrade = savedTicks;
 }
 
 // --- rooms/spawning.js under attack must consider BOTH shapes of defense
@@ -9919,6 +10029,20 @@ origLog("\nMemory:", memStr.length, "bytes  |  rooms.W1N1 keys:",
     assert(!pixelTransfer.ok, "0098 rejects non-storable pixel terminal operations without persisting them");
     Game.rooms = oldRooms;
 }
+// A managed SELL load must not be mistaken for an incoming receipt.
+{
+    const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
+    const oldRooms = Game.rooms, oldCreeps = Game.creeps, oldMarket = Game.market, oldOps = Memory.terminalOps;
+    const store = { O: 100, getFreeCapacity: () => 29900, getUsedCapacity: () => 100, getCapacity: () => 30000 };
+    const room = { name: "W7N16", controller: { my: true }, storage: { id: "W7N16-storage", store: { getFreeCapacity: () => 30000 } }, terminal: { id: "W7N16-terminal", cooldown: 0, store, send: () => OK } };
+    Game.rooms = Object.assign({}, oldRooms, { W7N16: room });
+    Game.creeps = { ManagedSellHauler: { memory: { terminalJob: { operationId: "managed-sell" } } } };
+    Game.market = { incomingTransactions: [] };
+    Memory.terminalOps = { nextId: 1, operations: { "managed-sell": { id: "managed-sell", kind: "sell", sourceRoom: "W7N16", targetRoom: null, resourceType: "O", amount: 100, remaining: 100, loadedAmount: 100, state: "loading", haulerName: "ManagedSellHauler", createdTick: Game.time, updatedTick: Game.time } }, seenIncoming: {}, events: [], terminalBalance: {} };
+    terminalOps.tick();
+    assert(!Object.values(Memory.terminalOps.operations).some((op) => op.kind === "receipt"), "0098 does not turn managed SELL cargo into a synthetic receipt");
+    Game.rooms = oldRooms; Game.creeps = oldCreeps; Game.market = oldMarket; Memory.terminalOps = oldOps;
+}
 // Market-only resources (pixel/access-key/CPU-unlock family) bypass physical
 // storage while keeping the normal BUY/SELL API and operation accounting.
 {
@@ -9938,6 +10062,8 @@ origLog("\nMemory:", memStr.length, "bytes  |  rooms.W1N1 keys:",
     market.reset(); Game.time++; market.scan();
     const pixelBuy = terminalOps.buy("W7N17", "pixel", 2, 600);
     terminalOps.tick();
-    assert(pixelBuy.ok && Memory.terminalOps.operations[pixelBuy.id].state === "completed" && deals === 1, "0098 market-only pixel BUY works without storage or terminal");
+    const pixelSell = terminalOps.sell("W7N17", "pixel", 2, 400);
+    terminalOps.tick();
+    assert(pixelBuy.ok && pixelSell.ok && Memory.terminalOps.operations[pixelBuy.id].state === "completed" && Memory.terminalOps.operations[pixelSell.id].state === "completed" && deals === 2, "0098 market-only pixel BUY and SELL work without storage or terminal");
     Game.rooms = oldRooms; Game.market = oldMarket; Memory.terminalOps = oldOps;
 }

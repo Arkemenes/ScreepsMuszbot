@@ -540,6 +540,15 @@ function compute(room) {
     // refinement - out of scope for the first cut)
     const remoteHauler = activeRemotes.length;
 
+    // Converted upgraders are already serving the room as builders. Count
+    // them here, but apply the deduction after autoscale/clamps below so the
+    // final desired upgrader population is reduced without persisting a
+    // stale counter.
+    const convertedUpgraders = census
+        .creepsByRole(name, "builder")
+        .filter((creep) => creep.memory.convertedFrom === "upgrader")
+        .length;
+
     const wanted = {
         miner: sources,
         hauler,
@@ -567,6 +576,10 @@ function compute(room) {
     // per-cooldown-window walk-back (could take a while with a large
     // delta) - this clamp makes the ceiling immediate instead of eventual.
     if (rcl >= 8) wanted.upgrader = Math.min(wanted.upgrader, 1);
+
+    // Apply the conversion deduction after autoscale/clamps so it affects the
+    // final desired upgrader population without persisting a stale counter.
+    wanted.upgrader = Math.max(0, wanted.upgrader - convertedUpgraders);
 
     return applyOverride(name, wanted);
 }

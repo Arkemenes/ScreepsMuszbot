@@ -110,6 +110,8 @@ detalhe.
 | 0098 | [Operações de compra, venda e transferência pelo terminal](features/0098-terminal-trade-and-transfer-operations/spec.md) | done | API/console, locks por terminal/recurso, máquina de estado, hauler, transfer, BUY/SELL, buffer SELL, recebimentos deduplicados, baseline zero, recuperação de carga, repricing competitivo e métricas de janela concluídos; smoke, `node --check` e `npx grunt` verdes. A cópia opcional para o cliente Screeps pode ser ignorada sob `EPERM`. |
 | 0099 | [Limpeza do cálculo temporal de fair price](features/0099-market-temporal-cleanup/spec.md) | done | remove APIs/config/assertions VWAP e histórico sem uso; preserva snapshots temporais e commodities; `npx grunt` validado no ambiente do usuário |
 | 0100 | [Preço direto para ciclos de commodities](features/0100-market-commodity-cycle-prices/spec.md) | in-progress | preserva preços temporais de energy/minerais em receitas reversíveis e mantém custo derivado para commodities acíclicas |
+| 0101 | [Gates de storage para reparo defensivo](features/0101-defensive-repair-storage-gates/spec.md) | done | reparo saudável de walls/ramparts exige >10% de storage; hardening exige >=70%; builder e tower compartilham os gates sem alterar a política econômica de 50% |
+| 0102 | [Gate econômico para links e conversão de upgrader](features/0102-link-economy-gate-and-upgrader-conversion/spec.md) | done | builder/upgrader só retiram de links não-coletores com spawn/extensions estáveis; upgrader convertido reduz em 1 a demanda final de upgraders |
 
 ## Fila atual
 

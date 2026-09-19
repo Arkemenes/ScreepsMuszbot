@@ -17,6 +17,7 @@ var roleUpgrader = {
         // has no use for upgraders -> turn them into builders
         if (this.wanted(creep.room) === 0) {
             creep.clearState();
+            creep.memory.convertedFrom = "upgrader";
             creep.memory.role = "builder";
             return;
         }
@@ -32,6 +33,7 @@ var roleUpgrader = {
                 roomCache.myStructures(creep.room),
                 {
                     filter: (s) =>
+                        reservations.economyStable(creep.room) &&
                         s.structureType === STRUCTURE_LINK &&
                         !s.isCollector() &&
                         s.store[RESOURCE_ENERGY] > 0 &&

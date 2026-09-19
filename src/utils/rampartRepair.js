@@ -84,18 +84,23 @@ function priority(structure) {
     ];
 }
 
-// roles/builder.js's eligibility gate: critical and satisfactory are always
-// worth a trip (builder is population-limited, self-throttling - ROADMAP
-// 0069, unchanged here). Optimal tier is only gated for rampart/wall - the
-// one case with a genuinely unbounded cost (hardening a wall past 1% of
-// its 300M ceiling could run forever - ROADMAP 0068); a normal structure's
-// optimal tier (already >=50% health) is bounded/cheap and stays
-// unconditional, just lowest priority via `priority()` above.
+// roles/builder.js's eligibility gate: critical is unconditional, while
+// defensive satisfactory repair needs >10% storage and defensive optimal
+// repair (hardening) needs >=70%. Normal structures keep their old behavior.
 function builderMayRepair(structure, room) {
     if (structure.hits >= structure.hitsMax) return false;
-    if (tier(structure) !== "optimal") return true;
-    if (!isDefensive(structure)) return true;
-    return resourceTiers.aboveReserve(room);
+    const t = tier(structure);
+    if (!isDefensive(structure) || t === "critical") return true;
+    if (t === "satisfactory") {
+        return resourceTiers.isStorageAbove(
+            room,
+            config.get("logistics.rampartHealthyStorageRatio", 0.1)
+        );
+    }
+    return resourceTiers.isStorageAtLeast(
+        room,
+        config.get("logistics.rampartHardeningStorageRatio", 0.7)
+    );
 }
 
 // structures/tower.js's eligibility gate: depends on the TOWER's own
@@ -104,15 +109,10 @@ function builderMayRepair(structure, room) {
 // self-limit it the way roles/builder.js's own creep count does:
 //   critical      - energyRatio >= tower.repairEnergyRatio (50%)
 //   satisfactory  - energyRatio >= tower.satisfactoryRepairEnergyRatio (70%)
-//   optimal       - same 70% floor, AND (rampart/wall only) the room's
-//                   storage must be genuinely abundant
-//                   (utils/resourceTiers.isStorageAbundant, 50% fill - a
-//                   much higher bar than builderMayRepair's aboveReserve
-//                   above, same reasoning as ROADMAP 0068/0069: the tower
-//                   has no natural brake on this spend, so it needs real
-//                   abundance, not just "not literally empty"). A normal
-//                   structure's optimal tier only needs the 70% energy
-//                   floor, same bounded-cost reasoning as builderMayRepair.
+//   optimal       - same 70% tower-energy floor, plus defensive storage
+//                   gates shared with builderMayRepair (10% for satisfactory,
+//                   70% for hardening). Normal structures only use the tower
+//                   energy floor.
 function towerMayRepair(structure, tower) {
     if (structure.hits >= structure.hitsMax) return false;
 
@@ -128,8 +128,19 @@ function towerMayRepair(structure, tower) {
         return false;
     }
 
-    if (t === "optimal" && isDefensive(structure)) {
-        return resourceTiers.isStorageAbundant(tower.room);
+    if (isDefensive(structure)) {
+        if (t === "satisfactory") {
+            return resourceTiers.isStorageAbove(
+                tower.room,
+                config.get("logistics.rampartHealthyStorageRatio", 0.1)
+            );
+        }
+        if (t === "optimal") {
+            return resourceTiers.isStorageAtLeast(
+                tower.room,
+                config.get("logistics.rampartHardeningStorageRatio", 0.7)
+            );
+        }
     }
 
     return true;
