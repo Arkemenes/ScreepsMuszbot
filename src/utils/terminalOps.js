@@ -16,9 +16,20 @@ function memory() {
     if (!mem.terminalBalance) mem.terminalBalance = {};
     return mem;
 }
-function result(ok, value) { return ok ? { ok: true, id: value } : { ok: false, error: value }; }
+function result(ok, value) {
+    const response = ok ? { ok: true, id: value } : { ok: false, error: value };
+    response.toString = () => ok ? ("ok: " + value) : ("erro: " + value);
+    return response;
+}
 function amount(value) { return Number.isInteger(value) && value > 0 ? value : 0; }
-function validResource(type) { return typeof type === "string" && (!Array.isArray(RESOURCES_ALL) || RESOURCES_ALL.indexOf(type) >= 0); }
+function validResource(type) {
+    return typeof type === "string" && (marketOnlyResource(type) || !Array.isArray(RESOURCES_ALL) || RESOURCES_ALL.indexOf(type) >= 0);
+}
+function marketOnlyResource(type) {
+    const names = ["pixel", "accessKey", "access_key", "cpuUnlock", "cpu_unlock"];
+    const constants = [typeof RESOURCE_PIXEL !== "undefined" ? RESOURCE_PIXEL : null, typeof RESOURCE_ACCESS_KEY !== "undefined" ? RESOURCE_ACCESS_KEY : null, typeof RESOURCE_CPU_UNLOCK !== "undefined" ? RESOURCE_CPU_UNLOCK : null];
+    return names.indexOf(type) >= 0 || constants.indexOf(type) >= 0;
+}
 function operation(id) { return memory().operations[id] || null; }
 function active(op) { return op && FINAL_STATES.indexOf(op.state) < 0; }
 function storeValue(store, resource) { return store && (store[resource] || 0) || 0; }
@@ -54,10 +65,14 @@ function reservedFrom(roomName, resourceType) {
     }, 0);
 }
 
+function announce(command, response) {
+    if (!response.ok) console.log("[" + command + "] não criada: " + response.error);
+    return response;
+}
 function transfer(from, to, resourceType, value, options) {
     const source = owned(from), target = owned(to);
     if (!source || !target || from === to) return result(false, "origem/destino precisa ser sala própria com storage e terminal");
-    if (!validResource(resourceType) || !amount(value)) return result(false, "recurso ou quantidade inválido");
+    if (!validResource(resourceType) || marketOnlyResource(resourceType) || !amount(value)) return result(false, "recurso ou quantidade inválido para transferência física");
     if (lockConflict("transfer", from, to, resourceType)) return result(false, "já existe uma operação concorrente para este terminal/recurso");
     const cost = txCost(value, from, to);
     const available = Math.max(0, storeValue(source.storage.store, resourceType) - reservedFrom(from, resourceType));
@@ -66,38 +81,44 @@ function transfer(from, to, resourceType, value, options) {
     if (resourceType !== RESOURCE_ENERGY && storeValue(source.storage.store, RESOURCE_ENERGY) < cost) return result(false, "energia de taxa insuficiente: necessário " + cost);
     return result(true, create("transfer", from, to, resourceType, value, Object.assign({ transactionCost: cost }, options || {})));
 }
-function priceData(resourceType) {
+function priceData(resourceType, requireEnergy) {
     const snapshot = marketPrices.snapshot();
     const data = snapshot && snapshot.resources && snapshot.resources[resourceType];
     const energy = snapshot && snapshot.resources && snapshot.resources[RESOURCE_ENERGY];
-    return data && energy && typeof energy.fairPrice === "number" ? { data, energy: energy.fairPrice } : null;
+    if (!data) return null;
+    if (requireEnergy && (!energy || typeof energy.fairPrice !== "number")) return null;
+    return { data, energy: energy && typeof energy.fairPrice === "number" ? energy.fairPrice : 0 };
 }
 function trade(kind, roomName, resourceType, value, limit) {
-    const target = owned(roomName);
+    const marketOnly = marketOnlyResource(resourceType);
+    const target = marketOnly ? room(roomName) : owned(roomName);
+    if (marketOnly && (!target || !target.controller || !target.controller.my)) return result(false, "sala precisa ser própria para uma operação de mercado");
     if (!target) return result(false, "sala precisa ser própria com storage e terminal");
     if (!validResource(resourceType) || !amount(value) || !(typeof limit === "number" && limit > 0)) return result(false, "recurso, quantidade ou limite inválido");
     if (lockConflict(kind, roomName, null, resourceType)) return result(false, "já existe uma operação concorrente para este terminal/recurso");
-    const prices = priceData(resourceType);
+    const prices = priceData(resourceType, !marketOnly);
     if (!prices) return result(false, "aguardando cotação temporal e fairPrice de energia");
-    const available = Math.max(0, storeValue(target.storage.store, resourceType) - reservedFrom(roomName, resourceType));
-    if (kind === "sell" && available < value) return result(false, "material insuficiente: disponível " + available + ", necessário " + value);
-    const reference = kind === "buy" ? prices.data.buyPrice : prices.data.sellPrice;
+    const available = marketOnly ? value : Math.max(0, storeValue(target.storage.store, resourceType) - reservedFrom(roomName, resourceType));
+    if (!marketOnly && kind === "sell" && available < value) return result(false, "material insuficiente: disponível " + available + ", necessário " + value);
+    // A BUY consumes an ORDER_SELL; a SELL consumes an ORDER_BUY.
+    const reference = kind === "buy" ? prices.data.sellPrice : prices.data.buyPrice;
     if (!(typeof reference === "number" && reference > 0)) return result(false, "aguardando " + kind + "Price temporal");
-    return result(true, create(kind, roomName, null, resourceType, value, { limit, referencePrice: reference, energyFairPrice: prices.energy }));
+    return result(true, create(kind, roomName, null, resourceType, value, { limit, referencePrice: reference, energyFairPrice: prices.energy, marketOnly }));
 }
-function buy(roomName, resourceType, value, maxUnitPrice) { return trade("buy", roomName, resourceType, value, maxUnitPrice); }
-function sell(roomName, resourceType, value, minUnitPrice) { return trade("sell", roomName, resourceType, value, minUnitPrice); }
+function buy(roomName, resourceType, value, maxUnitPrice) { return announce("terminalBuy", trade("buy", roomName, resourceType, value, maxUnitPrice)); }
+function sell(roomName, resourceType, value, minUnitPrice) { return announce("terminalSell", trade("sell", roomName, resourceType, value, minUnitPrice)); }
 function activeForRoom(roomName) { return Object.keys(memory().operations).map(operation).filter((op) => active(op) && (op.sourceRoom === roomName || op.targetRoom === roomName)); }
 function record(op, value, credits, energy) { memory().events.push({ tick: Game.time, room: op.sourceRoom || op.targetRoom, kind: op.kind, amount: value || 0, credits: credits || 0, transactionEnergy: energy || 0 }); }
 
 function findHauler(roomName) { return census.creepsByRole(roomName, "hauler").find((creep) => !creep.memory.terminalJob && creep.store.getUsedCapacity() === 0); }
-function assign(op, home, direction, from, to, value) {
+function assign(op, home, direction, from, to, value, resourceType) {
+    resourceType = resourceType || op.resourceType;
     if (value <= 0) { touch(op, direction === "load" ? "atTerminal" : "completed"); return false; }
-    if (direction === "load" && freeCapacity(to.store, op.resourceType) < value) { op.error = "capacidade insuficiente no terminal"; touch(op, "waiting"); return false; }
-    if (direction === "unload" && freeCapacity(to.store, op.resourceType) < value) { op.error = "capacidade insuficiente no storage"; touch(op, "waiting"); return false; }
+    if (direction === "load" && freeCapacity(to.store, resourceType) < value) { op.error = "capacidade insuficiente no terminal"; touch(op, "waiting"); return false; }
+    if (direction === "unload" && freeCapacity(to.store, resourceType) < value) { op.error = "capacidade insuficiente no storage"; touch(op, "waiting"); return false; }
     const creep = findHauler(home.name);
     if (!creep) { op.error = "sem hauler disponível"; op.waitingDirection = direction; touch(op, "waiting"); return false; }
-    creep.memory.terminalJob = { operationId: op.id, direction, fromId: from.id, toId: to.id, resourceType: op.resourceType, amount: value };
+    creep.memory.terminalJob = { operationId: op.id, direction, fromId: from.id, toId: to.id, resourceType, amount: value };
     op.haulerName = creep.name;
     op.waitingDirection = direction;
     touch(op, direction === "load" ? "loading" : "unloading");
@@ -112,8 +133,8 @@ function candidateOrders(op) {
     try { orders = Game.market.getAllOrders({ type: wanted, resourceType: op.resourceType }) || []; } catch (error) { return []; }
     return orders.filter((order) => order && order.roomName && order.price > 0 && orderAmount(order) > 0).map((order) => {
         const origin = room(op.sourceRoom);
-        const quantity = Math.min(op.remaining, orderAmount(order), op.kind === "sell" ? (op.loadedAmount || 0) : op.remaining);
-        const cost = txCost(quantity, op.sourceRoom, order.roomName);
+        const quantity = Math.min(op.remaining, orderAmount(order), op.kind === "sell" && !op.marketOnly ? (op.loadedAmount || 0) : op.remaining);
+        const cost = op.marketOnly ? 0 : txCost(quantity, op.sourceRoom, order.roomName);
         const fee = quantity ? cost * (op.energyFairPrice || 0) / quantity : Infinity;
         return { order, quantity, cost, effective: op.kind === "buy" ? order.price + fee : order.price - fee };
     }).filter((item) => item.quantity > 0 && (op.kind === "buy" ? item.effective <= op.limit : item.effective >= op.limit)).sort((a, b) => op.kind === "buy" ? a.effective - b.effective : b.effective - a.effective);
@@ -121,22 +142,33 @@ function candidateOrders(op) {
 function executeDeal(op, target) {
     const candidate = candidateOrders(op)[0];
     if (!candidate) { touch(op, "listing"); return; }
-    if (target.terminal.cooldown) { op.error = "terminal em cooldown"; touch(op, "waiting"); return; }
-    if (storeValue(target.terminal.store, RESOURCE_ENERGY) < candidate.cost) { op.error = "energia de taxa insuficiente"; touch(op, "waiting"); return; }
+    if (!op.marketOnly && target.terminal.cooldown) { op.error = "terminal em cooldown"; touch(op, "waiting"); return; }
+    if (!op.marketOnly && storeValue(target.terminal.store, RESOURCE_ENERGY) < candidate.cost) {
+        const missingEnergy = candidate.cost - storeValue(target.terminal.store, RESOURCE_ENERGY);
+        let assigned = false;
+        if (!op.feeJob) {
+            op.feeJob = true;
+            assigned = assign(op, target, "fee", target.storage, target.terminal, missingEnergy, RESOURCE_ENERGY);
+            if (!assigned) delete op.feeJob;
+        }
+        if (assigned) return;
+        op.error = "energia de taxa insuficiente"; touch(op, "waiting"); return;
+    }
     if (op.kind === "buy" && (!Game.market || Game.market.credits < candidate.order.price * candidate.quantity)) { op.error = "créditos insuficientes"; touch(op, "waiting"); return; }
     const status = Game.market.deal(candidate.order.id, candidate.quantity, op.sourceRoom);
     if (status !== OK) { op.error = "deal retornou " + status; touch(op, "waiting"); return; }
     op.remaining -= candidate.quantity; op.dealtAmount = (op.dealtAmount || 0) + candidate.quantity; op.transactionCost += candidate.cost;
+    op.feeLoadedAmount = Math.max(0, (op.feeLoadedAmount || 0) - candidate.cost);
     if (op.kind === "sell") op.loadedAmount = Math.max(0, (op.loadedAmount || 0) - candidate.quantity);
     record(op, candidate.quantity, candidate.order.price * candidate.quantity * (op.kind === "buy" ? -1 : 1), candidate.cost);
-    touch(op, op.remaining ? "queued" : (op.kind === "buy" ? "awaitingReceipt" : "completed"));
+    touch(op, op.remaining ? "queued" : (op.kind === "buy" && !op.marketOnly ? "awaitingReceipt" : "completed"));
 }
 function competitivePrice(op) {
     const step = config.get("terminalOps.marketPriceStep", 0.001);
     let orders = [];
     try { orders = Game.market.getAllOrders({ type: op.kind === "buy" ? ORDER_BUY : ORDER_SELL, resourceType: op.resourceType }) || []; } catch (error) { orders = []; }
     const prices = orders.filter((order) => order && order.price > 0 && order.roomName).map((order) => {
-        const cost = txCost(Math.max(1, op.remaining), op.sourceRoom, order.roomName);
+        const cost = op.marketOnly ? 0 : txCost(Math.max(1, op.remaining), op.sourceRoom, order.roomName);
         const delivery = cost * (op.energyFairPrice || 0) / Math.max(1, op.remaining);
         return op.kind === "buy" ? order.price - delivery : order.price + delivery;
     });
@@ -220,6 +252,14 @@ function scanIncoming() {
     });
     Object.keys(memory().seenIncoming).forEach((id) => { if (Game.time - memory().seenIncoming[id] > 1000) delete memory().seenIncoming[id]; });
 }
+function managedTerminalIncrease(roomName, resourceType) {
+    return activeForRoom(roomName).reduce((sum, op) => {
+        if (op.sourceRoom !== roomName || op.resourceType !== resourceType) return sum;
+        if (op.kind === "sell" || op.kind === "transfer") sum += Math.max(0, op.loadedAmount || 0);
+        if (resourceType === RESOURCE_ENERGY) sum += Math.max(0, op.feeLoadedAmount || 0);
+        return sum;
+    }, 0);
+}
 function scanTerminalBalances() {
     const seen = memory().terminalBalance;
     Object.keys(Game.rooms || {}).forEach((name) => {
@@ -231,7 +271,12 @@ function scanTerminalBalances() {
             const previous = seen[key] || 0;
             const reserved = activeForRoom(name).filter((op) => op.targetRoom === name && op.kind !== "receipt" && op.resourceType === resourceType && (op.state === "awaitingReceipt" || op.state === "unloading")).reduce((sum, op) => sum + Math.max(0, op.amount - (op.receivedAmount || 0)), 0);
             const receiptPending = activeForRoom(name).filter((op) => op.kind === "receipt" && op.targetRoom === name && op.resourceType === resourceType).reduce((sum, op) => sum + Math.max(0, op.amount - (op.receivedAmount || 0) - (op.recoveredAmount || 0)), 0);
-            const delta = Math.max(0, current - previous - reserved - receiptPending);
+            // A load performed by our own sell/transfer operation is not an
+            // incoming transaction. Without this subtraction, every batch
+            // loaded for SELL becomes a synthetic receipt and gets hauled back
+            // to storage, creating an endless terminal/storage cycle.
+            const managedIncrease = managedTerminalIncrease(name, resourceType);
+            const delta = Math.max(0, current - previous - managedIncrease - reserved - receiptPending);
             if (delta > 0) {
                 const parent = awaitingReceiptFor(name, resourceType);
                 incomingReceipt(name, resourceType, delta, parent && parent.id);
@@ -296,7 +341,8 @@ function tick() {
     memory(); gcOperations(); bindCreatedOrders(); syncManagedOrders(); scanIncoming(); scanTerminalBalances();
     Object.keys(memory().operations).forEach((id) => {
         const op = operation(id); if (!active(op)) return;
-        const source = op.sourceRoom && owned(op.sourceRoom), target = op.targetRoom && owned(op.targetRoom);
+        const marketOnly = op.marketOnly || marketOnlyResource(op.resourceType);
+        const source = op.sourceRoom && (marketOnly ? room(op.sourceRoom) : owned(op.sourceRoom)), target = op.targetRoom && owned(op.targetRoom);
         if (op.kind === "receipt") {
             if (op.recoveryStartedTick && Game.time - op.recoveryStartedTick >= config.get("terminalOps.recoveryTicks", 10000)) { op.error = "recovery timeout"; touch(op, "failed"); return; }
             if (op.haulerName && (!Game.creeps || !Game.creeps[op.haulerName])) recover(op, target);
@@ -304,6 +350,11 @@ function tick() {
             return;
         }
         if (!source || (op.kind === "transfer" && !target)) { op.error = "terminal/storage indisponível"; touch(op, "waiting"); return; }
+        if (marketOnly) {
+            if (op.state === "queued" || op.state === "waiting") executeDeal(op, source);
+            else if (op.state === "listing" || op.state === "listed") listResidual(op, source);
+            return;
+        }
         if (op.haulerName && Game.creeps && Game.creeps[op.haulerName] && Game.creeps[op.haulerName].memory.terminalJob) return;
         if (op.haulerName && (!Game.creeps || !Game.creeps[op.haulerName])) recover(op, source);
         if (["loading", "unloading", "recovering"].indexOf(op.state) >= 0) return;
@@ -327,11 +378,24 @@ function runHauler(creep) {
     const op = operation(job.operationId), from = Game.getObjectById(job.fromId), to = Game.getObjectById(job.toId);
     if (!op || !from || !to) { delete creep.memory.terminalJob; return true; }
     const carried = storeValue(creep.store, job.resourceType);
+    const used = typeof creep.store.getUsedCapacity === "function" ? creep.store.getUsedCapacity() : carried;
+    // A terminal job is exclusive: never try to mix its resource with an
+    // unrelated load already carried by the hauler. ERR_FULL (-8) otherwise
+    // leaves the same job retrying forever while normal logistics owns the
+    // creep's capacity.
+    if (carried <= 0 && used > 0) {
+        op.error = "hauler está carregando outro recurso";
+        op.haulerName = null;
+        touch(op, "waiting");
+        delete creep.memory.terminalJob;
+        return true;
+    }
     if (carried > 0) {
         const status = creep.transfer(to, job.resourceType);
         if (status === ERR_NOT_IN_RANGE) creep.moveTo(to, { range: 1, reusePath: 10 });
         else if (status === OK) {
-            if (job.direction === "load") { op.loadedAmount += carried; touch(op, op.loadedAmount >= op.amount ? "atTerminal" : "queued"); }
+            if (job.direction === "fee") { op.feeJob = false; op.feeLoadedAmount = (op.feeLoadedAmount || 0) + carried; touch(op, "atTerminal"); }
+            else if (job.direction === "load") { op.loadedAmount += carried; touch(op, op.loadedAmount >= op.amount ? "atTerminal" : "queued"); }
             else if (job.direction === "recover") {
                 op.recoveredAmount = (op.recoveredAmount || 0) + carried;
                 op.loadedAmount = 0; op.recoveryAttempts = 0;
@@ -345,9 +409,18 @@ function runHauler(creep) {
             else { op.receivedAmount += carried; if (op.parentId) { const parent = operation(op.parentId); if (parent && op.receivedAmount >= op.amount) touch(parent, "completed"); } touch(op, op.receivedAmount >= op.amount ? "completed" : "waiting"); }
             delete creep.memory.terminalJob;
         }
+        else {
+            op.error = "transfer retornou " + status;
+            op.haulerName = null;
+            touch(op, "waiting");
+            delete creep.memory.terminalJob;
+        }
         return true;
     }
-    const status = creep.withdraw(from, job.resourceType, job.amount);
+    const capacity = typeof creep.store.getFreeCapacity === "function" ? creep.store.getFreeCapacity(job.resourceType) : job.amount;
+    const request = Math.min(job.amount, Math.max(0, capacity));
+    if (request <= 0) return true;
+    const status = creep.withdraw(from, job.resourceType, request);
     if (status === ERR_NOT_IN_RANGE) creep.moveTo(from, { range: 1, reusePath: 10 });
     else if (status !== OK) { op.error = "withdraw retornou " + status; touch(op, "waiting"); delete creep.memory.terminalJob; }
     return true;
@@ -366,9 +439,9 @@ function stats(roomName) {
     memory().events.forEach((event) => { if (event.room === roomName) { summary.count++; summary.amount += event.amount; summary.credits += event.credits; summary.transactionEnergy += event.transactionEnergy; } });
     return summary;
 }
-global.terminalTransfer = transfer;
+global.terminalTransfer = function () { return announce("terminalTransfer", transfer.apply(null, arguments)); };
 global.terminalBuy = buy;
 global.terminalSell = sell;
-global.terminalOperations = () => Object.keys(memory().operations).map(operation);
+global.terminalOperations = () => JSON.stringify(Object.keys(memory().operations).map(operation), null, 2);
 global.cancelTerminalOperation = cancel;
 module.exports = { transfer, buy, sell, cancel, tick, runHauler, operation, activeForRoom, txCost, stats };

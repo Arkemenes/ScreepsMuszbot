@@ -9906,3 +9906,38 @@ origLog("\nMemory:", memStr.length, "bytes  |  rooms.W1N1 keys:",
     assert(Memory.terminalOps.operations.timeoutReceipt.state === "failed", "0098 recovery timeout fails a stuck receipt deterministically");
     Memory.terminalOps = oldOps;
 }
+// Terminal operations reject non-storable resources while market snapshots
+// may still enumerate them independently.
+{
+    const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
+    const makeStore = (energy, capacity) => ({ [RESOURCE_ENERGY]: energy, getFreeCapacity: () => capacity - energy, getUsedCapacity: () => energy, getCapacity: () => capacity });
+    const a = { name: "W7N15", controller: { my: true }, storage: { id: "W7N15-storage", store: makeStore(10000, 30000) }, terminal: { id: "W7N15-terminal", cooldown: 0, store: makeStore(0, 30000), send: () => OK } };
+    const b = { name: "W7N16", controller: { my: true }, storage: { id: "W7N16-storage", store: makeStore(0, 30000) }, terminal: { id: "W7N16-terminal", cooldown: 0, store: makeStore(0, 30000), send: () => OK } };
+    const oldRooms = Game.rooms;
+    Game.rooms = Object.assign({}, oldRooms, { W7N15: a, W7N16: b });
+    const pixelTransfer = terminalOps.transfer("W7N15", "W7N16", "pixel", 1);
+    assert(!pixelTransfer.ok, "0098 rejects non-storable pixel terminal operations without persisting them");
+    Game.rooms = oldRooms;
+}
+// Market-only resources (pixel/access-key/CPU-unlock family) bypass physical
+// storage while keeping the normal BUY/SELL API and operation accounting.
+{
+    const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
+    const market = require(path.join(PROJECT, "src/utils/market"));
+    const oldRooms = Game.rooms, oldMarket = Game.market, oldOps = Memory.terminalOps;
+    Game.rooms = Object.assign({}, oldRooms, { W7N17: { name: "W7N17", controller: { my: true } } });
+    let deals = 0;
+    const orders = [
+        { id: "energy-buy", resourceType: RESOURCE_ENERGY, type: ORDER_BUY, price: 60, remainingAmount: 1000, roomName: "W7N18" },
+        { id: "energy-sell", resourceType: RESOURCE_ENERGY, type: ORDER_SELL, price: 70, remainingAmount: 1000, roomName: "W7N18" },
+        { id: "pixel-buy", resourceType: "pixel", type: ORDER_BUY, price: 500, remainingAmount: 100, roomName: "W7N18" },
+        { id: "pixel-sell", resourceType: "pixel", type: ORDER_SELL, price: 600, remainingAmount: 100, roomName: "W7N18" },
+    ];
+    Game.market = { credits: 100000, incomingTransactions: [], getAllOrders: () => orders, calcTransactionCost: () => 999999, deal: () => { deals++; return OK; } };
+    Memory.terminalOps = { nextId: 1, operations: {}, seenIncoming: {}, events: [], terminalBalance: {} };
+    market.reset(); Game.time++; market.scan();
+    const pixelBuy = terminalOps.buy("W7N17", "pixel", 2, 600);
+    terminalOps.tick();
+    assert(pixelBuy.ok && Memory.terminalOps.operations[pixelBuy.id].state === "completed" && deals === 1, "0098 market-only pixel BUY works without storage or terminal");
+    Game.rooms = oldRooms; Game.market = oldMarket; Memory.terminalOps = oldOps;
+}
