@@ -4,3 +4,4 @@ node_modules
 Gruntfile.js
 package-lock.json
 dist/main.js
+graphify-out/*
