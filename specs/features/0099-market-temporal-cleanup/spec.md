@@ -1,6 +1,6 @@
 # 0099 — Limpeza do cálculo temporal de fair price
 
-- **Status:** in-progress
+- **Status:** done
 - **Owner:** usuário + assistente
 - **Created:** 2026-09-19
 
@@ -45,9 +45,3 @@ fair price.
   permanecem intactos.
 - **Testável offline:** o smoke passa a verificar a ausência das APIs mortas
   junto ao comportamento temporal que permanece.
-
-## Open questions
-
-- O build precisa rodar sob um Node compatível com `grunt@1.0.1`, ou a feature
-  0011 precisa modernizar essa dependência: no Node 24 instalado,
-  `grunt-legacy-util` chama o removido `util.isError`.

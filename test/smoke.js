@@ -604,11 +604,19 @@ assert(orderGroups.energy.length === 1 && orderGroups.pixel.length === 1,
 {
     const originalResources = RESOURCES_ALL;
     const originalMarket = Game.market;
-    RESOURCES_ALL = [RESOURCE_ENERGY, "Z", "widgetA"];
+    const originalCommodities = COMMODITIES;
+    RESOURCES_ALL = [RESOURCE_ENERGY, "O", "Z", "widgetA"];
+    COMMODITIES = Object.assign({}, originalCommodities, {
+        energy: { amount: 1, components: { energy: 1 } },
+        O: { amount: 1, components: { oxidant: 1 } },
+        oxidant: { amount: 1, components: { O: 1 } },
+    });
     Game.market = {
         getAllOrders: () => [
             { resourceType: RESOURCE_ENERGY, type: ORDER_BUY, price: 60, remainingAmount: 100 },
             { resourceType: RESOURCE_ENERGY, type: ORDER_SELL, price: 70, remainingAmount: 100 },
+            { resourceType: "O", type: ORDER_BUY, price: 30, remainingAmount: 100 },
+            { resourceType: "O", type: ORDER_SELL, price: 40, remainingAmount: 100 },
             { resourceType: "Z", type: ORDER_BUY, price: 10, remainingAmount: 100 },
             { resourceType: "Z", type: ORDER_SELL, price: 20, remainingAmount: 100 },
             { resourceType: "widgetA", type: ORDER_BUY, price: 500, remainingAmount: 100 },
@@ -621,10 +629,15 @@ assert(orderGroups.energy.length === 1 && orderGroups.pixel.length === 1,
     Game.time += 10;
     const commoditySnapshot = market.scan();
     const widget = commoditySnapshot.resources.widgetA;
+    const energy = commoditySnapshot.resources[RESOURCE_ENERGY];
+    const oxygen = commoditySnapshot.resources.O;
+    assert(energy.buyPrice === 60 && energy.sellPrice === 70 && energy.fairPrice === 65 &&
+        oxygen.buyPrice === 30 && oxygen.sellPrice === 40 && oxygen.fairPrice === 35,
+    "market keeps direct temporal prices for primary resources with reversible commodity recipes");
     assert(widget.currentBuy === 500 && widget.currentSell === 600,
         "market currentBuy/currentSell expose the current best commodity orders");
     assert(widget.buyPrice === 1400 && widget.sellPrice === 1800 && widget.fairPrice === 1600,
-        "commodity reference prices derive recursively from components per output unit");
+        "commodity reference prices derive recursively from components per output unit using direct cyclic inputs");
     const statsForCommodity = require(path.join(PROJECT, "src/utils/stats"));
     statsForCommodity();
     assert(Memory.stats.market.fairPrice.widgetA.currentBuy === 500 &&
@@ -647,6 +660,7 @@ assert(orderGroups.energy.length === 1 && orderGroups.pixel.length === 1,
     assert(currentRefresh.resources.widgetA.sampleCount === 1,
         "a current price refresh does not create an hourly temporal snapshot");
     RESOURCES_ALL = originalResources;
+    COMMODITIES = originalCommodities;
     Game.market = originalMarket;
     delete Memory.settings.market;
 }

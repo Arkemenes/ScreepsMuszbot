@@ -108,7 +108,8 @@ detalhe.
 | 0096 | [Motor de preço justo de mercado (fase 0: só cálculo)](features/0096-market-fair-price-engine/spec.md) | done | `utils/market.js`, current book a cada 100 ticks + snapshots horários; mediana ponderada, fair midpoint e custo recursivo de commodities; exportação esparsa para Grafana |
 | 0097 | [Balanceamento automático de energia entre salas](features/0097-inter-room-energy-balancing/spec.md) | spec | compara `critical`/`stable`/`abundant`, preserva reservas locais e cria transferências pelo módulo 0098; gatilho imediato para sala crítica ou diferença de 20 pontos percentuais; ciclo normal de 1000 ticks |
 | 0098 | [Operações de compra, venda e transferência pelo terminal](features/0098-terminal-trade-and-transfer-operations/spec.md) | spec | API única para comandos manuais e 0097; aloca hauler para storage → terminal → ação e terminal → storage para compras e recursos recebidos, inclusive de outro jogador |
-| 0099 | [Limpeza do cálculo temporal de fair price](features/0099-market-temporal-cleanup/spec.md) | in-progress | remove APIs/config/assertions VWAP e histórico sem uso; preserva snapshots temporais e commodities; build bloqueado por Grunt 1.0.1 no Node 24 |
+| 0099 | [Limpeza do cálculo temporal de fair price](features/0099-market-temporal-cleanup/spec.md) | done | remove APIs/config/assertions VWAP e histórico sem uso; preserva snapshots temporais e commodities; `npx grunt` validado no ambiente do usuário |
+| 0100 | [Preço direto para ciclos de commodities](features/0100-market-commodity-cycle-prices/spec.md) | in-progress | preserva preços temporais de energy/minerais em receitas reversíveis e mantém custo derivado para commodities acíclicas |
 
 ## Fila atual
 

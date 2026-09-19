@@ -125,17 +125,44 @@ function temporalResource(resourceType, now) {
     };
 }
 
-function derivedPrice(resourceType, resources, memo, visiting) {
+function commodityRecipe(resourceType) {
+    return typeof COMMODITIES !== "undefined" && COMMODITIES[resourceType];
+}
+
+function reachesResource(resourceType, targetType, visited) {
+    if (visited[resourceType]) return false;
+    visited[resourceType] = true;
+    const recipe = commodityRecipe(resourceType);
+    if (!recipe || !recipe.components) return false;
+    for (const componentType in recipe.components) {
+        if (componentType === targetType ||
+            reachesResource(componentType, targetType, visited)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function isCyclicCommodity(resourceType, memo) {
     if (memo[resourceType] !== undefined) return memo[resourceType];
+    memo[resourceType] = reachesResource(resourceType, resourceType, {});
+    return memo[resourceType];
+}
+
+function derivedPrice(resourceType, resources, memo, visiting, cycleMemo) {
+    if (memo[resourceType] !== undefined) return memo[resourceType];
+    if (isCyclicCommodity(resourceType, cycleMemo)) {
+        return resources[resourceType] || null;
+    }
     if (visiting[resourceType]) return null;
-    const recipe = typeof COMMODITIES !== "undefined" && COMMODITIES[resourceType];
+    const recipe = commodityRecipe(resourceType);
     if (!recipe || !recipe.components || !(recipe.amount > 0)) {
         return resources[resourceType] || null;
     }
     visiting[resourceType] = true;
     const result = { buyPrice: 0, sellPrice: 0, fairPrice: 0 };
     for (const componentType in recipe.components) {
-        const component = derivedPrice(componentType, resources, memo, visiting);
+        const component = derivedPrice(componentType, resources, memo, visiting, cycleMemo);
         const amount = numberOrZero(recipe.components[componentType]);
         if (!component || component.buyPrice === null || component.sellPrice === null ||
             component.fairPrice === null || amount <= 0) {
@@ -157,11 +184,11 @@ function derivedPrice(resourceType, resources, memo, visiting) {
 
 function applyCommodityPrices(resources) {
     const memo = {};
+    const cycleMemo = {};
     for (const resourceType in resources) {
-        const recipe = typeof COMMODITIES !== "undefined" && COMMODITIES[resourceType];
-        if (!recipe) continue;
+        if (!commodityRecipe(resourceType) || isCyclicCommodity(resourceType, cycleMemo)) continue;
         const current = resources[resourceType];
-        const derived = derivedPrice(resourceType, resources, memo, {});
+        const derived = derivedPrice(resourceType, resources, memo, {}, cycleMemo);
         current.buyPrice = derived ? derived.buyPrice : null;
         current.sellPrice = derived ? derived.sellPrice : null;
         current.fairPrice = derived ? derived.fairPrice : null;
