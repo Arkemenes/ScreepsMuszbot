@@ -119,12 +119,18 @@ function history() {
     return loadedHistory;
 }
 
-function clear() {
+// Reset only the in-process view. Persistent snapshots must survive a global
+// reset/deploy; callers that intentionally need an empty fixture may use clear.
+function resetCache() {
     loaded = false;
     firstSeenTick = null;
     Object.keys(loadedHistory).forEach((resourceType) => {
         delete loadedHistory[resourceType];
     });
+}
+
+function clear() {
+    resetCache();
     const segments = rawSegments();
     if (segments) segments[SEGMENT_ID] = "";
 }
@@ -134,5 +140,6 @@ module.exports = {
     history,
     load,
     save,
+    resetCache,
     clear,
 };

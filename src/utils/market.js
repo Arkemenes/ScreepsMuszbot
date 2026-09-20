@@ -302,7 +302,7 @@ function reset() {
     lastSnapshot = null;
     for (const resourceType in temporalSnapshots) delete temporalSnapshots[resourceType];
     marketHistoryLoaded = false;
-    marketHistory.clear();
+    marketHistory.resetCache();
 }
 
 function marketPrice(resourceType) {

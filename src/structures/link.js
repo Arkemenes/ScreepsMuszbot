@@ -81,7 +81,17 @@ var link = {
             let target = pickTarget(nonCollectorLinks, link.room);
 
             if (target) {
-                link.transferEnergy(target);
+                // The link consumes LINK_LOSS_RATIO of the requested amount.
+                // Compensate for that loss so a nearly-full target does not
+                // receive 0 energy while still putting the link on cooldown.
+                const freeCapacity = target.store.getFreeCapacity(RESOURCE_ENERGY);
+                const transferAmount = Math.min(
+                    link.store[RESOURCE_ENERGY],
+                    Math.ceil(freeCapacity / (1 - LINK_LOSS_RATIO))
+                );
+                if (transferAmount > 0) {
+                    link.transferEnergy(target, transferAmount);
+                }
             }
         }
     },

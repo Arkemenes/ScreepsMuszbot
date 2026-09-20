@@ -52,6 +52,7 @@ const constants = {
     // used by utils/energyLedger.js's formula-based spend estimate
     BUILD_POWER: 5, REPAIR_POWER: 100, UPGRADE_CONTROLLER_POWER: 1,
     TOWER_ENERGY_COST: 10,
+    LINK_LOSS_RATIO: 0.03,
     // ROADMAP 0036 revision: BOOSTS is a genuine Screeps-provided global
     // constant (src/ never hardcodes boost multipliers, only consults this
     // live, same principle as REACTIONS/COMMODITIES below) - a small
@@ -557,6 +558,7 @@ assert(global.Memory.stats.persistent &&
 
 // --- ROADMAP 0096: market fair-price engine ----------------------------
 const market = require(path.join(PROJECT, "src/utils/market"));
+const marketHistoryStore = require(path.join(PROJECT, "src/utils/marketHistoryStore"));
 assert(market.weightedMedian([
     { price: 60, volume: 100 },
     { price: 70, volume: 100 },
@@ -598,7 +600,7 @@ assert(orderGroups.energy.length === 1 && orderGroups.pixel.length === 1,
         snapshotInterval: 10,
         snapshotWindowTicks: 1000,
     };
-    market.reset();
+ marketHistoryStore.clear(); market.reset();
     Game.time += 100;
     const first = market.scan();
     market.scan();
@@ -656,8 +658,9 @@ assert(orderGroups.energy.length === 1 && orderGroups.pixel.length === 1,
         "market history rehydrates sampleCount after a global reset");
     assert(reloadedSnapshot.resources.energy.windowCoverageTicks === 10,
         "market history rehydrates its original snapshot window");
-    reloadedMarket.reset();
-    RawMemory.segments[9] = savedSegment;
+ reloadedMarket.reset();
+ assert(RawMemory.segments[9] === persistedSegment, "market reset preserves persistent history segment");
+ RawMemory.segments[9] = savedSegment;
 }
 
 // --- ROADMAP 0096 follow-up: current book vs derived commodity price ---
@@ -685,7 +688,7 @@ assert(orderGroups.energy.length === 1 && orderGroups.pixel.length === 1,
     };
     Memory.settings = Memory.settings || {};
     Memory.settings.market = { currentInterval: 10, snapshotInterval: 1000 };
-    market.reset();
+ marketHistoryStore.clear(); market.reset();
     Game.time += 10;
     const commoditySnapshot = market.scan();
     const widget = commoditySnapshot.resources.widgetA;
@@ -3964,6 +3967,39 @@ findMap[FIND_HOSTILE_CREEPS] = [];
             Game.time++;
             linkMod.run(collector);
             return transferredTo;
+        }
+
+        // A target with one free slot must receive one energy, not zero after
+        // the native link loss is applied. The collector still needs the
+        // existing 50-energy floor before it may spend a cooldown.
+        {
+            const collector = mkLink("lk-small-col", 5, 5, true);
+            const target = mkLink("lk-small-target", 40, 40, false);
+            const room = Object.assign(new Room("LinkSmallCapacityRoom"), {
+                controller: null,
+                find: linkFind([collector, target]),
+            });
+            let transferAmount = null;
+            collector.room = room;
+            target.store = store(799, 800);
+            collector.store = store(50, 800);
+            collector.transferEnergy = (receivedTarget, amount) => {
+                assert(receivedTarget === target, "small-capacity link chooses the receiving link");
+                transferAmount = amount;
+                return OK;
+            };
+            Game.time++;
+            linkMod.run(collector);
+            assert(transferAmount === 2,
+                "collector requests enough energy to deliver 1 after link loss (got " +
+                    transferAmount + ")");
+
+            transferAmount = null;
+            collector.store = store(49, 800);
+            Game.time++;
+            linkMod.run(collector);
+            assert(transferAmount === null,
+                "collector below 50 energy does not spend a link cooldown");
         }
 
         // (a) controller near downgrade wins, even over an empty storage
@@ -10150,7 +10186,7 @@ origLog("\nMemory:", memStr.length, "bytes  |  rooms.W1N1 keys:",
         createOrder: () => { createCalls++; return OK; },
     };
     Memory.terminalOps = { nextId: 1, operations: {}, seenIncoming: {}, events: [], terminalBalance: {} };
-    market.reset();
+ marketHistoryStore.clear(); market.reset();
     Game.time++;
     market.scan();
     const noFunds = terminalOps.sell("W7N19", "pixel", 50, 49500);
@@ -10164,7 +10200,7 @@ origLog("\nMemory:", memStr.length, "bytes  |  rooms.W1N1 keys:",
 
     Memory.terminalOps = { nextId: 1, operations: {}, seenIncoming: {}, events: [], terminalBalance: {} };
     Game.market.credits = 200000;
-    market.reset();
+ marketHistoryStore.clear(); market.reset();
     Game.time++;
     market.scan();
     const funded = terminalOps.sell("W7N19", "pixel", 50, 49500);
@@ -10192,7 +10228,7 @@ origLog("\nMemory:", memStr.length, "bytes  |  rooms.W1N1 keys:",
     ];
     Game.market = { credits: 100000, incomingTransactions: [], getAllOrders: () => orders, calcTransactionCost: () => 999999, deal: () => { deals++; return OK; } };
     Memory.terminalOps = { nextId: 1, operations: {}, seenIncoming: {}, events: [], terminalBalance: {} };
-    market.reset(); Game.time++; market.scan();
+    marketHistoryStore.clear(); market.reset(); Game.time++; market.scan();
     const pixelBuy = terminalOps.buy("W7N17", "pixel", 2, 600);
     terminalOps.tick();
     const pixelSell = terminalOps.sell("W7N17", "pixel", 2, 400);
