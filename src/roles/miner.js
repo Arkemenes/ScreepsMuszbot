@@ -4,9 +4,9 @@ const census = require("../utils/census");
 const { takeCover } = require("../utils/combat");
 const { roomNeeds } = require("../rooms/needs");
 const config = require("../utils/config");
-const resourceTiers = require("../utils/resourceTiers");
 const names = require("../utils/names");
 const planStore = require("../utils/planStore");
+const hauler = require("./hauler");
 
 // Containers adjacent to the source, and the first one no other miner sits on.
 function findContainerSeat(creep, source) {
@@ -315,31 +315,7 @@ function distribute(creep, near) {
 
     if (creep.store[RESOURCE_ENERGY] === 0) return;
 
-    const mem = Memory.rooms[creep.room.name] || {};
-    const economy = resourceTiers.getEconomySnapshot(creep.room);
-    const reserve = mem.defenseActive
-        ? config.get("tower.criticalRatioUnderAttack", 0.8)
-        : config.get("tower.criticalRatio", 0.5);
-    const cap = tower ? tower.store.getCapacity(RESOURCE_ENERGY) : 0;
-
-    // "surplus" gates ONLY the beyond-reserve top-off (branch 4 below) - the
-    // reserve-priority fill (branch 1) is unconditional, see comment above
-    const consumersFull =
-        creep.room.energyAvailable >= creep.room.energyCapacityAvailable;
-    const surplus =
-        !!container &&
-        container.store.getFreeCapacity(RESOURCE_ENERGY) === 0 &&
-        !_.some(
-            collectorLinks,
-            (l) => l.store.getFreeCapacity(RESOURCE_ENERGY) > 0
-        );
-    const mayFeedTower = consumersFull || surplus;
-    const towerBelowReserve = tower && tower.store[RESOURCE_ENERGY] < cap * reserve;
-    const sharedCritical =
-        economy.state === "critical" && economy.reason !== "defense";
-    const feedTowerReserveFirst = towerBelowReserve && !sharedCritical;
-
-    if (feedTowerReserveFirst) {
+    if (hauler.shouldMinerFeedTower(creep.room, tower)) {
         creep.transfer(tower, RESOURCE_ENERGY);
     } else if (link) {
         creep.transfer(link, RESOURCE_ENERGY);
@@ -348,12 +324,6 @@ function distribute(creep, near) {
         container.store.getFreeCapacity(RESOURCE_ENERGY) > 0
     ) {
         creep.transfer(container, RESOURCE_ENERGY);
-    } else if (
-        tower &&
-        (mayFeedTower || towerBelowReserve) &&
-        tower.store.getFreeCapacity(RESOURCE_ENERGY) > 0
-    ) {
-        creep.transfer(tower, RESOURCE_ENERGY);
     }
 }
 

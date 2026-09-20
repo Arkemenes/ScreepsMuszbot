@@ -1,4 +1,6 @@
 # Roadmap
+# 0105 concluído: paridade de entrega do miner com a cascata e os thresholds de torre do hauler.
+
 
 O backlog canônico. Uma linha por feature. `specs/features/NNNN-*/` tem o
 detalhe.

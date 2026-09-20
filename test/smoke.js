@@ -2645,7 +2645,12 @@ const mTower = Object.assign(new OwnedStructure(), {
     id: "mtwr", structureType: STRUCTURE_TOWER, my: true,
     pos: new RoomPosition(3, 5, "W1N1"), room, store: store(100, 1000),
 });
-REG.msrc = mSource; REG.mcont = mContainer; REG.mtwr = mTower;
+const mLink = Object.assign(new OwnedStructure(), {
+    id: "mlink", structureType: STRUCTURE_LINK, my: true,
+    pos: new RoomPosition(3, 4, "W1N1"), room, store: store(0, 800),
+    isCollector: () => true,
+});
+REG.msrc = mSource; REG.mcont = mContainer; REG.mtwr = mTower; REG.mlink = mLink;
 mSource.pos.findInRange = (type, r, opts) => {
     const all = type === FIND_STRUCTURES ? [mContainer] : [];
     return opts && opts.filter ? all.filter(opts.filter) : all;
@@ -2691,26 +2696,29 @@ function seatedMiner(towerEnergy, containerFull, consumersFull) {
     c.pos.findInRange = (type, r, opts) => {
         const all =
             type === FIND_STRUCTURES
-                ? [mContainer, mTower]
+                ? [mContainer, mTower, mLink]
                 : type === FIND_MY_STRUCTURES
-                ? [mTower]
+                ? [mTower, mLink]
                 : [];
         return opts && opts.filter ? all.filter(opts.filter) : all;
     };
+    Game.time++;
+    const savedSpawnStore = spawn.store;
+    spawn.store = consumersFull ? store(300, 300) : store(0, 300);
     miner.run(c);
+    spawn.store = savedSpawnStore;
     return c._xfer;
 }
 assert(seatedMiner(100, false, true) === "mtwr",
-    "with spawns/extensions full, the miner feeds a tower below its reserve");
-assert(seatedMiner(600, false, true) === "mcont",
-    "above the reserve, the miner keeps the container topped up first");
-assert(seatedMiner(600, true, true) === "mtwr",
-    "with the container full, surplus tops the tower off further");
-assert(seatedMiner(100, false, false) === "mtwr",
-    "miner keeps feeding the tower toward reserve even while a spawn/extension " +
-    "still wants energy - the hauler never backstops a source-defense tower");
-assert(seatedMiner(100, true, false) === "mtwr",
-    "buffers full (container + link) -> miner feeds the tower even mid-fill");
+    "with spawns/extensions full, miner feeds a critical tower");
+assert(seatedMiner(600, false, true) === "mlink",
+    "without a tower destination, miner uses the collector link");
+assert(seatedMiner(600, true, true) === "mlink",
+    "a non-critical tower below the topping threshold still uses the link");
+assert(seatedMiner(100, false, false) === "mlink",
+    "hungry spawn/extensions route miner energy to the link");
+assert(seatedMiner(100, true, false) === "mlink",
+    "spawn/extension hunger keeps miner on the link even with full buffers");
 
 // 2a. The global economy snapshot uses the real spawn store, not only the
 // room energy summary. A hungry spawn routes source energy into the shared
@@ -2720,13 +2728,13 @@ assert(seatedMiner(100, true, false) === "mtwr",
     const savedSpawnStoreMinerPolicy = spawn.store;
     spawn.store = Object.assign(store(0, 300), { getFreeCapacity: () => 300 });
     Game.time++;
-    assert(seatedMiner(100, false, false) === "mcont",
-        "global critical spawn routes miner energy to the shared container before the tower (0092)");
+    assert(seatedMiner(100, false, false) === "mlink",
+        "global critical spawn routes miner energy to the link (0105)");
 
     Memory.rooms.W1N1.defenseActive = true;
     Game.time++;
-    assert(seatedMiner(100, false, false) === "mtwr",
-        "active defense keeps the source tower ahead of the shared container (0092)");
+    assert(seatedMiner(100, false, false) === "mlink",
+        "active defense keeps the critical tower destination (0105)");
     Memory.rooms.W1N1.defenseActive = false;
     spawn.store = savedSpawnStoreMinerPolicy;
 }

@@ -598,6 +598,34 @@ function fallbackTowers(room) {
     return d.fallbackTowers;
 }
 
+// Shared delivery decision for a miner's adjacent source tower. The miner
+// cannot reach spawn/extensions or storage, so those hauler destinations are
+// represented by the collector link; only a tower that the hauler would
+// accept may divert the miner's output away from that link.
+function shouldMinerFeedTower(room, tower) {
+    if (!tower || spawnExtNeedingEnergy(room).length) return false;
+
+    const roomMem = Memory.rooms[room.name] || {};
+    const criticalRatio = roomMem.defenseActive
+        ? config.get("tower.criticalRatioUnderAttack", 0.8)
+        : config.get("tower.criticalRatio", 0.5);
+    const capacity = tower.store.getCapacity(RESOURCE_ENERGY);
+    const energy = tower.store[RESOURCE_ENERGY] || 0;
+    if (energy < capacity * criticalRatio) return true;
+
+    if (
+        !resourceTiers.aboveReserve(room) ||
+        resourceTiers.getEconomySnapshot(room).state === "critical"
+    ) {
+        return false;
+    }
+
+    return (
+        tower.store.getFreeCapacity(RESOURCE_ENERGY) >
+        capacity * config.get("hauler.toppingOffThreshold", 0.05)
+    );
+}
+
 function idleNear(creep) {
     const anchor = creep.room.storage || creep.room.find(FIND_MY_SPAWNS)[0];
     if (anchor && !creep.pos.inRangeTo(anchor, 3)) {
@@ -1042,6 +1070,7 @@ var hauler = {
     pickMineralJob,
     optionalConsumer,
     spawnsAndExtensionsFull,
+    shouldMinerFeedTower,
 };
 
 module.exports = hauler;
