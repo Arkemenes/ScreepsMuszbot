@@ -246,11 +246,11 @@ function planCity(room, opts) {
                 ],
                 ramparts: [
                     "      ",
-                    " 88.8 ",
+                    " 88 8 ",
                     " 8 8  ",
                     "  8 8 ",
                     " 8 88 ",
-                    "     ",
+                    "      ",
                 ],
                 // structures: [" LL.", "LL.L", "L.LL", ".LL "],
                 // rcl: [" 876", "8766", "7668", "668 "],
