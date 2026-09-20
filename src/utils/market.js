@@ -1,9 +1,11 @@
 const config = require("./config");
+const marketHistory = require("./marketHistoryStore");
 
 let lastCurrentScanTick = null;
 let lastSnapshotTick = null;
 let lastSnapshot = null;
 const temporalSnapshots = {};
+let marketHistoryLoaded = false;
 
 function numberOrZero(value) {
     return typeof value === "number" && isFinite(value) ? value : 0;
@@ -218,6 +220,28 @@ function emptySnapshot() {
 }
 
 function scan() {
+    if (!marketHistoryLoaded && marketHistory.load()) {
+        const persisted = marketHistory.history();
+        for (const resourceType in persisted) {
+            const current = temporalSnapshots[resourceType] || [];
+            const merged = current.concat(persisted[resourceType] || []);
+            const byTick = {};
+            merged.forEach((sample) => {
+                if (sample && byTick[sample.tick] === undefined) {
+                    byTick[sample.tick] = sample;
+                }
+            });
+            temporalSnapshots[resourceType] = Object.keys(byTick)
+                .map((tick) => byTick[tick])
+                .sort((left, right) => left.tick - right.tick);
+            for (const sample of temporalSnapshots[resourceType]) {
+                if (lastSnapshotTick === null || sample.tick > lastSnapshotTick) {
+                    lastSnapshotTick = sample.tick;
+                }
+            }
+        }
+        marketHistoryLoaded = true;
+    }
     const currentInterval = Math.max(1, Number(config.get("market.currentInterval", 100)) || 100);
     if (lastSnapshot && lastCurrentScanTick !== null && Game.time - lastCurrentScanTick < currentInterval) {
         return lastSnapshot;
@@ -260,7 +284,10 @@ function scan() {
     }
     applyCommodityPrices(resources);
     lastCurrentScanTick = Game.time;
-    if (snapshotDue) lastSnapshotTick = Game.time;
+    if (snapshotDue) {
+        lastSnapshotTick = Game.time;
+        marketHistory.save(temporalSnapshots);
+    }
     lastSnapshot = { tick: Game.time, resources };
     return lastSnapshot;
 }
@@ -274,6 +301,8 @@ function reset() {
     lastSnapshotTick = null;
     lastSnapshot = null;
     for (const resourceType in temporalSnapshots) delete temporalSnapshots[resourceType];
+    marketHistoryLoaded = false;
+    marketHistory.clear();
 }
 
 function marketPrice(resourceType) {

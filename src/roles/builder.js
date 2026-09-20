@@ -12,6 +12,22 @@ const resourceTiers = require("../utils/resourceTiers");
 const names = require("../utils/names");
 const energyLedger = require("../utils/energyLedger");
 
+function abandonUnsafeLinkLoad(creep) {
+    if (creep.getState() !== "GetEnergy" || !creep.memory.stack) return false;
+    const target = Game.getObjectById(creep.memory.stack[0][1]);
+    if (
+        target &&
+        target.structureType === STRUCTURE_LINK &&
+        !target.isCollector() &&
+        !reservations.economyStable(creep.room)
+    ) {
+        creep.clearState();
+        reservations.release(creep);
+        return true;
+    }
+    return false;
+}
+
 // --- console: force specific construction sites to the front of the queue -
 // prioritizeBuild(["id1", "id2", ...]) - builders finish these sites first,
 // in this exact order, before falling back to the normal closest-to-finished
@@ -210,6 +226,10 @@ var builder = {
             opportunisticWork(creep);
         }
 
+        // A link selected while spawn/extensions were full may become
+        // reserved for the economy before this creep reaches it.
+        abandonUnsafeLinkLoad(creep);
+
         if (
             creep.store.getUsedCapacity(RESOURCE_ENERGY) > 0 &&
             creep.getState() == "GetEnergy"
@@ -336,6 +356,13 @@ var builder = {
             }
 
             let controller = creep.room.controller;
+
+            // RCL8 controllers cannot accept upgrade energy. Do not turn a
+            // builder's idle fallback into a sink for link energy.
+            if (!controller || controller.level >= 8) {
+                creep.say("zzz");
+                return;
+            }
 
             creep.pushState("Upgrade", controller.id);
 

@@ -52,6 +52,15 @@ transactions. Recovery searches use `utils/roomCache.droppedResources()` so
 the one-`room.find`-per-tick rule remains intact. `energyBalancing` exposes its
 decision and operation state through `Memory.stats.rooms.<room>.energyBalancing`.
 
+### Energy-role guards (ROADMAP 0102/0103)
+
+`roles/builder.js` e `roles/upgrader.js` revalidam um estado persistido
+`GetEnergy` antes de executá-lo: links não-coletores só podem ser retirados
+quando spawn/extensions estão estáveis. Em RCL 8, o controller é tratado como
+completo: `rooms/needs.js` deseja zero upgraders, overrides/deltas antigos não
+recriam a demanda, upgraders excedentes convertem para builder e builder não
+usa `upgradeController` como fallback.
+
 ### `src/utils/`
 
 | Module | Responsibility |
@@ -407,3 +416,6 @@ comuns bloqueiam a tile. `utils/routing.js` usa uma matriz própria no pathing
 multiroom: walls e ramparts privadas conhecidas são impassáveis, enquanto
 ramparts públicas de outros players continuam válidas. Ambas as matrizes são
 cacheadas no heap e só usam estruturas de salas com visão.
+# HistÃ³rico temporal de mercado (atualizaÃ§Ã£o)
+
+`utils/market.js` mantÃ©m o book atual e o cache de cÃ¡lculo no heap, mas grava snapshots temporais compactos em `RawMemory.segments[9]` via `utils/marketHistoryStore.js`. O segmento 9 Ã© reservado para o mercado e ativado por `planStore.activate()` junto dos segmentos de planos; os planos continuam comeÃ§ando no segmento 10. ApÃ³s global reset/deploy, o histÃ³rico Ã© reidratado antes do cÃ¡lculo de `sampleCount`. Segmento ausente ou corrompido vira histÃ³rico vazio sem abortar o tick.

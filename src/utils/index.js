@@ -9,6 +9,7 @@ let utils = {
     roomCache: require("./roomCache"),
     terrain: require("./terrain"),
     planStore: require("./planStore"),
+    marketHistory: require("./marketHistoryStore"),
     traffic: require("./traffic"),
     resourceTiers: require("./resourceTiers"),
     priority: require("./priority"),

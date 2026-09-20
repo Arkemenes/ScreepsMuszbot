@@ -186,7 +186,13 @@ function listResidual(op, target) {
     if (old && Game.time - (op.repriceTick || op.listedTick || 0) < interval) { touch(op, "listed"); return; }
     if (old && typeof Game.market.cancelOrder === "function") Game.market.cancelOrder(op.marketOrderId);
     const fee = price * op.remaining * 0.05;
-    if (Game.market.credits < fee) { op.error = "créditos insuficientes para taxa da ordem"; touch(op, "waiting"); return; }
+    if (Game.market.credits < fee) {
+        op.error = "créditos insuficientes para taxa da ordem: disponível " +
+            Game.market.credits + ", necessário " + fee +
+            ", quantidade " + op.remaining + ", preço " + price;
+        touch(op, "failed");
+        return;
+    }
     const status = Game.market.createOrder({ type: op.kind === "buy" ? ORDER_BUY : ORDER_SELL, resourceType: op.resourceType, price, totalAmount: op.remaining, roomName: target.name });
     if (status !== OK) { op.error = "createOrder retornou " + status; touch(op, "waiting"); return; }
     op.marketOrderId = null; op.listedPrice = price; op.listedAmount = op.remaining; op.listedTick = Game.time; op.repriceTick = Game.time; touch(op, "listing");

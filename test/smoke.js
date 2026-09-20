@@ -637,6 +637,29 @@ assert(orderGroups.energy.length === 1 && orderGroups.pixel.length === 1,
     delete Memory.settings.market;
 }
 
+// Market temporal history survives a module/global reset through the
+// dedicated RawMemory segment, without creating an extra snapshot on reload.
+{
+    const marketModulePath = path.join(PROJECT, "src/utils/market");
+    const historyModulePath = path.join(PROJECT, "src/utils/marketHistoryStore");
+    const savedSegment = RawMemory.segments[9];
+    const savedTime = Game.time;
+    const persistedSegment = RawMemory.segments[9];
+    assert(typeof persistedSegment === "string" && persistedSegment.length > 0,
+        "market history is persisted in its RawMemory segment");
+    delete require.cache[require.resolve(marketModulePath)];
+    delete require.cache[require.resolve(historyModulePath)];
+    const reloadedMarket = require(marketModulePath);
+    Game.time = savedTime;
+    const reloadedSnapshot = reloadedMarket.scan();
+    assert(reloadedSnapshot.resources.energy.sampleCount === 2,
+        "market history rehydrates sampleCount after a global reset");
+    assert(reloadedSnapshot.resources.energy.windowCoverageTicks === 10,
+        "market history rehydrates its original snapshot window");
+    reloadedMarket.reset();
+    RawMemory.segments[9] = savedSegment;
+}
+
 // --- ROADMAP 0096 follow-up: current book vs derived commodity price ---
 {
     const originalResources = RESOURCES_ALL;
@@ -2105,17 +2128,17 @@ controller.level = 8;
 controller.ticksToDowngrade = 50000; // < 100000 -> base tier itself wants 1
 Memory.rooms[room.name].autoscale = { delta: { upgrader: 5 }, lastAdjustTick: Game.time };
 Game.time++;
-assert(needs.roomNeeds(room).upgrader === 1,
-    "RCL8 never wants more than 1 upgrader, even with a large stale autoscale delta");
+assert(needs.roomNeeds(room).upgrader === 0,
+    "RCL8 wants zero upgraders when the controller is already full");
 controller.ticksToDowngrade = 200000; // == CONTROLLER_DOWNGRADE[8] -> base tier wants 0
 Game.time++;
-assert(needs.roomNeeds(room).upgrader === 1,
-    "the RCL8 clamp holds even when the base tier itself would want 0 plus a stale positive delta");
+assert(needs.roomNeeds(room).upgrader === 0,
+    "the RCL8 zero-demand rule holds even with a stale positive delta");
 delete Memory.rooms[room.name].autoscale;
 
 controller.ticksToDowngrade = 199999; // 1 tick below max -> base tier wants 1
-assert(needs.roomNeeds(room).upgrader === 1,
-    "RCL8 wants an upgrader as soon as the downgrade timer is off its max, not just below the old 180000 margin");
+assert(needs.roomNeeds(room).upgrader === 0,
+    "RCL8 does not create an upgrader just because the downgrade timer is below its maximum");
 controller.level = priorLevel;
 controller.ticksToDowngrade = priorTicksToDowngrade;
 
@@ -9390,7 +9413,7 @@ function mineralStore(resources, freeCap) {
 
     function mkUpController(ticksToDowngrade) {
         return Object.assign(new RoomObject(), {
-            id: "up-ctrl", my: true, level: 8, ticksToDowngrade,
+            id: "up-ctrl", my: true, level: 7, ticksToDowngrade,
             pos: new RoomPosition(25, 25, "UpTiersRoom"),
         });
     }
@@ -9517,6 +9540,66 @@ function mineralStore(resources, freeCap) {
         assert(creep.withdrawnFrom === "up-link",
             "upgrader may withdraw from a non-collector link once spawn/extensions are stable");
     }
+}
+
+// A persisted GetEnergy state must be revalidated when the room becomes
+// critical, and RCL8 builders must not fall back to the full controller.
+{
+    const builderMod = require(path.join(PROJECT, "src/roles/builder"));
+    const upgraderMod = require(path.join(PROJECT, "src/roles/upgrader"));
+    const savedLevel = controller.level;
+    const savedEnergy = room.energyAvailable;
+    const savedCapacity = room.energyCapacityAvailable;
+    const savedStructures = findMap[FIND_STRUCTURES];
+    const savedMyStructures = findMap[FIND_MY_STRUCTURES];
+    const staleLink = Object.assign(new StructureLink(), {
+        id: "stale-link", structureType: STRUCTURE_LINK, room,
+        pos: new RoomPosition(22, 22, "W1N1"),
+        store: store(500, 800), isCollector: () => false,
+    });
+    REG[staleLink.id] = staleLink;
+    findMap[FIND_STRUCTURES] = [staleLink];
+    findMap[FIND_MY_STRUCTURES] = [staleLink];
+    room.energyAvailable = 0;
+    room.energyCapacityAvailable = 300;
+
+    const staleBuilder = makeCreep("StaleBuilder", "builder", { store: store(0, 50) });
+    staleBuilder.memory.stack = [["GetEnergy", staleLink.id]];
+    staleBuilder.withdraw = (target) => { staleBuilder.withdrawnFrom = target.id; return OK; };
+    Game.time++;
+    builderMod.run(staleBuilder);
+    assert(staleBuilder.withdrawnFrom !== staleLink.id && !staleBuilder.memory.stack,
+        "builder abandons a persisted non-collector link load when spawn/extensions are critical");
+
+    const staleUpgrader = makeCreep("StaleUpgrader", "upgrader", { store: store(0, 50) });
+    staleUpgrader.memory.stack = [["GetEnergy", staleLink.id]];
+    staleUpgrader.withdraw = (target) => { staleUpgrader.withdrawnFrom = target.id; return OK; };
+    Game.time++;
+    upgraderMod.run(staleUpgrader);
+    assert(staleUpgrader.withdrawnFrom !== staleLink.id && !staleUpgrader.memory.stack,
+        "upgrader abandons a persisted non-collector link load when spawn/extensions are critical");
+
+    controller.level = 8;
+    room.energyAvailable = 300;
+    room.energyCapacityAvailable = 300;
+    const rcl8Builder = makeCreep("Rcl8Builder", "builder", { store: store(0, 50) });
+    let upgraded = false;
+    rcl8Builder.upgradeController = () => { upgraded = true; return OK; };
+    Game.time++;
+    builderMod.run(rcl8Builder);
+    assert(!upgraded, "builder never uses a full RCL8 controller as an upgrade fallback");
+
+    controller.level = savedLevel;
+    room.energyAvailable = savedEnergy;
+    room.energyCapacityAvailable = savedCapacity;
+    findMap[FIND_STRUCTURES] = savedStructures;
+    findMap[FIND_MY_STRUCTURES] = savedMyStructures;
+    delete Game.creeps.StaleBuilder;
+    delete Game.creeps.StaleUpgrader;
+    delete Game.creeps.Rcl8Builder;
+    delete Memory.creeps.StaleBuilder;
+    delete Memory.creeps.StaleUpgrader;
+    delete Memory.creeps.Rcl8Builder;
 }
 
 // An upgrader converted to builder occupies one economy slot; the next
@@ -10043,6 +10126,56 @@ origLog("\nMemory:", memStr.length, "bytes  |  rooms.W1N1 keys:",
     assert(!Object.values(Memory.terminalOps.operations).some((op) => op.kind === "receipt"), "0098 does not turn managed SELL cargo into a synthetic receipt");
     Game.rooms = oldRooms; Game.creeps = oldCreeps; Game.market = oldMarket; Memory.terminalOps = oldOps;
 }
+// A market SELL without credits fails before createOrder and releases its
+// resource lock; with enough credits it reaches order creation.
+{
+    const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
+    const oldRooms = Game.rooms, oldMarket = Game.market, oldOps = Memory.terminalOps;
+    const room = { name: "W7N19", controller: { my: true } };
+    const orders = [
+        { id: "energy-buy", resourceType: RESOURCE_ENERGY, type: ORDER_BUY, price: 60, remainingAmount: 1000, roomName: "W7N20" },
+        { id: "energy-sell", resourceType: RESOURCE_ENERGY, type: ORDER_SELL, price: 70, remainingAmount: 1000, roomName: "W7N20" },
+        { id: "pixel-buy", resourceType: "pixel", type: ORDER_BUY, price: 40000, remainingAmount: 100, roomName: "W7N20" },
+        { id: "pixel-sell", resourceType: "pixel", type: ORDER_SELL, price: 60000, remainingAmount: 100, roomName: "W7N20" },
+    ];
+    Game.rooms = Object.assign({}, oldRooms, { W7N19: room });
+    let createCalls = 0;
+    Game.market = {
+        credits: 0,
+        incomingTransactions: [],
+        orders: {},
+        getAllOrders: (filter) => filter
+            ? orders.filter((order) => order.type === filter.type && order.resourceType === filter.resourceType)
+            : orders,
+        createOrder: () => { createCalls++; return OK; },
+    };
+    Memory.terminalOps = { nextId: 1, operations: {}, seenIncoming: {}, events: [], terminalBalance: {} };
+    market.reset();
+    Game.time++;
+    market.scan();
+    const noFunds = terminalOps.sell("W7N19", "pixel", 50, 49500);
+    terminalOps.tick();
+    terminalOps.tick();
+    const noFundsOp = Memory.terminalOps.operations[noFunds.id];
+    assert(noFundsOp.state === "failed" && createCalls === 0 && /disponível 0/.test(noFundsOp.error),
+        "pixel SELL without credits fails before createOrder with the fee diagnostics");
+    const retry = terminalOps.sell("W7N19", "pixel", 50, 49500);
+    assert(retry.ok, "failed pixel SELL releases the terminal/resource lock");
+
+    Memory.terminalOps = { nextId: 1, operations: {}, seenIncoming: {}, events: [], terminalBalance: {} };
+    Game.market.credits = 200000;
+    market.reset();
+    Game.time++;
+    market.scan();
+    const funded = terminalOps.sell("W7N19", "pixel", 50, 49500);
+    terminalOps.tick();
+    terminalOps.tick();
+    const fundedOp = Memory.terminalOps.operations[funded.id];
+    assert(fundedOp.state === "listing" && createCalls === 1,
+        "pixel SELL with enough credits calls createOrder and enters listing");
+    Game.rooms = oldRooms; Game.market = oldMarket; Memory.terminalOps = oldOps;
+}
+
 // Market-only resources (pixel/access-key/CPU-unlock family) bypass physical
 // storage while keeping the normal BUY/SELL API and operation accounting.
 {

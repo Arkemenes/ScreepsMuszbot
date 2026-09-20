@@ -112,6 +112,7 @@ detalhe.
 | 0100 | [Preço direto para ciclos de commodities](features/0100-market-commodity-cycle-prices/spec.md) | in-progress | preserva preços temporais de energy/minerais em receitas reversíveis e mantém custo derivado para commodities acíclicas |
 | 0101 | [Gates de storage para reparo defensivo](features/0101-defensive-repair-storage-gates/spec.md) | done | reparo saudável de walls/ramparts exige >10% de storage; hardening exige >=70%; builder e tower compartilham os gates sem alterar a política econômica de 50% |
 | 0102 | [Gate econômico para links e conversão de upgrader](features/0102-link-economy-gate-and-upgrader-conversion/spec.md) | done | builder/upgrader só retiram de links não-coletores com spawn/extensions estáveis; upgrader convertido reduz em 1 a demanda final de upgraders |
+| 0103 | [Guarda de energia e conversão de upgraders em RCL 8](features/0103-rcl8-upgrader-energy-guard/spec.md) | done | revalida estados de saque, bloqueia upgrade de controller completo e converte excedentes de RCL 8 |
 
 ## Fila atual
 

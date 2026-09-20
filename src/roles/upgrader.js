@@ -8,6 +8,32 @@ const reservations = require("../utils/reservations");
 const resourceTiers = require("../utils/resourceTiers");
 const names = require("../utils/names");
 
+function abandonUnsafeLinkLoad(creep) {
+    if (creep.getState() !== "GetEnergy" || !creep.memory.stack) return false;
+    const target = Game.getObjectById(creep.memory.stack[0][1]);
+    if (
+        target &&
+        target.structureType === STRUCTURE_LINK &&
+        !target.isCollector() &&
+        !reservations.economyStable(creep.room)
+    ) {
+        creep.clearState();
+        reservations.release(creep);
+        return true;
+    }
+    return false;
+}
+
+function isExcessUpgrader(creep, wanted) {
+    if (wanted === 0) return true;
+    if (!creep.room.controller || creep.room.controller.level < 8) return false;
+    const upgraders = census
+        .creepsByRole(creep.room.name, "upgrader")
+        .slice()
+        .sort((a, b) => a.name.localeCompare(b.name));
+    return upgraders.indexOf(creep) >= wanted;
+}
+
 var roleUpgrader = {
     /** @param {Creep} creep **/
     run: function (creep) {
@@ -15,12 +41,16 @@ var roleUpgrader = {
 
         // once the controller is maxed (and not about to downgrade) the room
         // has no use for upgraders -> turn them into builders
-        if (this.wanted(creep.room) === 0) {
+        if (isExcessUpgrader(creep, this.wanted(creep.room))) {
             creep.clearState();
             creep.memory.convertedFrom = "upgrader";
             creep.memory.role = "builder";
             return;
         }
+
+        // A link selected while spawn/extensions were full may become
+        // reserved for the economy before this creep reaches it.
+        abandonUnsafeLinkLoad(creep);
 
         if (creep.invokeState()) {
             return;

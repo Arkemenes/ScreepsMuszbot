@@ -391,10 +391,9 @@ function compute(room) {
     if (!ctrl || !ctrl.my) {
         upgrader = 0;
     } else if (rcl >= 8) {
-        // RCL8 has no more RCL progress to bank - keep 1 upkeep upgrader
-        // alive any time the downgrade timer isn't fully topped off, so
-        // it's never left to idle down toward zero.
-        upgrader = ctrl.ticksToDowngrade < CONTROLLER_DOWNGRADE[8] ? 1 : 0;
+        // RCL8 is already the maximum level. There is no controller progress
+        // left to fill, so the upgrader slot is intentionally empty.
+        upgrader = 0;
     } else if (storageEnergy > 400000) {
         upgrader = 4;
     } else if (storageEnergy > 150000) {
@@ -567,21 +566,16 @@ function compute(room) {
     };
     autoscale.apply(room, wanted);
 
-    // Hard guarantee, independent of any stale autoscale delta: an RCL8
-    // room never needs more than 1 upgrader (upkeep only, ticksToDowngrade
-    // already decides even that) - the level itself can't go any higher,
-    // so extra upgraders would just idle at the controller. grow() already
-    // refuses to add to this role at RCL8 and shrink() will eventually
-    // drain a delta accumulated before hitting RCL8, but that's a
-    // per-cooldown-window walk-back (could take a while with a large
-    // delta) - this clamp makes the ceiling immediate instead of eventual.
-    if (rcl >= 8) wanted.upgrader = Math.min(wanted.upgrader, 1);
+    // Apply manual controls before the hard RCL8 ceiling, so an old override
+    // cannot recreate the surplus this guard is meant to remove.
+    applyOverride(name, wanted);
+    if (rcl >= 8) wanted.upgrader = 0;
 
     // Apply the conversion deduction after autoscale/clamps so it affects the
     // final desired upgrader population without persisting a stale counter.
     wanted.upgrader = Math.max(0, wanted.upgrader - convertedUpgraders);
 
-    return applyOverride(name, wanted);
+    return wanted;
 }
 
 function roomNeeds(room) {
