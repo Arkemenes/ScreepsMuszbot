@@ -321,7 +321,8 @@ var builder = {
             const constructionSites = roomCache.constructionSites(creep.room);
             const economy = resourceTiers.getEconomySnapshot(creep.room);
             var targetConstructionSite =
-                economy.state === "critical"
+                economy.state === "critical" &&
+                creep.store.getUsedCapacity(RESOURCE_ENERGY) === 0
                     ? null
                     : priorityTarget(creep) ||
                         _.sortBy(

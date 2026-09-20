@@ -2482,8 +2482,8 @@ findMap[FIND_MY_STRUCTURES] = findMap[FIND_MY_STRUCTURES].filter((s) => s.id !==
     unstableBuilder._built = false;
     unstableBuilder.build = () => { unstableBuilder._built = true; return OK; };
     builder.run(unstableBuilder);
-    assert(!unstableBuilder._built,
-        "builder waits while the room economy is critical (0093)");
+    assert(unstableBuilder._built,
+        "builder with energy keeps working while the room economy is critical (0093)");
 
     spawn.store = Object.assign(store(300, 300), { getFreeCapacity: () => 0 });
     Game.time++;
@@ -9615,6 +9615,25 @@ function mineralStore(resources, freeCap) {
     assert(staleUpgrader.withdrawnFrom !== staleLink.id && !staleUpgrader.memory.stack,
         "upgrader abandons a persisted non-collector link load when spawn/extensions are critical");
 
+    const carriedSite = Object.assign(new ConstructionSite(), {
+        id: "carried-site", structureType: STRUCTURE_EXTENSION,
+        progress: 0, progressTotal: 1000, room,
+        pos: new RoomPosition(21, 21, "W1N1"),
+    });
+    REG[carriedSite.id] = carriedSite;
+    findMap[FIND_MY_CONSTRUCTION_SITES] = [carriedSite];
+    const carriedBuilder = makeCreep("CarriedBuilder", "builder", { store: store(50, 50) });
+    let builtCarriedSite = false;
+    carriedBuilder.build = (target) => {
+        builtCarriedSite = target.id === carriedSite.id;
+        return OK;
+    };
+    Game.time++;
+    builderMod.run(carriedBuilder);
+    assert(builtCarriedSite,
+        "builder with carried energy keeps working on construction sites during a critical economy");
+    findMap[FIND_MY_CONSTRUCTION_SITES] = [];
+
     controller.level = 8;
     room.energyAvailable = 300;
     room.energyCapacityAvailable = 300;
@@ -9633,9 +9652,11 @@ function mineralStore(resources, freeCap) {
     delete Game.creeps.StaleBuilder;
     delete Game.creeps.StaleUpgrader;
     delete Game.creeps.Rcl8Builder;
+    delete Game.creeps.CarriedBuilder;
     delete Memory.creeps.StaleBuilder;
     delete Memory.creeps.StaleUpgrader;
     delete Memory.creeps.Rcl8Builder;
+    delete Memory.creeps.CarriedBuilder;
 }
 
 // An upgrader converted to builder occupies one economy slot; the next
