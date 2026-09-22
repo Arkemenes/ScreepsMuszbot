@@ -3977,9 +3977,11 @@ findMap[FIND_HOSTILE_CREEPS] = [];
             return transferredTo;
         }
 
-        // A target with one free slot must receive one energy, not zero after
-        // the native link loss is applied. The collector still needs the
-        // existing 50-energy floor before it may spend a cooldown.
+        // The engine rejects transferEnergy() with ERR_FULL when the
+        // requested amount exceeds the target's free capacity, so the
+        // request must never exceed it - even for a target with only one
+        // free slot. The collector still needs the existing 50-energy floor
+        // before it may spend a cooldown.
         {
             const collector = mkLink("lk-small-col", 5, 5, true);
             const target = mkLink("lk-small-target", 40, 40, false);
@@ -3998,8 +4000,8 @@ findMap[FIND_HOSTILE_CREEPS] = [];
             };
             Game.time++;
             linkMod.run(collector);
-            assert(transferAmount === 2,
-                "collector requests enough energy to deliver 1 after link loss (got " +
+            assert(transferAmount === 1,
+                "collector never requests more than the target's free capacity (got " +
                     transferAmount + ")");
 
             transferAmount = null;
@@ -4008,6 +4010,46 @@ findMap[FIND_HOSTILE_CREEPS] = [];
             linkMod.run(collector);
             assert(transferAmount === null,
                 "collector below 50 energy does not spend a link cooldown");
+        }
+
+        // Two collectors in the same room both target the same (not yet
+        // updated within this tick) receiving link - only the first one to
+        // run may actually send; the second must not spend its cooldown on
+        // a transfer the engine would reject once the first lands.
+        {
+            const collectorA = mkLink("lk-multi-col-a", 5, 5, true);
+            const collectorB = mkLink("lk-multi-col-b", 6, 6, true);
+            const target = mkLink("lk-multi-target", 40, 40, false);
+            const room = Object.assign(new Room("LinkMultiCollectorRoom"), {
+                controller: null,
+                find: linkFind([collectorA, collectorB, target]),
+            });
+            collectorA.room = room;
+            collectorB.room = room;
+            collectorA.store = store(200, 800);
+            collectorB.store = store(200, 800);
+            target.store = store(0, 800);
+
+            let sends = [];
+            collectorA.transferEnergy = (t, amount) => { sends.push({ from: "a", t, amount }); return OK; };
+            collectorB.transferEnergy = (t, amount) => { sends.push({ from: "b", t, amount }); return OK; };
+
+            Game.time++;
+            linkMod.run(collectorA);
+            linkMod.run(collectorB);
+            assert(sends.length === 1,
+                "only one collector link sends energy per room per tick (got " +
+                    sends.length + ")");
+            assert(sends[0].from === "a",
+                "the first collector to run in the tick keeps the claim");
+
+            // Next tick, the room's send claim resets and the other
+            // collector may send.
+            sends = [];
+            Game.time++;
+            linkMod.run(collectorB);
+            assert(sends.length === 1 && sends[0].from === "b",
+                "the per-room send claim resets on the next tick");
         }
 
         // (a) controller near downgrade wins, even over an empty storage

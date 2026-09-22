@@ -2,6 +2,26 @@ const config = require("../utils/config");
 const resourceTiers = require("../utils/resourceTiers");
 const roomCache = require("../utils/roomCache");
 
+// Multiple collector links in the same room run independently within the
+// same tick and each sees the same (not-yet-applied) free capacity on a
+// shared target - intents don't mutate store synchronously, so a second
+// collector can issue a transferEnergy() the engine will reject once the
+// first one's intent lands, wasting that link's cooldown for nothing. One
+// send per room per tick avoids the race entirely; same Game.time-keyed
+// reset pattern as utils/roomCache.js.
+let sendClaimTick = -1;
+let claimedRooms = {};
+
+function claimRoomSend(roomName) {
+    if (sendClaimTick !== Game.time) {
+        sendClaimTick = Game.time;
+        claimedRooms = {};
+    }
+    if (claimedRooms[roomName]) return false;
+    claimedRooms[roomName] = true;
+    return true;
+}
+
 // Split the non-collector links into "the one near the controller" (range 3,
 // same geometric pattern utils/energy.js's receivingLink() already uses) and
 // "everything else" - the base/storage link. With more than 2 non-collector
@@ -81,15 +101,19 @@ var link = {
             let target = pickTarget(nonCollectorLinks, link.room);
 
             if (target) {
-                // The link consumes LINK_LOSS_RATIO of the requested amount.
-                // Compensate for that loss so a nearly-full target does not
-                // receive 0 energy while still putting the link on cooldown.
-                const freeCapacity = target.store.getFreeCapacity(RESOURCE_ENERGY);
+                // The engine rejects transferEnergy() with ERR_FULL when the
+                // requested amount exceeds the target's free capacity - that
+                // check is against the raw amount, not the amount left after
+                // LINK_LOSS_RATIO is applied, so amount must never exceed
+                // freeCapacity (a previous version tried to compensate for
+                // the loss by requesting more than freeCapacity and always
+                // hit ERR_FULL instead - every collector send silently
+                // failed).
                 const transferAmount = Math.min(
                     link.store[RESOURCE_ENERGY],
-                    Math.ceil(freeCapacity / (1 - LINK_LOSS_RATIO))
+                    target.store.getFreeCapacity(RESOURCE_ENERGY)
                 );
-                if (transferAmount > 0) {
+                if (transferAmount > 0 && claimRoomSend(link.room.name)) {
                     link.transferEnergy(target, transferAmount);
                 }
             }
