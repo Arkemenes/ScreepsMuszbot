@@ -56,6 +56,16 @@ function lockConflict(kind, from, to, resourceType) {
         const sameTo = to && (op.sourceRoom === to || op.targetRoom === to);
         if (kind === "receipt") return sameTo && op.kind === "receipt" && op.resourceType === resourceType;
         if (op.kind === "receipt") return false;
+        // A marketOnly resource (pixel, cpuUnlock, accessKey) lives in
+        // Game.resources, never in a terminal, so it neither competes for the
+        // terminal's space/cooldown nor is blocked by something that does: the
+        // "one operation of this kind per room" rule below must not apply to it
+        // in either direction (bug real, usuário reportou em produção,
+        // 2026-09-24: terminalSell de pixel recusada por causa de uma venda de O
+        // ativa na mesma sala). The stock itself IS account-global, though, so
+        // two operations on the same marketOnly resource still conflict no
+        // matter which room they were issued from.
+        if (marketOnlyResource(resourceType) || marketOnlyResource(op.resourceType)) return op.resourceType === resourceType;
         if ((sameFrom || sameTo) && op.resourceType === resourceType) return true;
         return sameFrom && op.kind === kind;
     });
@@ -290,6 +300,31 @@ function competitivePrice(op) {
     if (!prices.length) return op.referencePrice;
     return op.kind === "buy" ? Math.max.apply(null, prices) + step : Math.min.apply(null, prices) - step;
 }
+// How much of a SELL's cargo may sit in the terminal at once. The remainder of
+// the terminal is deliberate headroom: the deal's fee energy, plus room for
+// incoming transfers and BUY deliveries. See config.terminalOps.
+function saleBuffer(op, source) {
+    return Math.min(
+        config.get("terminalOps.saleBufferAmount", 300000),
+        Math.floor((source.terminal.store.getCapacity(op.resourceType) || 0) * config.get("terminalOps.saleBufferCapacityRatio", 0.85))
+    );
+}
+// Tops the terminal up to saleBuffer() for a SELL. Returns whatever assign()
+// returns: true only when a hauler actually took the job.
+function stageSaleCargo(op, source) {
+    const buffer = saleBuffer(op, source);
+    const already = storeValue(source.terminal.store, op.resourceType);
+    // lockConflict guarantees this op is the sole active sell/transfer
+    // for this resource/room, so anything already in the terminal - a
+    // previous batch, or logistics that dropped it here before this
+    // operation existed - is usable cargo. Without crediting it here,
+    // loadedAmount stays zero whenever the terminal already holds at
+    // least the staging buffer, and candidateOrders' cargo cap then
+    // blocks every deal forever.
+    const usable = Math.min(already, op.remaining);
+    if (usable > op.loadedAmount) op.loadedAmount = usable;
+    return assign(op, source, "load", source.storage, source.terminal, Math.min(op.remaining - op.loadedAmount, Math.max(0, buffer - already)));
+}
 function listResidual(op, target) {
     if (!Game.market || typeof Game.market.createOrder !== "function") { op.error = "mercado indisponível"; touch(op, "waiting"); return; }
     const ceiling = op.kind === "buy" ? op.limit / 1.05 : Infinity;
@@ -299,15 +334,40 @@ function listResidual(op, target) {
     const old = op.marketOrderId && Game.market.orders && Game.market.orders[op.marketOrderId];
     const interval = config.get("terminalOps.repriceInterval", 1000);
     if (old && Game.time - (op.repriceTick || op.listedTick || 0) < interval) { touch(op, "listed"); return; }
-    if (old && typeof Game.market.cancelOrder === "function") Game.market.cancelOrder(op.marketOrderId);
+    // Repricing a live order goes through changeOrderPrice, which keeps the
+    // order (and its id) and only charges (price - old.price) * remaining *
+    // 0.05 - nothing at all when the price goes down. cancelOrder +
+    // createOrder, what this did until 2026-09-24, re-paid the full 5% of the
+    // whole order every repriceInterval and refunded none of the previous fee:
+    // repricing the 62751 O of terminal-180, listed at 62.445, would have burned
+    // ~196k credits (bug real, usuário reportou em produção). Recreating is now
+    // only the fallback for when changeOrderPrice itself fails.
+    let changed = null;
+    if (old) {
+        if (price === op.listedPrice) { op.repriceTick = Game.time; touch(op, "listed"); return; }
+        const delta = Math.max(0, price - old.price) * orderAmount(old) * 0.05;
+        if (Game.market.credits < delta) {
+            op.error = "créditos insuficientes para reprecificar: disponível " +
+                Game.market.credits + ", necessário " + delta + ", preço " + old.price + " -> " + price;
+            touch(op, "listed");
+            return;
+        }
+        changed = typeof Game.market.changeOrderPrice === "function" ? Game.market.changeOrderPrice(op.marketOrderId, price) : null;
+        if (changed === OK) { op.listedPrice = price; op.repriceTick = Game.time; touch(op, "listed"); return; }
+        if (changed !== null) op.error = "changeOrderPrice retornou " + changed;
+    }
     const fee = price * op.remaining * 0.05;
+    // Checked before cancelOrder on purpose: the old order used to be cancelled
+    // first, so an operation short on credits lost the listing it had already
+    // paid for and dropped straight to "failed" with nothing on the market.
     if (Game.market.credits < fee) {
         op.error = "créditos insuficientes para taxa da ordem: disponível " +
             Game.market.credits + ", necessário " + fee +
             ", quantidade " + op.remaining + ", preço " + price;
-        touch(op, "failed");
+        touch(op, old ? "listed" : "failed");
         return;
     }
+    if (old && typeof Game.market.cancelOrder === "function") Game.market.cancelOrder(op.marketOrderId);
     const status = Game.market.createOrder({ type: op.kind === "buy" ? ORDER_BUY : ORDER_SELL, resourceType: op.resourceType, price, totalAmount: op.remaining, roomName: target.name });
     if (status !== OK) { op.error = "createOrder retornou " + status; touch(op, "waiting"); return; }
     op.marketOrderId = null; op.listedPrice = price; op.listedAmount = op.remaining; op.listedTick = Game.time; op.repriceTick = Game.time; touch(op, "listing");
@@ -520,22 +580,25 @@ function tick() {
         if (op.kind === "transfer") tickTransfer(op, source, target);
         else if (op.kind === "sell") {
             if (op.state === "settling") settleDeal(op, source);
-            else if (["queued", "waiting"].indexOf(op.state) >= 0) {
-                const buffer = Math.min(config.get("terminalOps.saleBufferAmount", 10000), Math.floor((source.terminal.store.getCapacity(op.resourceType) || 0) * config.get("terminalOps.saleBufferCapacityRatio", 0.1)));
-                const already = storeValue(source.terminal.store, op.resourceType);
-                // lockConflict guarantees this op is the sole active sell/transfer
-                // for this resource/room, so anything already in the terminal - a
-                // previous batch, or logistics that dropped it here before this
-                // operation existed - is usable cargo. Without crediting it here,
-                // loadedAmount stays zero whenever the terminal already holds at
-                // least the staging buffer, and candidateOrders' cargo cap then
-                // blocks every deal forever.
-                const usable = Math.min(already, op.remaining);
-                if (usable > op.loadedAmount) op.loadedAmount = usable;
-                assign(op, source, "load", source.storage, source.terminal, Math.min(op.remaining - op.loadedAmount, Math.max(0, buffer - already)));
-            }
+            else if (["queued", "waiting"].indexOf(op.state) >= 0) stageSaleCargo(op, source);
             else if (op.state === "atTerminal") executeDeal(op, source);
-            else if (op.state === "listing" || op.state === "listed") listResidual(op, source);
+            else if (op.state === "listing" || op.state === "listed") {
+                // A public SELL order advertises op.remaining, but a buyer can
+                // only take what is physically in the terminal, and nothing used
+                // to restock a listed operation: terminal-180 advertised 62751 O
+                // against a terminal holding 10000 (bug real, usuário reportou em
+                // produção, 2026-09-24), so the 5% listing fee bought reach the
+                // cargo could never cover. Topping the terminal up wins over
+                // repricing this tick - the price is useless without stock.
+                const listedState = op.state;
+                const shortfall = Math.min(saleBuffer(op, source), op.remaining) - storeValue(source.terminal.store, op.resourceType);
+                // assign() demotes the operation to "waiting"/"atTerminal" when it
+                // cannot dispatch; the order is still live, so put it back where it
+                // was and retry next tick instead of restarting the listing flow.
+                if (shortfall > 0 && !stageSaleCargo(op, source)) touch(op, listedState);
+                else if (shortfall > 0) return;
+                listResidual(op, source);
+            }
         } else if (op.kind === "buy") {
             if (op.state === "settling") settleDeal(op, source);
             else if (["queued", "waiting"].indexOf(op.state) >= 0) executeDeal(op, source);

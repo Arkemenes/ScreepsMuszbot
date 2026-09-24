@@ -192,14 +192,21 @@ const defaults = {
         linkReceiveFillRatio: 0.95,
     },
     terminalOps: {
-        // ROADMAP 0098: the terminal is transit, so a public SELL order only
-        // keeps a small, replenishable committed buffer there.
+        // ROADMAP 0098: a SELL stages its goods in the terminal in batches of
+        // at most `buffer = min(saleBufferAmount, capacity * saleBufferCapacityRatio)`.
+        // Raised to 85% of the terminal (2026-09-24): the old 10000/0.1 pair
+        // forced a 10k batch with a hauler round trip plus a terminal cooldown
+        // between each one, so a 50k sale crawled through five cycles. The
+        // 15% left over is deliberate headroom - roughly 5% for the fee energy
+        // the deal needs on top of the cargo, 10% so incoming transfers and
+        // BUY deliveries still have somewhere to land. saleBufferAmount is now
+        // the terminal's own capacity, i.e. the ratio is what actually binds.
         enabled: true,
         recoveryTicks: 10000,
         marketPriceStep: 0.001,
         repriceInterval: 1000,
-        saleBufferAmount: 10000,
-        saleBufferCapacityRatio: 0.1,
+        saleBufferAmount: 300000,
+        saleBufferCapacityRatio: 0.85,
         statsWindowTicks: 60,
         operationRetentionTicks: 10000,
     },

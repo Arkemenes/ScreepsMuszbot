@@ -69,6 +69,55 @@ whenever the terminal already met the buffer, permanently zeroing
 `candidateOrders()`'s cargo cap and blocking every deal (and the energy-fee
 loading that only runs once a deal executes) forever.
 
+O tamanho desse lote é
+`buffer = min(terminalOps.saleBufferAmount, capacidade × terminalOps.saleBufferCapacityRatio)`.
+Os defaults foram `10000`/`0.1` até 2026-09-24, o que dava 10000 fixos num
+terminal de 300000: uma venda de 50k virava cinco ciclos, cada um com ida e
+volta de hauler mais o cooldown do terminal, e o usuário via a operação
+parada em 10k "esperando vender pra pegar mais". Agora são `300000`/`0.85` —
+o `saleBufferAmount` é a própria capacidade do terminal, então quem manda é a
+razão. Os 15% restantes são folga deliberada: ~5% pra energia da taxa que o
+`deal()` precisa **além** da carga (`executeDeal()` só descobre o custo
+depois de escolher a ordem, e o job `fee` não passa por checagem de
+capacidade) e ~10% pra transferências de entrada e entregas de BUY ainda
+terem onde cair. O lote em si é protegido por `assign()`, que recusa um
+`load` maior que o espaço livre do terminal e devolve a operação pra
+`waiting` em vez de estourar.
+
+### Uma ordem listada continua sendo abastecida e reprecifica de graça (ROADMAP 0098)
+
+Uma venda que não acha ordem de compra dentro do limite cai em `listing`/`listed`
+e publica a própria ordem com `totalAmount: op.remaining`. Dois problemas reais
+apareceram em produção em 2026-09-24 (`terminal-180`, 62751 O anunciadas a
+62.445 contra um terminal com 10000 O):
+
+- **Sem lastro físico.** O comprador só consegue retirar o que está fisicamente
+  no terminal, e `listResidual()` nunca designava hauler: a ordem anunciava
+  62751 e entregava no máximo 10000. Agora o ramo `listing`/`listed` de uma
+  SELL chama `stageSaleCargo()` antes de reprecificar, repondo até
+  `min(saleBuffer(), op.remaining)` — estoque vale mais que preço. Quando
+  `assign()` não consegue despachar (sem hauler, sem capacidade), a operação
+  volta pro estado em que estava em vez de reiniciar o fluxo de listagem: a
+  ordem continua viva e `syncManagedOrders()` segue contabilizando preenchimentos
+  normalmente, porque só exige `active(op) && op.marketOrderId`.
+- **Reprecificação cara.** A cada `terminalOps.repriceInterval` (1000) o código
+  fazia `cancelOrder` + `createOrder`. `createOrder` cobra 5% de
+  `preço × quantidade` e `cancelOrder` não devolve nada, então cada
+  reprecificação pagava a taxa inteira de novo — ~196k créditos no caso acima.
+  Agora usa `Game.market.changeOrderPrice(id, preço)`, que preserva a ordem e
+  cobra só `(novo − antigo) × remainingAmount × 0,05`, ou seja **zero quando o
+  preço cai** — o caso normal de uma venda. Recriar virou fallback para quando
+  `changeOrderPrice` falha ou não existe.
+
+Dois efeitos colaterais do desenho antigo sumiram junto. O `cancelOrder` rodava
+**antes** da checagem de crédito, então uma operação sem saldo perdia a listagem
+que já tinha pago e ia direto pra `failed`; a checagem agora vem primeiro e,
+havendo ordem viva, o estado final é `listed`, não `failed`. E como o id da
+ordem é preservado, o `bindCreatedOrders()` deixa de precisar readotar a ordem
+por heurística (sala + recurso + tipo + `created`) a cada ciclo — ele só atua na
+primeira listagem, que é o único momento em que `createOrder` roda sem devolver
+o id.
+
 The surplus reservation must also recognize `assign()`'s no-hauler fallback:
 the instant no hauler is free, `assign()` demotes an in-flight unload attempt
 straight from `awaitingReceipt`/`unloading` to plain `waiting` (with

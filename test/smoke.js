@@ -10805,6 +10805,22 @@ origLog("\nMemory:", memStr.length, "bytes  |  rooms.W1N1 keys:",
         "touch() logs to console when an operation reaches the final 'failed' state");
     const retry = terminalOps.sell("W7N19", "pixel", 50, 49500);
     assert(retry.ok, "failed pixel SELL releases the terminal/resource lock");
+    // A pixel never enters a terminal, so it must not collide with the "one
+    // operation of this kind per room" rule that protects terminal space and
+    // cooldown (bug real, usuário reportou em produção 2026-09-24: uma venda de
+    // O ativa em W7N49 recusava terminalSell(..., "pixel", ...)).
+    Memory.terminalOps.operations.energySale = {
+        id: "energySale", kind: "sell", sourceRoom: "W7N19", targetRoom: null, resourceType: RESOURCE_ENERGY,
+        amount: 1000, remaining: 1000, loadedAmount: 0, limit: 50, state: "listed",
+        createdTick: Game.time, updatedTick: Game.time,
+    };
+    const mixed = terminalOps.sell("W7N19", "pixel", 50, 49500);
+    assert(!mixed.ok, "a second pixel SELL still conflicts with the pixel SELL already active");
+    terminalOps.cancel(retry.id);
+    const afterCancel = terminalOps.sell("W7N19", "pixel", 50, 49500);
+    assert(afterCancel.ok, "a terminal-backed SELL in the same room never blocks a marketOnly SELL");
+    terminalOps.cancel(afterCancel.id);
+    delete Memory.terminalOps.operations.energySale;
 
     Memory.terminalOps = { nextId: 1, operations: {}, seenIncoming: {}, events: [], terminalBalance: {} };
     Game.market.credits = 200000;
@@ -10818,6 +10834,118 @@ origLog("\nMemory:", memStr.length, "bytes  |  rooms.W1N1 keys:",
     assert(fundedOp.state === "listing" && createCalls === 1,
         "pixel SELL with enough credits calls createOrder and enters listing");
     Game.rooms = oldRooms; Game.market = oldMarket; Memory.terminalOps = oldOps;
+}
+// ROADMAP 0098 repricing a live order uses changeOrderPrice, not
+// cancelOrder + createOrder. The old path re-paid the full 5% listing fee every
+// repriceInterval and refunded nothing (bug real, usuário reportou em produção
+// 2026-09-24: terminal-180, 62751 O listadas a 62.445, ~196k créditos por
+// reprecificação), and it cancelled BEFORE checking whether it could afford the
+// new order, so an operation short on credits lost the listing it already had.
+{
+    const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
+    const oldRooms = Game.rooms, oldMarket = Game.market, oldOps = Memory.terminalOps;
+    Game.rooms = Object.assign({}, oldRooms, { W7N21: { name: "W7N21", controller: { my: true } } });
+    const book = [{ id: "rival-sell", resourceType: "pixel", type: ORDER_SELL, price: 60000, remainingAmount: 100, roomName: "W7N22" }];
+    const run = (credits, withChangeOrderPrice) => {
+        const calls = { cancel: 0, create: 0, change: [] };
+        Game.market = {
+            credits, incomingTransactions: [],
+            orders: { "live-1": { id: "live-1", price: 70000, remainingAmount: 50, resourceType: "pixel", type: ORDER_SELL, roomName: "W7N21", created: 0 } },
+            getAllOrders: (filter) => filter ? book.filter((order) => order.type === filter.type && order.resourceType === filter.resourceType) : book,
+            createOrder: () => { calls.create++; return OK; },
+            cancelOrder: () => { calls.cancel++; return OK; },
+        };
+        if (withChangeOrderPrice) Game.market.changeOrderPrice = (id, price) => { calls.change.push([id, price]); return OK; };
+        Memory.terminalOps = { nextId: 1, operations: { listedOp: {
+            id: "listedOp", kind: "sell", sourceRoom: "W7N21", targetRoom: null, resourceType: "pixel",
+            amount: 50, remaining: 50, loadedAmount: 0, limit: 40000, energyFairPrice: 0, transactionCost: 0,
+            marketOnly: true, marketOrderId: "live-1", listedPrice: 70000, listedAmount: 50,
+            listedTick: Game.time - 5000, repriceTick: Game.time - 5000,
+            state: "listed", createdTick: Game.time - 5000, updatedTick: Game.time - 5000,
+        } }, seenIncoming: {}, events: [], terminalBalance: {} };
+        terminalOps.tick();
+        return { calls, op: Memory.terminalOps.operations.listedOp };
+    };
+
+    const cheap = run(0, true);
+    assert(cheap.calls.change.length === 1 && cheap.calls.change[0][0] === "live-1",
+        "0098 repricing a live order calls changeOrderPrice on the order it already owns");
+    assert(cheap.calls.cancel === 0 && cheap.calls.create === 0,
+        "0098 repricing no longer cancels and recreates the order, so the 5% fee is not re-paid");
+    assert(cheap.op.marketOrderId === "live-1" && cheap.op.state === "listed" && cheap.op.listedPrice < 70000,
+        "0098 a repriced order keeps its id and records the new price without re-binding");
+    assert(cheap.op.repriceTick === Game.time,
+        "0098 lowering the price costs nothing, so zero credits still reprices");
+
+    const stranded = run(0, false);
+    assert(stranded.calls.cancel === 0 && stranded.calls.create === 0,
+        "0098 an operation that cannot afford a fresh order never cancels the one it already paid for");
+    assert(stranded.op.state === "listed" && stranded.op.marketOrderId === "live-1" && /créditos insuficientes/.test(stranded.op.error),
+        "0098 without changeOrderPrice and without credits the live order survives instead of the op failing");
+
+    Game.rooms = oldRooms; Game.market = oldMarket; Memory.terminalOps = oldOps;
+}
+// ROADMAP 0098 a listed SELL keeps the terminal stocked. The public order
+// advertises op.remaining, but a buyer can only take what is physically there,
+// and listResidual() never assigned a hauler - terminal-180 advertised 62751 O
+// against a terminal holding 10000 (bug real, usuário reportou em produção).
+{
+    const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
+    const census = require(path.join(PROJECT, "src/utils/census"));
+    const mkStore = (contents, capacity) => Object.assign({
+        getFreeCapacity: () => capacity - Object.keys(contents).reduce((sum, key) => sum + contents[key], 0),
+        getUsedCapacity: () => Object.keys(contents).reduce((sum, key) => sum + contents[key], 0),
+        getCapacity: () => capacity,
+    }, contents);
+    const oldRooms = Game.rooms, oldMarket = Game.market, oldOps = Memory.terminalOps, oldCreeps = Game.creeps;
+    const run = (inTerminal) => {
+        const room = {
+            name: "W9N13", controller: { my: true }, find: () => [],
+            storage: { id: "W9N13-storage", store: mkStore({ [RESOURCE_ENERGY]: 20000, O: 400000 }, 1000000) },
+            terminal: { id: "W9N13-terminal", cooldown: 0, store: mkStore({ [RESOURCE_ENERGY]: 5000, O: inTerminal }, 300000) },
+        };
+        const hauler = { name: "restocker", room: room, store: mkStore({}, 1000), memory: { role: "hauler", home: "W9N13" }, pos: { roomName: "W9N13" } };
+        Game.rooms = Object.assign({}, oldRooms, { W9N13: room });
+        Game.creeps = { restocker: hauler };
+        let createCalls = 0;
+        Game.market = {
+            credits: 5000000, incomingTransactions: [],
+            orders: { "live-2": { id: "live-2", price: 60, remainingAmount: 62751, resourceType: "O", type: ORDER_SELL, roomName: "W9N13", created: 0 } },
+            calcTransactionCost: () => 0,
+            getAllOrders: () => [{ id: "rival", resourceType: "O", type: ORDER_SELL, price: 80, remainingAmount: 1000, roomName: "W9N14" }],
+            createOrder: () => { createCalls++; return OK; },
+            cancelOrder: () => OK,
+            changeOrderPrice: () => OK,
+            deal: () => OK,
+        };
+        Memory.terminalOps = { nextId: 1, operations: { listedSale: {
+            id: "listedSale", kind: "sell", sourceRoom: "W9N13", targetRoom: null, resourceType: "O",
+            amount: 80000, remaining: 62751, loadedAmount: inTerminal, limit: 45, energyFairPrice: 1,
+            transactionCost: 0, marketOrderId: "live-2", listedPrice: 60, listedAmount: 62751,
+            listedTick: Game.time, repriceTick: Game.time,
+            state: "listed", createdTick: Game.time, updatedTick: Game.time,
+        } }, seenIncoming: {}, events: [], terminalBalance: {} };
+        census.build();
+        terminalOps.tick();
+        return { op: Memory.terminalOps.operations.listedSale, job: hauler.memory.terminalJob };
+    };
+
+    const starved = run(10000);
+    assert(starved.job && starved.job.direction === "load" && starved.job.resourceType === "O",
+        "0098 a listed SELL whose terminal is under-stocked dispatches a hauler to restock it");
+    assert(starved.job.amount === 62751 - 10000,
+        "0098 the restock tops the terminal up to min(staging buffer, remaining), not to the advertised order size");
+    assert(starved.op.state === "loading" && starved.op.marketOrderId === "live-2",
+        "0098 restocking a listed order keeps the order itself untouched");
+
+    // the only job left is scanTerminalBalances() sweeping the leftover fee
+    // energy back to storage - unrelated to this operation's cargo.
+    const stocked = run(Math.floor(300000 * 0.85));
+    assert(stocked.op.state === "listed" && !(stocked.job && stocked.job.direction === "load" && stocked.job.resourceType === "O"),
+        "0098 a listed SELL already holding a full buffer is left alone instead of churning hauler jobs");
+
+    Game.rooms = oldRooms; Game.market = oldMarket; Memory.terminalOps = oldOps; Game.creeps = oldCreeps;
+    census.build();
 }
 
 // Market-only resources (pixel/access-key/CPU-unlock family) bypass physical
@@ -11025,4 +11153,43 @@ origLog("\nMemory:", memStr.length, "bytes  |  rooms.W1N1 keys:",
         "0098 an unobserved trade mints no receipt either - the operation still owns the stock");
 
     RESOURCES_ALL = savedResources;
+}
+// ROADMAP 0098 a SELL stages up to saleBufferCapacityRatio of the terminal in
+// one batch. The original 10000/0.1 pair split every large sale into 10k
+// batches, each paying a hauler round trip plus the terminal cooldown, so the
+// user saw a 50k sale sitting on 10k waiting to sell before fetching more.
+// 0.85 leaves ~5% for the deal's fee energy and 10% for incoming deliveries.
+{
+    const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
+    const config = require(path.join(PROJECT, "src/utils/config"));
+    const mkStore = (contents, capacity) => Object.assign({
+        getFreeCapacity: () => capacity - Object.keys(contents).reduce((sum, key) => sum + contents[key], 0),
+        getUsedCapacity: () => Object.keys(contents).reduce((sum, key) => sum + contents[key], 0),
+        getCapacity: () => capacity,
+    }, contents);
+    const room = {
+        name: "W9N11", controller: { my: true }, find: () => [],
+        storage: { id: "W9N11-storage", store: mkStore({ [RESOURCE_ENERGY]: 20000, O: 400000 }, 1000000) },
+        terminal: { id: "W9N11-terminal", cooldown: 0, store: mkStore({ [RESOURCE_ENERGY]: 5000 }, 300000) },
+    };
+    const hauler = { name: "stager", room: room, store: mkStore({}, 1000), memory: { role: "hauler", home: "W9N11" }, pos: { roomName: "W9N11" } };
+    const oldRooms = Game.rooms, oldMarket = Game.market, oldOps = Memory.terminalOps, oldCreeps = Game.creeps;
+    Game.rooms = Object.assign({}, oldRooms, { W9N11: room });
+    Game.creeps = { stager: hauler };
+    Game.market = { credits: 100000, incomingTransactions: [], orders: {}, calcTransactionCost: () => 0, getAllOrders: () => [], deal: () => OK };
+    Memory.terminalOps = { nextId: 1, operations: { big: {
+        id: "big", kind: "sell", sourceRoom: "W9N11", targetRoom: null, resourceType: "O",
+        amount: 400000, remaining: 400000, loadedAmount: 0, limit: 1, energyFairPrice: 1,
+        transactionCost: 0, state: "queued", createdTick: Game.time, updatedTick: Game.time,
+    } }, seenIncoming: {}, events: [], terminalBalance: {} };
+    require(path.join(PROJECT, "src/utils/census")).build();
+    terminalOps.tick();
+    const job = hauler.memory.terminalJob;
+    const ratio = config.get("terminalOps.saleBufferCapacityRatio", 0.85);
+    assert(job && job.amount === Math.floor(300000 * ratio),
+        "0098 a large SELL stages a whole saleBufferCapacityRatio batch instead of 10000 at a time");
+    assert(job.amount + Math.floor(300000 * 0.05) <= 300000,
+        "0098 the staging batch leaves the terminal room for the deal's fee energy");
+    Game.rooms = oldRooms; Game.market = oldMarket; Memory.terminalOps = oldOps; Game.creeps = oldCreeps;
+    require(path.join(PROJECT, "src/utils/census")).build();
 }

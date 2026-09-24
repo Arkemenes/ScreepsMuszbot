@@ -197,8 +197,11 @@ pronto e deixa a operação observável e cancelável.
 - O terminal é trânsito, nunca storage: recebimentos de qualquer origem vão ao
   storage; uma baseline zero trata saldo não reservado como recebido. Carga de
   saída é rastreada pela operação e nunca é recolhida por engano.
-- SELL listada é indefinida e mantém só `min(10000, 10% da capacidade)` no
-  terminal, reposto do storage. Ordens gerenciadas pelo bot podem ser
+- SELL listada é indefinida e mantém até
+  `min(terminalOps.saleBufferAmount, capacidade × terminalOps.saleBufferCapacityRatio)`
+  no terminal, reposto do storage. Os defaults foram `10000`/`0,1` até
+  2026-09-24 e hoje são `300000`/`0,85` — quem manda é a razão, e os 15%
+  restantes são folga pra energia da taxa e pra entradas. Ordens gerenciadas pelo bot podem ser
   reutilizadas/estendidas por nova intenção; ordens manuais nunca são tocadas.
 - O comando valida tudo atomicamente e retorna disponível/reservado/necessário
   quando não puder iniciar. Compra realiza deals já elegíveis e só deixa de
@@ -210,3 +213,17 @@ pronto e deixa a operação observável e cancelável.
   de um recebimento para liberar o trabalho prioritário.
 - `Memory.stats` expõe agregados deslizantes de 60 ticks por sala/tipo:
   quantidade, créditos, energia de taxa, pendências, espera e último erro.
+
+- **Follow-up de 2026-09-24 (bugs reais em produção, `terminal-178`/`terminal-180`):**
+  a reposição acima existia no papel mas não no código — `listResidual()` nunca
+  designava hauler, então uma ordem pública de 62751 O convivia com um terminal
+  de 10000 O e só conseguia entregar isso. O ramo `listing`/`listed` de uma SELL
+  agora chama `stageSaleCargo()` antes de reprecificar, e devolve a operação ao
+  estado anterior quando `assign()` não consegue despachar, pra não reiniciar o
+  fluxo de listagem à toa. Na mesma passada o lote de staging subiu de 10000 fixos
+  pra 85% do terminal (uma venda de 80k não precisa mais de oito ciclos de hauler
+  mais cooldown) e a reprecificação trocou `cancelOrder` + `createOrder` por
+  `Game.market.changeOrderPrice`: a taxa de 5% só incide sobre o aumento de preço,
+  então baixar preço — o caso normal de uma venda — passou a ser de graça, contra
+  ~196k créditos por ciclo no desenho antigo. Detalhes em `specs/ARCHITECTURE.md`,
+  "Uma ordem listada continua sendo abastecida e reprecifica de graça".
