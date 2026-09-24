@@ -10423,8 +10423,10 @@ function mineralStore(resources, freeCap) {
     assert(Memory.stats.market.credits === 54321,
         "Memory.stats.market.credits reflects Game.market.credits (got " +
             Memory.stats.market.credits + ")");
-    assert(Memory.stats.market.transactions === undefined,
-        "no market.transactions is written - the bot never calls Game.market.deal() (ROADMAP 0079 out of scope)");
+    assert(Memory.stats.market.transactions && Object.keys(Memory.stats.market.transactions.bought).length === 0 && Object.keys(Memory.stats.market.transactions.sold).length === 0,
+        "0079 follow-up: market.transactions is always present (bought/sold), empty when terminalOps has no recent deal");
+    assert(Memory.stats.terminalNetwork && Memory.stats.terminalNetwork.transfers.length === 0,
+        "0079 follow-up: terminalNetwork.transfers is always present, empty when terminalOps has no recent transfer");
     delete Game.market;
     statsUtil();
     assert(Memory.stats.market.credits === 0,
@@ -11192,4 +11194,49 @@ origLog("\nMemory:", memStr.length, "bytes  |  rooms.W1N1 keys:",
         "0098 the staging batch leaves the terminal room for the deal's fee energy");
     Game.rooms = oldRooms; Game.market = oldMarket; Memory.terminalOps = oldOps; Game.creeps = oldCreeps;
     require(path.join(PROJECT, "src/utils/census")).build();
+}
+
+// ROADMAP 0079 follow-up (2026-09-24): market.transactions/terminalNetwork.transfers
+// were "out of scope" while the bot never called Game.market.deal()/terminal.send();
+// 0098 made both real, so terminalOps' own event log now feeds the dashboard's
+// "Mercado"/"Terminal Network" panels via utils/stats.js.
+{
+    const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
+    const statsUtil = require(path.join(PROJECT, "src/utils/stats"));
+    const oldOps = Memory.terminalOps, oldRooms = Game.rooms, oldMarket = Game.market;
+    Memory.terminalOps = {
+        nextId: 1, operations: {}, seenIncoming: {}, terminalBalance: {},
+        events: [
+            // two SELLs of O settle in the window: 500@10 (settleDeal) + 300@10 (syncManagedOrders passive fill)
+            { tick: Game.time, room: "W9N11", from: "W9N11", to: null, kind: "sell", resourceType: "O", amount: 500, credits: 5000, transactionEnergy: 50 },
+            { tick: Game.time, room: "W9N11", from: "W9N11", to: null, kind: "sell", resourceType: "O", amount: 300, credits: 3000, transactionEnergy: 0 },
+            // one BUY of energy - credits stored negative (money leaving)
+            { tick: Game.time, room: "W9N12", from: null, to: "W9N12", kind: "buy", resourceType: RESOURCE_ENERGY, amount: 1000, credits: -4000, transactionEnergy: 0 },
+            // two physical transfers on the same room pair/resource - should collapse into one entry
+            { tick: Game.time, room: "W9N11", from: "W9N11", to: "W9N12", kind: "transfer", resourceType: RESOURCE_ENERGY, amount: 2000, credits: 0, transactionEnergy: 10 },
+            { tick: Game.time, room: "W9N11", from: "W9N11", to: "W9N12", kind: "transfer", resourceType: RESOURCE_ENERGY, amount: 1000, credits: 0, transactionEnergy: 5 },
+            // same room pair, different resource - must stay a separate entry, not fold into the energy amount above
+            { tick: Game.time, room: "W9N11", from: "W9N11", to: "W9N12", kind: "transfer", resourceType: "O", amount: 400, credits: 0, transactionEnergy: 0 },
+            // stale event, outside statsWindowTicks - must not be counted
+            { tick: Game.time - 100000, room: "W9N11", from: "W9N11", to: null, kind: "sell", resourceType: "O", amount: 999999, credits: 999999, transactionEnergy: 0 },
+        ],
+    };
+    Game.rooms = {}; Game.market = { credits: 12345 };
+    statsUtil();
+    const transactions = Memory.stats.market.transactions;
+    assert(transactions.sold.O.amount === 800 && transactions.sold.O.credits === 8000,
+        "0079 follow-up: sold.<resource> aggregates every 'sell' event in the window, across both settleDeal and syncManagedOrders (got " + JSON.stringify(transactions.sold) + ")");
+    assert(transactions.bought[RESOURCE_ENERGY].amount === 1000 && transactions.bought[RESOURCE_ENERGY].credits === 4000,
+        "0079 follow-up: bought.<resource>.credits reports a positive magnitude even though record() stores a buy's credits negative (got " + JSON.stringify(transactions.bought) + ")");
+    assert(Object.keys(transactions.sold).length === 1 && Object.keys(transactions.bought).length === 1,
+        "0079 follow-up: the stale event outside statsWindowTicks is excluded from market.transactions");
+    const transfers = Memory.stats.terminalNetwork.transfers;
+    const energyTransfer = transfers.find((t) => t.resourceType === RESOURCE_ENERGY);
+    const mineralTransfer = transfers.find((t) => t.resourceType === "O");
+    assert(transfers.length === 2, "0079 follow-up: terminalNetwork.transfers ignores buy/sell events, keeps one entry per resourceType (got " + JSON.stringify(transfers) + ")");
+    assert(energyTransfer && energyTransfer.from === "W9N11" && energyTransfer.to === "W9N12" && energyTransfer.amount === 3000,
+        "0079 follow-up: same-pair, same-resource transfers still collapse into one amount (got " + JSON.stringify(energyTransfer) + ")");
+    assert(mineralTransfer && mineralTransfer.amount === 400,
+        "0079 follow-up: a different resource on the same room pair gets its own entry instead of folding into the energy amount (got " + JSON.stringify(mineralTransfer) + ")");
+    Memory.terminalOps = oldOps; Game.rooms = oldRooms; Game.market = oldMarket;
 }

@@ -1,7 +1,9 @@
 # 0079 — Expandir `Memory.stats` para o dashboard Grafana
 
-- **Status:** in-progress (Fácil + Médio entregues; Complexo pendente,
-  `defcon` retirado do escopo — ver Outcome)
+- **Status:** in-progress (Fácil + Médio entregues; `market.transactions`/
+  `terminalNetwork.transfers` entregues 2026-09-24 como follow-up do
+  ROADMAP 0098; Complexo pendente, `defcon` retirado do escopo — ver
+  Outcome)
 - **Owner:** usuário + assistente
 - **Created:** 2026-09-15
 
@@ -39,12 +41,12 @@ seções mostram "sem dados" até os campos existirem.
 remover nem renomear nada existente), todo campo que o dashboard
 pré-configurado espera — cada um mapeado 1:1 pra uma métrica/painel
 específico do JSON (tabela abaixo). Depois desta spec implementada, o
-dashboard mostra dado real em toda seção **exceto** "Mercado" (painéis de
-transação) e "Terminal Network" — essas continuam de propósito com "sem
-dados", porque não há chamada real a `Game.market.deal()`/`terminal.send()`
-no bot hoje pra gerar o dado (ver "Out of scope"); os outros dois painéis
-de Mercado (`Créditos` e `Δ Créditos/24h`) já ficam com dado real, só os
-de "Transações" que dependem de instrumentação futura.
+dashboard mostra dado real em toda seção — inclusive "Mercado" (painéis de
+transação) e "Terminal Network", que na versão original desta spec ficavam
+de propósito com "sem dados" (não havia chamada real a
+`Game.market.deal()`/`terminal.send()` no bot); o ROADMAP 0098 passou a
+chamar os dois de verdade, e o follow-up de 2026-09-24 (ver Outcome) ligou
+essa instrumentação ao `Memory.stats`.
 
 ## Classificação por dificuldade
 
@@ -92,19 +94,17 @@ Outcome) — fica como continuação em aberto desta mesma spec, sem status
 scope" abaixo: o usuário decidiu tratá-lo como uma feature própria no
 backlog, não um campo de stats a mais.
 
-### Não faz sentido popular agora
+### Não faz sentido popular agora — **entregue 2026-09-24, ver Outcome**
 
 | `Memory.stats` | Métrica Prometheus (painel) | Por quê |
 |---|---|---|
-| `market.transactions` | `screeps_market_bought_amount`/`sold_amount`/`bought_credits`/`sold_credits` ("Transações — Quantidade"/"— Créditos") | o bot nunca chama `Game.market.deal()` em lugar nenhum do código hoje (confirmado por busca no repo) — não existe transação real pra registrar; popular isso agora seria ou inventar dado, ou deixar um campo sempre vazio por trás de instrumentação que nunca dispara |
-| `terminalNetwork.transfers` | `screeps_terminal_transfer_energy` ("Transferência de energia entre salas") | mesmo caso — o bot nunca chama `terminal.send()` em lugar nenhum do código hoje (o único uso de terminal existente é passivo, `hauler.js`'s ledger via `Game.market.incomingTransactions`, ROADMAP 0043) |
+| `market.transactions` | `screeps_market_bought_amount`/`sold_amount`/`bought_credits`/`sold_credits` ("Transações — Quantidade"/"— Créditos") | ~~o bot nunca chama `Game.market.deal()` em lugar nenhum do código hoje~~ — premissa derrubada pelo ROADMAP 0098, que implementou operações de terminal reais (`executeDeal()`/`settleDeal()`) depois desta tabela ter sido escrita |
+| `terminalNetwork.transfers` | `screeps_terminal_transfer_energy` ("Transferência de energia entre salas") | ~~mesmo caso — o bot nunca chama `terminal.send()`~~ — mesma derrubada: `tickTransfer()` (0098) chama `terminal.send()` de verdade |
 
-Os dois ficam amarrados à feature **Market/terminal** de `ROADMAP.md`'s
-"Later" — quando ela existir e o bot passar a chamar `deal()`/`send()` de
-verdade, a instrumentação entra nas tasks dela, não como retrabalho aqui
-(já registrado na entrada "Later" do roadmap). Os painéis correspondentes
-do dashboard continuam no ar, só mostrando "sem dados" até lá — não é um
-defeito do dashboard, é o estado real do bot.
+Os dois **deixaram de estar amarrados** à feature Market/terminal de
+"Later" — o ROADMAP 0098 é essa feature, já `done`, e trouxe a
+instrumentação junto (ver Outcome abaixo) em vez de ficar como retrabalho
+futuro. Os painéis correspondentes do dashboard agora recebem dado real.
 
 ## In scope
 
@@ -113,6 +113,10 @@ defeito do dashboard, é o estado real do bot.
 - Todo campo da tabela **Complexo** acima (`persistent.lastMemoryReset`,
   `rooms.<room>.compoundsT3`) — continuação em aberto da mesma spec, não
   implementada ainda.
+- `market.transactions` e `terminalNetwork.transfers` — **entregue
+  2026-09-24** como follow-up depois que o ROADMAP 0098 derrubou a premissa
+  que os tinha posto em "Não faz sentido popular agora" (ver essa tabela e
+  Outcome).
 - Todo campo novo coberto em `test/smoke.js`; comentário de uma linha em
   `stats.js` de onde vem quando a origem não for óbvia pelo nome do campo.
 - `screeps-dashboard.json` (cópia versionada) como referência de contrato
@@ -137,10 +141,10 @@ defeito do dashboard, é o estado real do bot.
   pré-configurado (confirmado lendo o JSON); dependia de um serviço de
   ranking global proprietário da ScreepsPlus, sem equivalente via API
   pública do Screeps.
-- **`market.transactions`** e **`terminalNetwork.transfers`** — ver tabela
-  "Não faz sentido popular agora". Os painéis existem no dashboard mas
-  ficam com "sem dados" até a feature Market/terminal (`ROADMAP.md`,
-  "Later") existir de verdade.
+- ~~**`market.transactions`** e **`terminalNetwork.transfers`**~~ — **saiu
+  do "Out of scope" em 2026-09-24**: a feature Market/terminal
+  (`ROADMAP.md` 0098) que este bullet esperava existir agora existe e está
+  `done`; ver "Não faz sentido popular agora" (renomeado) e Outcome.
 - Mudar o formato ou a cadência dos campos já existentes em
   `Memory.stats` (`gcl`, `rooms.<room>.storageEnergy` etc., `cpu.bucket`
   etc., `time`) — só adição; o dashboard já lê esses direto
@@ -187,6 +191,40 @@ Pendente (Complexo, não fechado): `persistent.lastMemoryReset`,
 `rooms.<room>.defcon` saiu do escopo desta spec por completo (ver Out of
 scope).
 
+**Follow-up 2026-09-24** — entregue o que a tabela "Não faz sentido popular
+agora" tinha descartado, porque a premissa dela (bot nunca chama
+`Game.market.deal()`/`terminal.send()`) deixou de valer assim que o
+ROADMAP 0098 implementou operações de terminal reais:
+
+- `src/utils/terminalOps.js`: `record(op, value, credits, energy)` — a
+  única função que já alimentava o resumo por-sala de `stats(roomName)` —
+  ganha `resourceType`/`from`/`to` (antes só gravava `room:
+  sourceRoom||targetRoom`, insuficiente pra separar recurso ou saber os
+  dois lados de uma transferência). Duas funções novas, `marketTransactionStats()`
+  e `terminalTransferStats()`, globais (um deal de mercado não tem sala
+  dona), lêem a mesma janela `terminalOps.statsWindowTicks` (60 ticks)
+  que `stats(roomName)` já usava — sem duplicar o filtro, as três chamam
+  `recentEvents()`.
+- `src/utils/stats.js`: `Memory.stats.market.transactions.{bought,sold}.<resourceType>`
+  (`{amount, credits}`, `credits` sempre positivo — o nome do balde já
+  carrega o sinal, embora `record()` grave negativo pra `buy`) e
+  `Memory.stats.terminalNetwork.transfers` (`[{from, to, resourceType, amount}]`,
+  um par de salas **e** recurso colapsa em uma entrada só — chave é
+  `from+to+resourceType`, não só `from+to`, a pedido do usuário: dois
+  recursos diferentes entre o mesmo par de salas ficam em entradas
+  separadas em vez de somar num `amount` só). Ambos sempre presentes
+  (vazio, não ausente) quando não há evento na janela — mesmo padrão de
+  `market.fairPrice`. `exporter.py`'s `screeps_terminal_transfer_energy`
+  ganhou o label `resource` correspondente.
+- `test/smoke.js`: a assertion antiga (`market.transactions === undefined`)
+  foi invertida; bloco novo popula `Memory.terminalOps.events` diretamente
+  (dois `sell`, um `buy`, dois `transfer` no mesmo par de salas e recurso,
+  um `transfer` no mesmo par com recurso diferente, um evento fora da
+  janela) e confere agregação por recurso, sinal de crédito positivo em
+  ambos os baldes, colapso do par de transferência só quando recurso
+  também bate, separação quando não bate, e exclusão do evento stale —
+  1015 assertions verdes, `npx grunt` limpo.
+
 ## Acceptance criteria
 
 Itens 1-8 e 10-12: **feitos** (Fácil + Médio, incluindo `minerals`).
@@ -203,7 +241,12 @@ escopo desta spec (ver Out of scope).
    `used_heap_size` — sem `total_available_size` nem `does_zap_garbage`.
    *(smoke — feito)*
 3. `Memory.stats.market.credits` reflete `Game.market.credits` (mockado no
-   smoke); nenhum campo `market.transactions` é gravado. *(smoke — feito)*
+   smoke). *(smoke — feito)*
+3b. `Memory.stats.market.transactions.{bought,sold}` e
+    `Memory.stats.terminalNetwork.transfers` existem sempre, agregando
+    `terminalOps`'s eventos de `sell`/`buy`/`transfer` na janela de
+    `statsWindowTicks`, vazios quando não há evento. *(smoke — feito,
+    follow-up 2026-09-24)*
 4. Para uma sala própria com `storageEnergy` e `terminalEnergy` não-zero,
    `Memory.stats.rooms.<room>.totalEnergyAssets` é exatamente a soma dos
    dois. *(smoke — feito)*

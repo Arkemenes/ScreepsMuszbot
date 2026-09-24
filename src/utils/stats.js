@@ -119,6 +119,15 @@ function exportStats() {
     // Game.market.incomingTransactions (constitution §3).
     Memory.stats.market.credits = (Game.market && Game.market.credits) || 0;
 
+    // ROADMAP 0079 follow-up (2026-09-24): market.transactions/
+    // terminalNetwork.transfers were "out of scope" because the bot never
+    // called Game.market.deal()/terminal.send() - ROADMAP 0098 changed
+    // that, so the "Mercado"/"Terminal Network" dashboard panels can be fed
+    // for real now. Source is terminalOps' own event log, not Game.market,
+    // so no extra guard is needed here.
+    Memory.stats.market.transactions = terminalOps.marketTransactionStats();
+    Memory.stats.terminalNetwork = { transfers: terminalOps.terminalTransferStats() };
+
     // ROADMAP 0096: publish only liquid resources so the Grafana-facing
     // Memory snapshot stays sparse while the expensive calculation remains
     // heap-only in utils/market.js.

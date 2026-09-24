@@ -43,7 +43,7 @@ market_bought_amount = Gauge('screeps_market_bought_amount', 'Quantidade comprad
 market_sold_amount = Gauge('screeps_market_sold_amount', 'Quantidade vendida', ['resource'])
 market_bought_credits = Gauge('screeps_market_bought_credits', 'Créditos gastos', ['resource'])
 market_sold_credits = Gauge('screeps_market_sold_credits', 'Créditos recebidos', ['resource'])
-terminal_transfer_energy = Gauge('screeps_terminal_transfer_energy', 'Transferência de energia entre salas', ['from_room', 'to_room'])
+terminal_transfer_energy = Gauge('screeps_terminal_transfer_energy', 'Transferência de energia entre salas', ['from_room', 'to_room', 'resource'])
 
 # Fallback for new Memory.stats fields. Named metrics above remain the stable
 # dashboard contract; these families make new scalar fields observable without
@@ -243,7 +243,8 @@ def update_metrics():
     for transfer in stats.get("terminalNetwork", {}).get("transfers", []):
         terminal_transfer_energy.labels(
             from_room=transfer.get("from", "?"),
-            to_room=transfer.get("to", "?")
+            to_room=transfer.get("to", "?"),
+            resource=transfer.get("resourceType", "?")
         ).set(transfer.get("amount", 0))
 
 

@@ -126,7 +126,12 @@ function trade(kind, roomName, resourceType, value, limit) {
 function buy(roomName, resourceType, value, maxUnitPrice) { return announce("terminalBuy", trade("buy", roomName, resourceType, value, maxUnitPrice)); }
 function sell(roomName, resourceType, value, minUnitPrice) { return announce("terminalSell", trade("sell", roomName, resourceType, value, minUnitPrice)); }
 function activeForRoom(roomName) { return Object.keys(memory().operations).map(operation).filter((op) => active(op) && (op.sourceRoom === roomName || op.targetRoom === roomName)); }
-function record(op, value, credits, energy) { memory().events.push({ tick: Game.time, room: op.sourceRoom || op.targetRoom, kind: op.kind, amount: value || 0, credits: credits || 0, transactionEnergy: energy || 0 }); }
+// `room` stays sourceRoom||targetRoom (single field) for the existing
+// per-room stats() below; `from`/`to`/`resourceType` are additive, kept
+// separate so a transfer's two rooms don't collapse into one another and a
+// market deal keeps which resource actually traded (ROADMAP 0079 follow-up:
+// the dashboard's "Mercado"/"Terminal Network" panels need both).
+function record(op, value, credits, energy) { memory().events.push({ tick: Game.time, room: op.sourceRoom || op.targetRoom, from: op.sourceRoom || null, to: op.targetRoom || null, kind: op.kind, resourceType: op.resourceType, amount: value || 0, credits: credits || 0, transactionEnergy: energy || 0 }); }
 
 function findHauler(roomName) { return census.creepsByRole(roomName, "hauler").find((creep) => !creep.memory.terminalJob && creep.store.getUsedCapacity() === 0); }
 function assign(op, home, direction, from, to, value, resourceType) {
@@ -667,17 +672,59 @@ function cancel(id) {
     if (op.marketOrderId && Game.market && typeof Game.market.cancelOrder === "function") Game.market.cancelOrder(op.marketOrderId);
     touch(op, "cancelled"); return result(true, id);
 }
+// Shared by stats()/marketTransactionStats()/terminalTransferStats() so the
+// window is trimmed once and all three read the same events, not three
+// independently-filtered copies of the same array.
+function recentEvents() {
+    const window = config.get("terminalOps.statsWindowTicks", 60);
+    memory().events = memory().events.filter((event) => Game.time - event.tick < window);
+    return memory().events;
+}
 function stats(roomName) {
     const summary = { pending: 0, waiting: 0, lastError: null, count: 0, amount: 0, credits: 0, transactionEnergy: 0 };
     Object.keys(memory().operations).map(operation).forEach((op) => { if (op && (op.sourceRoom === roomName || op.targetRoom === roomName)) { if (active(op)) summary.pending++; if (op.state === "waiting") summary.waiting++; if (op.error) summary.lastError = op.error; } });
-    const window = config.get("terminalOps.statsWindowTicks", 60);
-    memory().events = memory().events.filter((event) => Game.time - event.tick < window);
-    memory().events.forEach((event) => { if (event.room === roomName) { summary.count++; summary.amount += event.amount; summary.credits += event.credits; summary.transactionEnergy += event.transactionEnergy; } });
+    recentEvents().forEach((event) => { if (event.room === roomName) { summary.count++; summary.amount += event.amount; summary.credits += event.credits; summary.transactionEnergy += event.transactionEnergy; } });
     return summary;
+}
+// ROADMAP 0079 follow-up: market.transactions for the "Mercado" dashboard
+// panels. Global, not per-room - a market deal has no meaningful "room" the
+// way a transfer does (competitivePrice() picks whichever order/room is
+// cheapest, unrelated to which of the empire's rooms owns the operation).
+// credits is stored negative for "buy" (money leaving) by record() above;
+// both buckets are reported as a positive magnitude here since the bucket
+// name (bought/sold) already carries the sign's meaning.
+function marketTransactionStats() {
+    const summary = { bought: {}, sold: {} };
+    recentEvents().forEach((event) => {
+        if (event.kind !== "buy" && event.kind !== "sell") return;
+        const bucket = event.kind === "buy" ? summary.bought : summary.sold;
+        const entry = bucket[event.resourceType] || (bucket[event.resourceType] = { amount: 0, credits: 0 });
+        entry.amount += event.amount;
+        entry.credits += Math.abs(event.credits);
+    });
+    return summary;
+}
+// ROADMAP 0079 follow-up: terminalNetwork.transfers for the "Transferência
+// de energia entre salas" panel. Only kind "transfer" (an actual
+// terminal.send() between two owned rooms, tickTransfer()) counts - a
+// market deal's "room" is whichever order it filled, not a same-empire
+// transfer. Keyed by from+to+resourceType (2026-09-24: a room pair moving
+// two different resources in the same window used to collapse into one
+// amount, losing which resource actually moved) - same pair/same resource
+// still sums into a single entry.
+function terminalTransferStats() {
+    const byPair = {};
+    recentEvents().forEach((event) => {
+        if (event.kind !== "transfer" || !event.from || !event.to) return;
+        const key = event.from + ">" + event.to + ":" + event.resourceType;
+        const entry = byPair[key] || (byPair[key] = { from: event.from, to: event.to, resourceType: event.resourceType, amount: 0 });
+        entry.amount += event.amount;
+    });
+    return Object.keys(byPair).map((key) => byPair[key]);
 }
 global.terminalTransfer = function () { return announce("terminalTransfer", transfer.apply(null, arguments)); };
 global.terminalBuy = buy;
 global.terminalSell = sell;
 global.terminalOperations = () => JSON.stringify(Object.keys(memory().operations).map(operation), null, 2);
 global.cancelTerminalOperation = cancel;
-module.exports = { transfer, buy, sell, cancel, tick, runHauler, operation, activeForRoom, txCost, stats };
+module.exports = { transfer, buy, sell, cancel, tick, runHauler, operation, activeForRoom, txCost, stats, marketTransactionStats, terminalTransferStats };
