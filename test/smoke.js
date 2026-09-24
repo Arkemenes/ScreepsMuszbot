@@ -2124,24 +2124,40 @@ room.energyAvailable = undefined;
 room.energyCapacityAvailable = undefined;
 delete Memory.rooms[room.name].autoscale;
 
-// --- upgrader: RCL8 never wants more than 1, even with a stale delta --
+// --- upgrader: RCL8 keeps exactly 1 upkeep upgrader once the downgrade
+// timer decays past the wide low-water mark, converts it back to a
+// builder once topped off, and never wants more than 1 regardless of a
+// stale delta (ROADMAP 0103 follow-up: reverted 0103's unconditional
+// zero-demand rule, which left nothing to ever reset ticksToDowngrade
+// again - see rooms/needs.js's own comment on the RCL8 branch)
 const priorLevel = controller.level;
 const priorTicksToDowngrade = controller.ticksToDowngrade;
 controller.level = 8;
-controller.ticksToDowngrade = 50000; // < 100000 -> base tier itself wants 1
+controller.ticksToDowngrade = 50000; // well below the 50% low-water mark -> wants 1
 Memory.rooms[room.name].autoscale = { delta: { upgrader: 5 }, lastAdjustTick: Game.time };
 Game.time++;
-assert(needs.roomNeeds(room).upgrader === 0,
-    "RCL8 wants zero upgraders when the controller is already full");
-controller.ticksToDowngrade = 200000; // == CONTROLLER_DOWNGRADE[8] -> base tier wants 0
+assert(needs.roomNeeds(room).upgrader === 1,
+    "RCL8 wants exactly 1 upkeep upgrader once the downgrade timer is low, even with a stale +5 delta");
+controller.ticksToDowngrade = 200000; // == CONTROLLER_DOWNGRADE[8], fully topped off
 Game.time++;
-assert(needs.roomNeeds(room).upgrader === 0,
-    "the RCL8 zero-demand rule holds even with a stale positive delta");
+assert(needs.roomNeeds(room).upgrader === 1,
+    "a stale positive delta still clamps to at most 1 even once topped off - shrink() drains it over time, not instantly");
 delete Memory.rooms[room.name].autoscale;
 
-controller.ticksToDowngrade = 199999; // 1 tick below max -> base tier wants 1
+Game.time++;
 assert(needs.roomNeeds(room).upgrader === 0,
-    "RCL8 does not create an upgrader just because the downgrade timer is below its maximum");
+    "with no stale delta, a fully topped off RCL8 controller wants zero upgraders");
+
+controller.ticksToDowngrade = 100000; // exactly the 50% low-water mark -> not low enough yet
+Game.time++;
+assert(needs.roomNeeds(room).upgrader === 0,
+    "RCL8 does not want the upkeep upgrader right at the low-water mark, only once it decays past it");
+
+controller.ticksToDowngrade = 99999; // 1 tick below the low-water mark
+Game.time++;
+assert(needs.roomNeeds(room).upgrader === 1,
+    "RCL8 wants the upkeep upgrader again once the downgrade timer decays past the low-water mark");
+
 controller.level = priorLevel;
 controller.ticksToDowngrade = priorTicksToDowngrade;
 

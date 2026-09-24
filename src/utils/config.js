@@ -99,6 +99,18 @@ const defaults = {
         // the first place), this is just a safety net. RCL8 has its own,
         // stricter clamp (max 1) applied separately in rooms/needs.js.
         autoscaleMaxCount: 8,
+        // rooms/needs.js's RCL8 branch: low-water mark (fraction of
+        // CONTROLLER_DOWNGRADE[8]) below which the room wants its 1 upkeep
+        // upgrader back. Deliberately wide (ROADMAP 0103 follow-up, real
+        // bug): a SINGLE successful upgradeController() call resets
+        // ticksToDowngrade straight to the max, not incrementally - a tight
+        // "< max" trigger (the original rule this replaces) re-armed itself
+        // within a tick of the upkeep upgrader's first and only upgrade,
+        // converting it to a builder immediately, which then respawned and
+        // reconverted every creep lifetime forever. A wide margin means the
+        // post-upgrade reset buys tens of thousands of ticks - far longer
+        // than any creep's lifespan - before the room needs another one.
+        rcl8UpkeepRatio: 0.5,
     },
     autoscale: {
         // utils/autoscale.js: minimum ticks between two automatic +1/-1

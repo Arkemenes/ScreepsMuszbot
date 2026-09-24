@@ -391,9 +391,27 @@ function compute(room) {
     if (!ctrl || !ctrl.my) {
         upgrader = 0;
     } else if (rcl >= 8) {
-        // RCL8 is already the maximum level. There is no controller progress
-        // left to fill, so the upgrader slot is intentionally empty.
-        upgrader = 0;
+        // RCL8 has no more RCL progress to bank, but the controller still
+        // decays: ticksToDowngrade keeps ticking down, and upgradeController()
+        // still resets it even past max (it just stops adding progress).
+        // ROADMAP 0103 follow-up (real bug): this used to be a flat 0 -
+        // nothing ever called upgradeController() again once a room hit
+        // RCL8, so ticksToDowngrade only ever decayed and the room was on a
+        // one-way trip to downgrading out of RCL8 entirely. Before that, it
+        // used a tight `< CONTROLLER_DOWNGRADE[8]` trigger - but a single
+        // upgrade always resets the timer straight to the max (not
+        // incrementally), so the lone upkeep upgrader satisfied its own
+        // trigger within a tick of spawning, converted to a builder, and
+        // the whole cycle repeated every creep lifetime forever (the actual
+        // bug 0103 was trying to fix). A wide low-water mark instead: only
+        // want the 1 upkeep upgrader once the timer has decayed well below
+        // max, so the post-upgrade reset buys far longer than a creep's
+        // lifespan before it's needed again.
+        upgrader =
+            ctrl.ticksToDowngrade <
+            CONTROLLER_DOWNGRADE[8] * config.get("upgrader.rcl8UpkeepRatio", 0.5)
+                ? 1
+                : 0;
     } else if (storageEnergy > 400000) {
         upgrader = 4;
     } else if (storageEnergy > 150000) {
@@ -567,9 +585,17 @@ function compute(room) {
     autoscale.apply(room, wanted);
 
     // Apply manual controls before the hard RCL8 ceiling, so an old override
-    // cannot recreate the surplus this guard is meant to remove.
+    // (or a stale autoscale delta from before the room hit RCL8) cannot
+    // recreate more than the single upkeep slot above. This is an immediate
+    // ceiling, not the exact 0-or-1 the formula above already computed - a
+    // large stale delta can still show 1 for a while even when the timer is
+    // fully topped off (base 0 + delta), same as any other role's autoscale
+    // delta; shrink() (upgraderSurplusEligible is always false at RCL8, see
+    // its own comment) drains it back down by 1 per cooldown window like
+    // usual, this clamp just guarantees it can never show more than 1 in
+    // the meantime.
     applyOverride(name, wanted);
-    if (rcl >= 8) wanted.upgrader = 0;
+    if (rcl >= 8) wanted.upgrader = Math.min(wanted.upgrader, 1);
 
     // Apply the conversion deduction after autoscale/clamps so it affects the
     // final desired upgrader population without persisting a stale counter.

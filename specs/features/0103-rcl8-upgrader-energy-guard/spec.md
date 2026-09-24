@@ -15,17 +15,30 @@ controller máximo ainda deixa upgraders ativos.
 
 Builders e upgraders abandonam imediatamente um saque persistido de link
 não-coletor quando spawn/extensions não estão cheios. Nenhum builder/upgrader
-retira energia para um controller RCL 8 completo. Em RCL 8 a demanda de
-upgrader é zero; durante qualquer estado legado que ainda exija manutenção,
-o teto absoluto continua sendo um creep.
+retira energia para um controller RCL 8 completo. Em RCL 8 o teto absoluto
+continua sendo um creep.
+
+**Follow-up (2026-09-24, bug real reportado em produção)**: o critério de
+aceite original ("Em RCL 8 a demanda de upgrader é zero") zerava a demanda
+incondicionalmente — nenhum creep nunca mais chamava `upgradeController()`
+depois de RCL8, e `ticksToDowngrade` só decaía, sem nunca ser resetado
+(sala real presa em RCL8 há dias, timer caindo rumo a zero). Revertido em
+`rooms/needs.js`: a demanda volta a depender de `ticksToDowngrade`, mas com
+uma margem larga (`upgrader.rcl8UpkeepRatio`, 50% de
+`CONTROLLER_DOWNGRADE[8]`) em vez do limiar apertado `< max` que motivou
+zerar tudo aqui em primeiro lugar — ver ROADMAP 0103 e `specs/ARCHITECTURE.md`
+("upgrader") para o raciocínio completo.
 
 ## Acceptance criteria
 
 1. Um builder/upgrader com estado `GetEnergy` apontando para link não-coletor
    não retira energia quando a economia da sala deixa de estar estável.
 2. Builder não usa controller RCL 8 como fallback de gasto.
-3. RCL 8 completo deseja zero upgraders e não permite que override ou delta
-   antigo eleve o teto acima de um.
+3. ~~RCL 8 completo deseja zero upgraders~~ (revertido pelo follow-up
+   acima — RCL 8 deseja 1 upgrader de manutenção sempre que
+   `ticksToDowngrade` cai abaixo de `upgrader.rcl8UpkeepRatio`, zero caso
+   contrário). Override ou delta antigo continuam sem poder elevar o teto
+   acima de um.
 4. Upgraders excedentes são convertidos em builders derivados, sem deixar
    quatro upgraders ativos na sala.
 5. Smoke, `node --check` e build continuam verdes.
