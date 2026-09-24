@@ -111,6 +111,19 @@ const defaults = {
         // post-upgrade reset buys tens of thousands of ticks - far longer
         // than any creep's lifespan - before the room needs another one.
         rcl8UpkeepRatio: 0.5,
+
+        // roles/upgrader.js's isExcessUpgrader(): the *high* mark (fraction
+        // of CONTROLLER_DOWNGRADE[8]) ticksToDowngrade must reach before an
+        // existing RCL8 upkeep upgrader is allowed to demote to builder.
+        // Deliberately separate from and higher than rcl8UpkeepRatio above
+        // (user-reported real bug, 2026-09-24): reusing the same 50% mark to
+        // demote meant a creep still short of the controller got benched the
+        // instant ticksToDowngrade ticked back above 50% - e.g. another
+        // creep's upgrade reset the timer to max while this one was still
+        // en route, so it never got to do its own job. A creep now stays an
+        // upgrader through the whole 50%-99% gap and only demotes once the
+        // controller is genuinely near max, not merely "not urgent anymore".
+        rcl8SafeRatio: 0.99,
     },
     autoscale: {
         // utils/autoscale.js: minimum ticks between two automatic +1/-1
@@ -172,6 +185,11 @@ const defaults = {
         balanceInterval: 1000,
         balanceGapRatio: 0.2,
         balanceMaxAmount: 50000,
+        // structures/link.js's collector: skip a non-collector link that's
+        // already at/above this fill ratio, even with free capacity left -
+        // avoids burning the collector's cooldown on a transfer that only
+        // tops off a couple energy on an already-full target.
+        linkReceiveFillRatio: 0.95,
     },
     terminalOps: {
         // ROADMAP 0098: the terminal is transit, so a public SELL order only
@@ -469,6 +487,11 @@ const defaults = {
         // ... and only while the room has energy to spare - a fraction of
         // energyCapacityAvailable, not just "any energy at all"
         minEnergyRatio: 0.8,
+        // ... and only while at least this fraction of the room's spawns
+        // are already busy spawning - with most spawns idle there's no
+        // spawn-cycle cost to save by renewing, so let the creep die and
+        // replace it normally instead of burning energy on renew
+        minBusySpawnRatio: 0.5,
     },
     pixel: {
         // main.js (ROADMAP 0045): converts a full CPU bucket into a Pixel

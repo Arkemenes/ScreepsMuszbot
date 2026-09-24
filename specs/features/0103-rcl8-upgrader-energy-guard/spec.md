@@ -38,22 +38,54 @@ controller abaixo do low-water mark. `roles/builder.js` agora só bloqueia o
 fallback quando `ticksToDowngrade` está no ou acima do mesmo
 `upgrader.rcl8UpkeepRatio`; abaixo dele, o builder volta a upgradar.
 
+**Terceiro follow-up (mesma sessão, 2026-09-24, pedido do usuário)**: o
+critério de aceite #4 ("upgraders excedentes convertem") reusava o mesmo
+limiar de 50% pra decidir converter, então um upgrader ainda a caminho do
+controller podia ser convertido em builder assim que `ticksToDowngrade`
+subisse de volta acima de 50% (ex.: outro creep resetou o timer enquanto
+este ainda estava em trânsito), mesmo sem nunca ter feito seu próprio
+upgrade. `roles/upgrader.js`'s `isExcessUpgrader()` agora usa histerese
+assimétrica: `upgrader.rcl8UpkeepRatio` (50%) continua controlando só
+"precisa de um"; um novo limiar mais alto, `upgrader.rcl8SafeRatio` (99%),
+controla "seguro pra converter" — um upgrader existente atravessa toda a
+faixa 50%-99% sem ser banido, só convertendo quando o controller está
+genuinamente perto do máximo (upgraders excedentes, além do primeiro, ainda
+convertem dentro dessa faixa).
+
+**Quarto follow-up (mesma sessão, 2026-09-24, pedido do usuário)**: o gate de
+fallback em `roles/builder.js` (segundo follow-up acima) reusava
+`upgrader.rcl8UpkeepRatio` (o mesmo limiar de "precisa de um") pra decidir se
+o builder podia **gastar** a energia já carregada, não só se devia buscar
+mais — um builder com energia na mão e nada pra construir/reparar ficava em
+"zzz" em toda a faixa 50%-99%, mesmo com o controller genuinamente com
+espaço pra receber. Limiares de criticidade (`rcl8UpkeepRatio`,
+`rcl8SafeRatio`, `economyStable`) devem influenciar só **aquisição** de
+energia (want/spawn, conversão de role, retirar de link/storage/container) —
+nunca o **gasto** do que o creep já carrega, já que isso nunca desperdiça
+nada enquanto o controller não estiver literalmente no teto. O gate agora
+checa `ticksToDowngrade >= CONTROLLER_DOWNGRADE[8]` (100% real), não mais o
+limiar de 50%.
+
 ## Acceptance criteria
 
 1. Um builder/upgrader com estado `GetEnergy` apontando para link não-coletor
    não retira energia quando a economia da sala deixa de estar estável.
 2. ~~Builder não usa controller RCL 8 como fallback de gasto~~ (ajustado pelo
-   segundo follow-up acima — builder não usa um controller RCL 8 *topado e
-   seguro* como fallback; usa quando `ticksToDowngrade` cai abaixo de
-   `upgrader.rcl8UpkeepRatio`, mesmo limiar do upkeep upgrader de
-   `rooms/needs.js`).
+   segundo follow-up acima, depois corrigido de novo pelo quarto — builder só
+   deixa de usar o controller RCL 8 como fallback quando ele está
+   *literalmente* no teto, `ticksToDowngrade >= CONTROLLER_DOWNGRADE[8]`; o
+   limiar de demanda `upgrader.rcl8UpkeepRatio` continua controlando só quem
+   é *desejado*, nunca se um creep já com energia na mão pode gastá-la).
 3. ~~RCL 8 completo deseja zero upgraders~~ (revertido pelo follow-up
    acima — RCL 8 deseja 1 upgrader de manutenção sempre que
    `ticksToDowngrade` cai abaixo de `upgrader.rcl8UpkeepRatio`, zero caso
    contrário). Override ou delta antigo continuam sem poder elevar o teto
    acima de um.
 4. Upgraders excedentes são convertidos em builders derivados, sem deixar
-   quatro upgraders ativos na sala.
+   quatro upgraders ativos na sala (ajustado pelo terceiro follow-up acima —
+   em RCL 8, só converte quando `ticksToDowngrade` atinge
+   `upgrader.rcl8SafeRatio`, não mais no mesmo limiar de 50% que aciona a
+   demanda).
 5. Smoke, `node --check` e build continuam verdes.
 
 ## Constitution check

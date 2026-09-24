@@ -3995,9 +3995,9 @@ findMap[FIND_HOSTILE_CREEPS] = [];
 
         // The engine rejects transferEnergy() with ERR_FULL when the
         // requested amount exceeds the target's free capacity, so the
-        // request must never exceed it - even for a target with only one
-        // free slot. The collector still needs the existing 50-energy floor
-        // before it may spend a cooldown.
+        // request must never exceed it - even for a target close to full.
+        // The collector still needs the existing 50-energy floor before it
+        // may spend a cooldown.
         {
             const collector = mkLink("lk-small-col", 5, 5, true);
             const target = mkLink("lk-small-target", 40, 40, false);
@@ -4007,8 +4007,8 @@ findMap[FIND_HOSTILE_CREEPS] = [];
             });
             let transferAmount = null;
             collector.room = room;
-            target.store = store(799, 800);
-            collector.store = store(50, 800);
+            target.store = store(750, 800); // 93.75% full, still under the receive gate
+            collector.store = store(200, 800);
             collector.transferEnergy = (receivedTarget, amount) => {
                 assert(receivedTarget === target, "small-capacity link chooses the receiving link");
                 transferAmount = amount;
@@ -4016,7 +4016,7 @@ findMap[FIND_HOSTILE_CREEPS] = [];
             };
             Game.time++;
             linkMod.run(collector);
-            assert(transferAmount === 1,
+            assert(transferAmount === 50,
                 "collector never requests more than the target's free capacity (got " +
                     transferAmount + ")");
 
@@ -4026,6 +4026,28 @@ findMap[FIND_HOSTILE_CREEPS] = [];
             linkMod.run(collector);
             assert(transferAmount === null,
                 "collector below 50 energy does not spend a link cooldown");
+        }
+
+        // ROADMAP: a non-collector link at/above logistics.linkReceiveFillRatio
+        // (95%) is skipped even with free capacity left - reported bug was a
+        // collector spending its cooldown sending into a 799/800 link.
+        {
+            const collector = mkLink("lk-fullgate-col", 5, 5, true);
+            const nearFullTarget = mkLink("lk-fullgate-target", 40, 40, false);
+            const room = Object.assign(new Room("LinkFullGateRoom"), {
+                controller: null,
+                find: linkFind([collector, nearFullTarget]),
+            });
+            collector.room = room;
+            nearFullTarget.store = store(799, 800); // 99.875% full
+            collector.store = store(200, 800);
+            let sent = false;
+            collector.transferEnergy = () => { sent = true; return OK; };
+            Game.time++;
+            linkMod.run(collector);
+            assert(!sent,
+                "collector does not send to a non-collector link already at/above " +
+                    "the receive fill ratio, even with free capacity left");
         }
 
         // Two collectors in the same room both target the same (not yet
@@ -8546,9 +8568,12 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
     // renewed - 10 CARRY + 10 MOVE = 1000 energy, right at the floor
     const expensiveBody = _.range(10).map(() => ({ type: CARRY }))
         .concat(_.range(10).map(() => ({ type: MOVE })));
+    // totalSpawns=2 with this single spawn idle => 1 of 2 busy (50%),
+    // right at the minBusySpawnRatio floor, so these cases still exercise
+    // the cost/energy checks below it
     const expensive = mkRenewCandidate("r1", expensiveBody);
     Game.time++;
-    let idle = spawning.renewIdleSpawns(room, [renewSpawn]);
+    let idle = spawning.renewIdleSpawns(room, [renewSpawn], 2);
     assert(renewedWith === expensive,
         "an idle spawn renews an adjacent expensive dying creep instead of letting it die");
     assert(idle.length === 0,
@@ -8559,7 +8584,7 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
     renewedWith = null;
     const cheap = mkRenewCandidate("r2", [{ type: MOVE }, { type: CARRY }]); // 100 energy
     Game.time++;
-    idle = spawning.renewIdleSpawns(room, [renewSpawn]);
+    idle = spawning.renewIdleSpawns(room, [renewSpawn], 2);
     assert(renewedWith === null, "a cheap creep next to an idle spawn is not renewed");
     assert(idle.length === 1, "a spawn with nothing worth renewing stays in the idle list");
     dropRenewCandidate("r2");
@@ -8570,9 +8595,23 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
     room.energyAvailable = 200; // 20% of 1000 - below the 0.8 floor
     mkRenewCandidate("r3", expensiveBody);
     Game.time++;
-    spawning.renewIdleSpawns(room, [renewSpawn]);
+    spawning.renewIdleSpawns(room, [renewSpawn], 2);
     assert(renewedWith === null, "renewal never fires below the room's energy ratio floor");
     dropRenewCandidate("r3");
+    room.energyAvailable = 900;
+    room.energyCapacityAvailable = 1000; // restore for the busy-ratio check below
+
+    // (d) below the busy-spawn-ratio floor, no renewal fires even for a
+    // qualifying creep with plenty of energy - a single-spawn room where
+    // that spawn is idle is 0% busy, well under the 50% floor
+    renewedWith = null;
+    mkRenewCandidate("r4", expensiveBody);
+    Game.time++;
+    idle = spawning.renewIdleSpawns(room, [renewSpawn], 1);
+    assert(renewedWith === null,
+        "renewal never fires when fewer than half the room's spawns are busy spawning");
+    assert(idle.length === 1, "the spawn stays in the idle list when renewal doesn't fire");
+    dropRenewCandidate("r4");
     room.energyAvailable = 300;
     room.energyCapacityAvailable = 300; // restore the shared default other tests expect
 
@@ -9732,6 +9771,33 @@ function mineralStore(resources, freeCap) {
     assert(upkeepUpgraded,
         "builder falls back to upgrading a decaying RCL8 controller once " +
             "ticksToDowngrade crosses the upkeep low-water mark");
+    delete Game.creeps.Rcl8UpkeepBuilder;
+    delete Memory.creeps.Rcl8UpkeepBuilder;
+
+    // ROADMAP 0103 follow-up (real bug reported in production, 2026-09-24):
+    // the gate above must only block a LITERALLY full controller - reusing
+    // the "needs one" demand mark to also block spending left a builder
+    // with cargo energy idling "zzz" anywhere in the 50%-99% gap, even
+    // though the controller still had genuine room to take it. Criticality
+    // marks (rcl8UpkeepRatio / rcl8SafeRatio) size the population and drive
+    // role conversion; they must not also gate spending energy already in
+    // hand.
+    controller.ticksToDowngrade = Math.floor(CONTROLLER_DOWNGRADE[8] * 0.9); // inside the 50%-99% gap
+    const rcl8GapBuilder = makeCreep("Rcl8GapBuilder", "builder", {
+        store: store(50, 50),
+    });
+    let gapUpgraded = false;
+    rcl8GapBuilder.upgradeController = () => {
+        gapUpgraded = true;
+        return OK;
+    };
+    Game.time++;
+    builderMod.run(rcl8GapBuilder);
+    assert(gapUpgraded,
+        "builder still spends carried energy on a non-full RCL8 controller " +
+            "inside the 50%-99% demand gap, not just below the low-water mark");
+    delete Game.creeps.Rcl8GapBuilder;
+    delete Memory.creeps.Rcl8GapBuilder;
     controller.ticksToDowngrade = savedTicksToDowngrade;
 
     controller.level = savedLevel;
@@ -9774,6 +9840,91 @@ function mineralStore(resources, freeCap) {
         "a converted upgrader reduces the next desired-upgrader count by one");
     delete Game.creeps.ConvertedUpgrader;
     delete Memory.creeps.ConvertedUpgrader;
+    controller.level = savedLevel;
+    controller.ticksToDowngrade = savedTicks;
+}
+
+// ROADMAP 0103 follow-up (real bug reported in production, 2026-09-24): a
+// separate, higher "safe to demote" mark (upgrader.rcl8SafeRatio, 99%) keeps
+// an RCL8 upkeep upgrader from being benched the instant ticksToDowngrade
+// ticks back above the 50% "needs one" mark - it must stay an upgrader
+// through the whole 50%-99% gap, only converting once genuinely near max.
+{
+    const upgraderMod = require(path.join(PROJECT, "src/roles/upgrader"));
+    const savedLevel = controller.level;
+    const savedTicks = controller.ticksToDowngrade;
+    const savedUp1 = Game.creeps.Up1;
+    const savedUp1Mem = Memory.creeps.Up1;
+    delete Game.creeps.Up1; // keep the room's upgrader census exact for this block
+    delete Memory.creeps.Up1;
+    controller.level = 8;
+    clearWanted(room.name, "upgrader");
+
+    // below the 50% "needs one" mark -> wanted > 0 -> never excess,
+    // regardless of how many upgraders are around
+    {
+        controller.ticksToDowngrade = 80000; // 40% of CONTROLLER_DOWNGRADE[8]
+        const creep = makeCreep("GapUp1", "upgrader", { store: store(0, 50) });
+        Game.creeps.GapUp1 = creep;
+        Game.time++;
+        upgraderMod.run(creep);
+        assert(creep.memory.role === "upgrader",
+            "below the 50% needs mark, an RCL8 upgrader is never excess");
+        delete Game.creeps.GapUp1;
+        delete Memory.creeps.GapUp1;
+    }
+
+    // in the 50%-99% gap (wanted already 0, but not yet safe) -> the
+    // alphabetically-first upgrader stays put instead of demoting early
+    {
+        controller.ticksToDowngrade = 140000; // 70% - past 50%, short of 99%
+        const first = makeCreep("GapUpA", "upgrader", { store: store(0, 50) });
+        Game.creeps.GapUpA = first;
+        Game.time++;
+        upgraderMod.run(first);
+        assert(first.memory.role === "upgrader",
+            "in the 50%-99% gap, the sole/first upgrader keeps working " +
+                "instead of demoting before the controller is actually safe");
+        delete Game.creeps.GapUpA;
+        delete Memory.creeps.GapUpA;
+    }
+
+    // same gap, but a second (leftover) upgrader is also around -> only the
+    // first is worth keeping; the rest still demote since one is enough
+    {
+        controller.ticksToDowngrade = 140000;
+        const first = makeCreep("GapUpA", "upgrader", { store: store(0, 50) });
+        const second = makeCreep("GapUpB", "upgrader", { store: store(0, 50) });
+        Game.creeps.GapUpA = first;
+        Game.creeps.GapUpB = second;
+        Game.time++;
+        upgraderMod.run(second);
+        assert(second.memory.role === "builder" &&
+            second.memory.convertedFrom === "upgrader",
+            "in the 50%-99% gap, a second/leftover upgrader still demotes " +
+                "even though the controller isn't safe yet");
+        delete Game.creeps.GapUpA;
+        delete Game.creeps.GapUpB;
+        delete Memory.creeps.GapUpA;
+        delete Memory.creeps.GapUpB;
+    }
+
+    // at/above the 99% safe mark -> demotes normally
+    {
+        controller.ticksToDowngrade = 198000; // exactly 99%
+        const creep = makeCreep("GapUp2", "upgrader", { store: store(0, 50) });
+        Game.creeps.GapUp2 = creep;
+        Game.time++;
+        upgraderMod.run(creep);
+        assert(creep.memory.role === "builder" &&
+            creep.memory.convertedFrom === "upgrader",
+            "at the 99% safe mark, an RCL8 upgrader demotes to builder");
+        delete Game.creeps.GapUp2;
+        delete Memory.creeps.GapUp2;
+    }
+
+    Game.creeps.Up1 = savedUp1;
+    Memory.creeps.Up1 = savedUp1Mem;
     controller.level = savedLevel;
     controller.ticksToDowngrade = savedTicks;
 }

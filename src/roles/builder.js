@@ -11,7 +11,6 @@ const rampartRepair = require("../utils/rampartRepair");
 const resourceTiers = require("../utils/resourceTiers");
 const names = require("../utils/names");
 const energyLedger = require("../utils/energyLedger");
-const config = require("../utils/config");
 
 function abandonUnsafeLinkLoad(creep) {
     if (creep.getState() !== "GetEnergy" || !creep.memory.stack) return false;
@@ -359,24 +358,25 @@ var builder = {
 
             let controller = creep.room.controller;
 
-            // RCL8 controllers cannot bank more progress, so a builder's idle
-            // fallback shouldn't turn into a sink for link energy while the
-            // controller is safely topped off. But rooms/needs.js's RCL8
-            // branch wants a real upkeep upgrade once ticksToDowngrade decays
-            // past the same low-water mark (upgrader.rcl8UpkeepRatio) - and a
-            // builder converted from upgrader (memory.convertedFrom) is
-            // exactly the creep needs.js expects to cover that (its
-            // convertedUpgraders deduction assumes converted builders are
-            // still available to upgrade). Gating on level alone left that
-            // builder stuck idling "zzz" with a full energy load while the
-            // controller decayed toward the danger zone (ROADMAP 0103
-            // follow-up: real bug reported in production).
+            // RCL8 controllers cannot bank more progress once literally
+            // topped off - past that point upgradeController() is a wasted
+            // call, so that's the only thing worth gating here. This is
+            // deliberately NOT the same rcl8UpkeepRatio/rcl8SafeRatio marks
+            // rooms/needs.js and isExcessUpgrader() use to decide who's
+            // WANTED or SAFE TO CONVERT (ROADMAP 0103 follow-up, real bug
+            // reported in production): those "criticality" marks size the
+            // population and decide role conversions, but a creep that
+            // already has energy in hand and nothing else to build/repair
+            // has nothing to lose by spending it here - reusing a demand
+            // threshold to gate spending as well left a builder (often one
+            // converted from upgrader, exactly the creep needs.js's
+            // convertedUpgraders deduction expects to cover this) idling
+            // "zzz" with a full energy load anywhere in the 50%-99% gap,
+            // even though the controller still had real room to take it.
             if (
                 !controller ||
                 (controller.level >= 8 &&
-                    controller.ticksToDowngrade >=
-                        CONTROLLER_DOWNGRADE[8] *
-                            config.get("upgrader.rcl8UpkeepRatio", 0.5))
+                    controller.ticksToDowngrade >= CONTROLLER_DOWNGRADE[8])
             ) {
                 creep.say("zzz");
                 return;

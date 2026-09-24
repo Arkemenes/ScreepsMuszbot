@@ -42,7 +42,17 @@ function energyStructuresForSpawn(room, spawn) {
 // nothing is ever routed to a spawn just to be renewed, and a spawn that
 // renews this tick is dropped from the returned list so the caller never
 // also tries to spawnCreep() from it the same tick.
-function renewIdleSpawns(room, spawns) {
+// Only worth it once the room is actually spawn-constrained: with most
+// spawns idle, there's no queue to protect, so a creep is left to die and
+// get replaced normally instead of spending energy on renew.
+function renewIdleSpawns(room, spawns, totalSpawns) {
+    const busyRatio = totalSpawns > 0
+        ? (totalSpawns - spawns.length) / totalSpawns
+        : 0;
+    if (busyRatio < config.get("renew.minBusySpawnRatio", 0.5)) {
+        return spawns;
+    }
+
     if (
         room.energyCapacityAvailable <= 0 ||
         room.energyAvailable / room.energyCapacityAvailable <
@@ -78,12 +88,13 @@ function renewIdleSpawns(room, spawns) {
 }
 
 function spawnCreeps(room) {
-    let spawns = room.find(FIND_MY_SPAWNS, {
-        filter: (s) => !s.spawning,
-    });
+    const allSpawns = room.find(FIND_MY_SPAWNS);
+    if (!allSpawns.length) return;
+
+    let spawns = allSpawns.filter((s) => !s.spawning);
     if (!spawns.length) return;
 
-    spawns = renewIdleSpawns(room, spawns);
+    spawns = renewIdleSpawns(room, spawns, allSpawns.length);
     if (!spawns.length) return;
 
     // While the room has hostiles, pour all spawn capacity into defenders.

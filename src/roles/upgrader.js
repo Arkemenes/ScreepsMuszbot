@@ -7,6 +7,7 @@ const { roomNeeds } = require("../rooms/needs");
 const reservations = require("../utils/reservations");
 const resourceTiers = require("../utils/resourceTiers");
 const names = require("../utils/names");
+const config = require("../utils/config");
 
 function abandonUnsafeLinkLoad(creep) {
     if (creep.getState() !== "GetEnergy" || !creep.memory.stack) return false;
@@ -24,14 +25,39 @@ function abandonUnsafeLinkLoad(creep) {
     return false;
 }
 
-function isExcessUpgrader(creep, wanted) {
-    if (wanted === 0) return true;
-    if (!creep.room.controller || creep.room.controller.level < 8) return false;
-    const upgraders = census
-        .creepsByRole(creep.room.name, "upgrader")
+function sortedUpgraders(room) {
+    return census
+        .creepsByRole(room.name, "upgrader")
         .slice()
         .sort((a, b) => a.name.localeCompare(b.name));
-    return upgraders.indexOf(creep) >= wanted;
+}
+
+function isExcessUpgrader(creep, wanted) {
+    const ctrl = creep.room.controller;
+    if (ctrl && ctrl.level >= 8) {
+        // RCL8 hysteresis (ROADMAP 0103 follow-up, real bug reported in
+        // production): `wanted` only reflects rooms/needs.js's low "needs"
+        // mark (upgrader.rcl8UpkeepRatio, 50%) - reusing that same mark to
+        // demote would bench a creep the instant ticksToDowngrade ticks
+        // back above 50%, even mid-decay and even if THIS creep never got a
+        // chance to upgrade yet (e.g. another creep's upgrade reset the
+        // timer while this one was still traveling). Demoting instead
+        // requires the separate, higher upgrader.rcl8SafeRatio mark (99%),
+        // so a creep stays an upgrader through the whole 50%-99% gap and
+        // only converts once the controller is genuinely near max.
+        if (wanted > 0) return false;
+        const safe =
+            ctrl.ticksToDowngrade >=
+            CONTROLLER_DOWNGRADE[8] * config.get("upgrader.rcl8SafeRatio", 0.99);
+        if (safe) return true;
+        // Not safe yet, but nothing new is wanted either - only the
+        // alphabetically-first upgrader (if any) is worth keeping while the
+        // controller finishes topping off; leftovers (e.g. from before the
+        // room hit RCL8) still convert, since one upgrader is always enough.
+        return sortedUpgraders(creep.room).indexOf(creep) >= 1;
+    }
+    if (wanted === 0) return true;
+    return sortedUpgraders(creep.room).indexOf(creep) >= wanted;
 }
 
 var roleUpgrader = {

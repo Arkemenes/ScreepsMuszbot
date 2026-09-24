@@ -91,12 +91,19 @@ var link = {
             link.cooldown === 0 &&
             link.isActive()
         ) {
+            // ROADMAP: don't burn the collector's cooldown topping off a
+            // non-collector link that's already nearly full - only consider
+            // one below the configured fill ratio, not merely "has any free
+            // capacity at all" (a 799/800 link used to still qualify).
+            const receiveFillRatio = config.get("logistics.linkReceiveFillRatio", 0.95);
             let nonCollectorLinks = _.filter(
                 roomCache.structures(link.room),
-                (s) =>
-                    s.structureType == STRUCTURE_LINK &&
-                    !s.isCollector() &&
-                    s.store.getFreeCapacity(RESOURCE_ENERGY) > 0
+                (s) => {
+                    if (s.structureType != STRUCTURE_LINK || s.isCollector()) return false;
+                    const capacity = s.store.getCapacity(RESOURCE_ENERGY);
+                    if (!capacity || s.store.getFreeCapacity(RESOURCE_ENERGY) <= 0) return false;
+                    return s.store[RESOURCE_ENERGY] / capacity < receiveFillRatio;
+                }
             );
             let target = pickTarget(nonCollectorLinks, link.room);
 

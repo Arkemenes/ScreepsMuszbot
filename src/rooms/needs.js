@@ -407,6 +407,10 @@ function compute(room) {
         // want the 1 upkeep upgrader once the timer has decayed well below
         // max, so the post-upgrade reset buys far longer than a creep's
         // lifespan before it's needed again.
+        // This is only the "needs one" mark, not "safe to demote" - that's
+        // a separate, higher mark (upgrader.rcl8SafeRatio) checked in
+        // roles/upgrader.js's isExcessUpgrader(), so an already-spawned
+        // creep doesn't get benched mid-decay before it ever gets a turn.
         upgrader =
             ctrl.ticksToDowngrade <
             CONTROLLER_DOWNGRADE[8] * config.get("upgrader.rcl8UpkeepRatio", 0.5)
