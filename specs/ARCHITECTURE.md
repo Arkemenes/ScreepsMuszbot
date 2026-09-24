@@ -57,9 +57,16 @@ decision and operation state through `Memory.stats.rooms.<room>.energyBalancing`
 `roles/builder.js` e `roles/upgrader.js` revalidam um estado persistido
 `GetEnergy` antes de executá-lo: links não-coletores só podem ser retirados
 quando spawn/extensions estão estáveis. Em RCL 8, o controller é tratado como
-completo: `rooms/needs.js` deseja zero upgraders, overrides/deltas antigos não
-recriam a demanda, upgraders excedentes convertem para builder e builder não
-usa `upgradeController` como fallback.
+completo *enquanto `ticksToDowngrade` está topado* (ROADMAP 0103 follow-up,
+ver "upgrader" abaixo para o mecanismo completo): overrides/deltas antigos não
+recriam demanda acima de 1, upgraders excedentes convertem para builder e
+builder não usa `upgradeController` como fallback — mas só nesse regime
+seguro. Assim que `ticksToDowngrade` cai abaixo de `upgrader.rcl8UpkeepRatio`,
+`rooms/needs.js` volta a desejar 1 upgrader de manutenção **e** o mesmo gate
+em `roles/builder.js` libera o fallback de upgrade, porque o builder
+convertido de upgrader ali (que a dedução `convertedUpgraders` de `needs.js`
+já conta como cobrindo o upkeep) precisa poder gastar a energia carregada em
+vez de ficar em "zzz" enquanto o timer continua caindo.
 
 ### `src/utils/`
 

@@ -9708,7 +9708,31 @@ function mineralStore(resources, freeCap) {
     rcl8Builder.upgradeController = () => { upgraded = true; return OK; };
     Game.time++;
     builderMod.run(rcl8Builder);
-    assert(!upgraded, "builder never uses a full RCL8 controller as an upgrade fallback");
+    assert(!upgraded, "builder never uses a full, topped-off RCL8 controller as an upgrade fallback");
+
+    // ROADMAP 0103 follow-up (real bug reported in production): the gate
+    // above must not be unconditional on level - once ticksToDowngrade
+    // decays past the same low-water mark rooms/needs.js uses to want its
+    // upkeep upgrader, a builder converted from upgrader (exactly the creep
+    // needs.js's convertedUpgraders deduction expects to cover that upkeep)
+    // must actually use its carried energy instead of idling "zzz" forever
+    // while the controller keeps decaying toward a real downgrade.
+    const savedTicksToDowngrade = controller.ticksToDowngrade;
+    controller.ticksToDowngrade = 50000; // well below the 50% low-water mark
+    const rcl8UpkeepBuilder = makeCreep("Rcl8UpkeepBuilder", "builder", {
+        store: store(50, 50),
+    });
+    let upkeepUpgraded = false;
+    rcl8UpkeepBuilder.upgradeController = () => {
+        upkeepUpgraded = true;
+        return OK;
+    };
+    Game.time++;
+    builderMod.run(rcl8UpkeepBuilder);
+    assert(upkeepUpgraded,
+        "builder falls back to upgrading a decaying RCL8 controller once " +
+            "ticksToDowngrade crosses the upkeep low-water mark");
+    controller.ticksToDowngrade = savedTicksToDowngrade;
 
     controller.level = savedLevel;
     room.energyAvailable = savedEnergy;

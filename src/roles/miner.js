@@ -284,14 +284,22 @@ function distribute(creep, near) {
         near,
         (s) => s.structureType === STRUCTURE_LINK && s.my && s.isCollector()
     );
-    const roomiestLink = _.max(collectorLinks, (l) =>
-        l.store.getFreeCapacity(RESOURCE_ENERGY)
+    // Between two adjacent collector links, prefer the one closer to
+    // sending its own load onward (lowest cooldown first - see
+    // structures/link.js's cooldown===0 gate, the one that empties itself
+    // soonest). Once cooldown ties (the common case - both usually sit at
+    // 0), prefer the one closest to full instead of the emptiest: topping
+    // it off gets it to a full send sooner, leaving the emptier one as
+    // spare room for the next cycle. Free capacity must still be > 0 or it
+    // can't take anything at all.
+    const candidateLinks = _.filter(
+        collectorLinks,
+        (l) => l.store.getFreeCapacity(RESOURCE_ENERGY) > 0
     );
-    const link =
-        roomiestLink !== -Infinity &&
-        roomiestLink.store.getFreeCapacity(RESOURCE_ENERGY) > 0
-            ? roomiestLink
-            : null;
+    const link = _.sortBy(candidateLinks, (l) => [
+        l.cooldown,
+        l.store.getFreeCapacity(RESOURCE_ENERGY),
+    ])[0] || null;
     const tower = _.find(
         near,
         (s) => s.structureType === STRUCTURE_TOWER && s.my

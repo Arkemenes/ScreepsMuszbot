@@ -29,11 +29,24 @@ uma margem larga (`upgrader.rcl8UpkeepRatio`, 50% de
 zerar tudo aqui em primeiro lugar — ver ROADMAP 0103 e `specs/ARCHITECTURE.md`
 ("upgrader") para o raciocínio completo.
 
+**Segundo follow-up (mesma sessão, 2026-09-24)**: o critério de aceite #2
+("Builder não usa controller RCL 8 como fallback de gasto") ficou
+incondicional ao nível, sem olhar `ticksToDowngrade` — um builder convertido
+de upgrader (que `needs.js`'s dedução `convertedUpgraders` já conta como
+cobrindo o upkeep) ficava travado em "zzz" com energia carregada mesmo com o
+controller abaixo do low-water mark. `roles/builder.js` agora só bloqueia o
+fallback quando `ticksToDowngrade` está no ou acima do mesmo
+`upgrader.rcl8UpkeepRatio`; abaixo dele, o builder volta a upgradar.
+
 ## Acceptance criteria
 
 1. Um builder/upgrader com estado `GetEnergy` apontando para link não-coletor
    não retira energia quando a economia da sala deixa de estar estável.
-2. Builder não usa controller RCL 8 como fallback de gasto.
+2. ~~Builder não usa controller RCL 8 como fallback de gasto~~ (ajustado pelo
+   segundo follow-up acima — builder não usa um controller RCL 8 *topado e
+   seguro* como fallback; usa quando `ticksToDowngrade` cai abaixo de
+   `upgrader.rcl8UpkeepRatio`, mesmo limiar do upkeep upgrader de
+   `rooms/needs.js`).
 3. ~~RCL 8 completo deseja zero upgraders~~ (revertido pelo follow-up
    acima — RCL 8 deseja 1 upgrader de manutenção sempre que
    `ticksToDowngrade` cai abaixo de `upgrader.rcl8UpkeepRatio`, zero caso
