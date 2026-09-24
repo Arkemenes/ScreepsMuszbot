@@ -159,7 +159,15 @@ function scoredOrders(op) {
     const wanted = op.kind === "buy" ? ORDER_SELL : ORDER_BUY;
     let orders = [];
     try { orders = Game.market.getAllOrders({ type: wanted, resourceType: op.resourceType }) || []; } catch (error) { return []; }
-    return orders.filter((order) => order && order.roomName && order.price > 0 && orderAmount(order) > 0).map((order) => {
+    // roomName is null for account-wide resources (pixel, accessKey,
+    // cpuUnlock): they aren't shipped anywhere, so the API never attaches a
+    // room to their orders. Requiring a truthy roomName unconditionally
+    // discarded every single order for those resources here, so
+    // terminalBuy/terminalSell always reported "nenhuma ordem no mercado"
+    // regardless of the real order book (bug real, usuário reportou em
+    // produção, 2026-09-24: terminalSell de pixel via marketPrice mostrava
+    // volume no book mas caía sempre em listagem própria).
+    return orders.filter((order) => order && order.price > 0 && (op.marketOnly || order.roomName) && orderAmount(order) > 0).map((order) => {
         const quantity = Math.min(op.remaining, orderAmount(order), op.kind === "sell" && !op.marketOnly ? (op.loadedAmount || 0) : op.remaining);
         const cost = op.marketOnly ? 0 : txCost(quantity, op.sourceRoom, order.roomName);
         const fee = quantity ? cost * (op.energyFairPrice || 0) / quantity : Infinity;
@@ -191,7 +199,7 @@ function reportNoCandidate(op) {
     if (!scored.length) { console.log("[terminalOps] " + op.id + " (" + op.kind + " " + op.resourceType + " em " + op.sourceRoom + "): nenhuma ordem no mercado, indo para listagem própria (limite " + op.limit + ")"); return; }
     const best = scored.sort((a, b) => op.kind === "buy" ? a.order.price - b.order.price : b.order.price - a.order.price)[0];
     console.log("[terminalOps] " + op.id + " (" + op.kind + " " + op.resourceType + " em " + op.sourceRoom + "): nenhuma ordem cobre o limite " + op.limit + " (preço bruto)" +
-        "; melhor encontrada em " + best.order.roomName + " preço " + best.order.price +
+        "; melhor encontrada em " + (best.order.roomName || "conta") + " preço " + best.order.price +
         ", custo de entrega " + best.cost + " energia (fair price " + (op.energyFairPrice || 0) + "), efetivo " + best.effective.toFixed(3) +
         " — indo para listagem própria");
 }
@@ -223,7 +231,7 @@ function executeDeal(op, target) {
     const status = Game.market.deal(candidate.order.id, candidate.quantity, op.sourceRoom);
     op.lastDealStatus = status;
     console.log("[terminalOps] " + op.id + " deal(" + candidate.order.id + ", " + candidate.quantity + ", " + op.sourceRoom + ") -> " + status +
-        " (ordem em " + candidate.order.roomName + ", preço " + candidate.order.price + ", créditos antes " + (Game.market ? Game.market.credits : "?") + ")");
+        " (ordem em " + (candidate.order.roomName || "conta") + ", preço " + candidate.order.price + ", créditos antes " + (Game.market ? Game.market.credits : "?") + ")");
     if (status !== OK) { op.error = "deal retornou " + status; touch(op, "waiting"); return; }
     // deal() only REGISTERS an intent - the engine executes it after the
     // script finishes, so nothing about the trade is observable in the tick
@@ -297,7 +305,9 @@ function competitivePrice(op) {
     const step = config.get("terminalOps.marketPriceStep", 0.001);
     let orders = [];
     try { orders = Game.market.getAllOrders({ type: op.kind === "buy" ? ORDER_BUY : ORDER_SELL, resourceType: op.resourceType }) || []; } catch (error) { orders = []; }
-    const prices = orders.filter((order) => order && order.price > 0 && order.roomName).map((order) => {
+    // Same marketOnly exception as scoredOrders() above: pixel/accessKey/
+    // cpuUnlock orders never carry a roomName.
+    const prices = orders.filter((order) => order && order.price > 0 && (op.marketOnly || order.roomName)).map((order) => {
         const cost = op.marketOnly ? 0 : txCost(Math.max(1, op.remaining), op.sourceRoom, order.roomName);
         const delivery = cost * (op.energyFairPrice || 0) / Math.max(1, op.remaining);
         return op.kind === "buy" ? order.price - delivery : order.price + delivery;

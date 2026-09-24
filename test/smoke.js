@@ -10837,6 +10837,48 @@ origLog("\nMemory:", memStr.length, "bytes  |  rooms.W1N1 keys:",
         "pixel SELL with enough credits calls createOrder and enters listing");
     Game.rooms = oldRooms; Game.market = oldMarket; Memory.terminalOps = oldOps;
 }
+// pixel/accessKey/cpuUnlock orders never carry a roomName - they aren't
+// shipped anywhere, so the API never attaches a room to them. scoredOrders()
+// used to require a truthy roomName unconditionally, so a real BUY order for
+// one of these resources was silently discarded and terminalSell() always
+// fell straight to "listagem própria" no matter how deep the book was (bug
+// real, usuário reportou em produção, 2026-09-24: marketPrice("pixel")
+// mostrava currentBuyVolume > 0 mas terminalSell dizia "nenhuma ordem no
+// mercado" com qualquer limite).
+{
+    const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
+    const oldRooms = Game.rooms, oldMarket = Game.market, oldOps = Memory.terminalOps;
+    // Monkeypatch market.snapshot() directly instead of market.reset()/scan():
+    // those touch module-singleton state (lastSnapshot, temporalSnapshots,
+    // marketHistoryStore's RawMemory segment) shared with every other test in
+    // this file, and this test runs nowhere near the tests that set that
+    // state up - clobbering it here left an unrelated later test (0098
+    // market-only pixel BUY/SELL) without the snapshot continuity it expected
+    // (bug real found while writing this test, 2026-09-24: green in
+    // isolation, broke a distant test when run as part of the full suite).
+    const oldSnapshot = market.snapshot;
+    market.snapshot = () => ({ tick: Game.time, resources: { pixel: { buyPrice: 55000, sellPrice: 55000, fairPrice: 55000 } } });
+    const room = { name: "W7N23", controller: { my: true } };
+    const orders = [{ id: "pixel-buy-roomless", resourceType: "pixel", type: ORDER_BUY, price: 55000, remainingAmount: 100, roomName: null }];
+    Game.rooms = Object.assign({}, oldRooms, { W7N23: room });
+    const dealCalls = [];
+    Game.market = {
+        credits: 200000,
+        incomingTransactions: [],
+        orders: {},
+        getAllOrders: (filter) => filter
+            ? orders.filter((order) => order.type === filter.type && order.resourceType === filter.resourceType)
+            : orders,
+        deal: (orderId, dealAmount, sourceRoom) => { dealCalls.push([orderId, dealAmount, sourceRoom]); return OK; },
+    };
+    Memory.terminalOps = { nextId: 1, operations: {}, seenIncoming: {}, events: [], terminalBalance: {} };
+    terminalOps.sell("W7N23", "pixel", 50, 50000);
+    terminalOps.tick();
+    assert(dealCalls.length === 1 && dealCalls[0][0] === "pixel-buy-roomless",
+        "a BUY order with roomName:null (pixel/accessKey/cpuUnlock's real shape) is still a valid candidate for a marketOnly SELL");
+    market.snapshot = oldSnapshot;
+    Game.rooms = oldRooms; Game.market = oldMarket; Memory.terminalOps = oldOps;
+}
 // ROADMAP 0098 repricing a live order uses changeOrderPrice, not
 // cancelOrder + createOrder. The old path re-paid the full 5% listing fee every
 // repriceInterval and refunded nothing (bug real, usuário reportou em produção
