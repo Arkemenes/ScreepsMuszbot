@@ -11,6 +11,7 @@ const rampartRepair = require("../utils/rampartRepair");
 const resourceTiers = require("../utils/resourceTiers");
 const names = require("../utils/names");
 const energyLedger = require("../utils/energyLedger");
+const config = require("../utils/config");
 
 function abandonUnsafeLinkLoad(creep) {
     if (creep.getState() !== "GetEnergy" || !creep.memory.stack) return false;
@@ -359,24 +360,28 @@ var builder = {
             let controller = creep.room.controller;
 
             // RCL8 controllers cannot bank more progress once literally
-            // topped off - past that point upgradeController() is a wasted
-            // call, so that's the only thing worth gating here. This is
-            // deliberately NOT the same rcl8UpkeepRatio/rcl8SafeRatio marks
-            // rooms/needs.js and isExcessUpgrader() use to decide who's
-            // WANTED or SAFE TO CONVERT (ROADMAP 0103 follow-up, real bug
-            // reported in production): those "criticality" marks size the
-            // population and decide role conversions, but a creep that
-            // already has energy in hand and nothing else to build/repair
-            // has nothing to lose by spending it here - reusing a demand
-            // threshold to gate spending as well left a builder (often one
-            // converted from upgrader, exactly the creep needs.js's
-            // convertedUpgraders deduction expects to cover this) idling
-            // "zzz" with a full energy load anywhere in the 50%-99% gap,
-            // even though the controller still had real room to take it.
+            // topped off, so a naive `>= CONTROLLER_DOWNGRADE[8]` gate
+            // sounds like the right check on paper - but in practice
+            // ticksToDowngrade pins exactly at that max the instant any
+            // creep (this one or another) tops it off, and stays there for
+            // a long time, so "literal max" in effect meant "never stop
+            // upgrading" (ROADMAP 0103 fifth follow-up, real bug reported
+            // in production, 2026-09-24: a builder was still spending on a
+            // controller sitting at cap). Reuse the same rcl8SafeRatio mark
+            // isExcessUpgrader() already treats as "safe" (99% of max) -
+            // below it there's real room to take more, at or above it the
+            // controller isn't genuinely at risk and a builder with energy
+            // in hand should go look for actual building/repair work
+            // instead of pinning it there. This is still an acquisition/
+            // role mark being reused here, not a fresh literal-fullness
+            // check - deliberately so, since "safe to stop" and "safe to
+            // convert away" are the same question asked from two creeps.
             if (
                 !controller ||
                 (controller.level >= 8 &&
-                    controller.ticksToDowngrade >= CONTROLLER_DOWNGRADE[8])
+                    controller.ticksToDowngrade >=
+                        CONTROLLER_DOWNGRADE[8] *
+                            config.get("upgrader.rcl8SafeRatio", 0.99))
             ) {
                 creep.say("zzz");
                 return;

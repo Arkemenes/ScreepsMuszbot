@@ -8,6 +8,7 @@
 // spawn<->controller) roads.
 
 const config = require("./config");
+const { planEntriesAt } = require("./plan");
 
 let counts = {}; // { roomName: { "x:y": count } }
 let lastDecay = 0;
@@ -171,13 +172,34 @@ function isHot(roomName, x, y, threshold) {
 
 // Whether `structure` is worth queueing for repair from a traffic point of
 // view. Every non-road structure always is (the rule only exists for roads).
-// A road only qualifies once it's below traffic.roadRepairFloor AND its tile
-// has seen recent traffic - a cold, unused road tile is left to decay/
-// disappear instead of burning builder/tower energy on it.
+// A road never qualifies while it's still above traffic.roadRepairFloor.
+// Below the floor:
+//   - a road the city plan reserves is ALWAYS worth repairing, however cold
+//     its tile is (user-requested). The plan already decided that road
+//     belongs there, and the heat gate below is heap-only - every global
+//     reset zeroes it, so a planned road on a quiet tile could sit at 6% hits
+//     forever, unreachable for both builder and tower. Repairing costs
+//     1 energy / 100 hits against the 300 energy / 5000 hits (6x more) of
+//     letting it die and rebuilding it, so waiting for heat only bought a
+//     build -> decay -> build loop.
+//   - anywhere the plan has nothing to say (a room with no plan at all yet,
+//     or a road the plan doesn't reserve) the old rule still holds: repair
+//     only a tile with recent traffic, and leave a cold, unused road to
+//     decay/disappear instead of burning builder/tower energy on it.
 function worthRepairing(structure) {
     if (structure.structureType !== STRUCTURE_ROAD) return true;
     const floor = config.get("traffic.roadRepairFloor", 0.4);
     if (structure.hits / structure.hitsMax >= floor) return false;
+
+    const planned = planEntriesAt(
+        structure.room.name,
+        structure.pos.x,
+        structure.pos.y
+    );
+    if (planned && planned.some((b) => b.structureType === STRUCTURE_ROAD)) {
+        return true;
+    }
+
     return isHot(structure.room.name, structure.pos.x, structure.pos.y);
 }
 

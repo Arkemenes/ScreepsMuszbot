@@ -182,12 +182,16 @@ function controllerContainerCandidates(room) {
 
 function optionalConsumer(creep) {
     const lab = creep.pos.findClosestByRange(
-        labFactoryPowerSpawnNeedingEnergy(creep.room)
+        labFactoryPowerSpawnNeedingEnergy(creep.room).filter(
+            (s) => reservations.availableDeliver(creep, s) > 0
+        )
     );
     if (lab) return lab;
 
     if (!creep.room.controller) return null;
-    return controllerContainerCandidates(creep.room)[0];
+    return controllerContainerCandidates(creep.room).find(
+        (s) => reservations.availableDeliver(creep, s) > 0
+    );
 }
 
 // A non-critical tower still worth topping off (towerDeliverable) - also
@@ -204,7 +208,11 @@ function toppableTowers(room) {
 }
 
 function toppableTower(creep) {
-    return creep.pos.findClosestByRange(toppableTowers(creep.room));
+    return creep.pos.findClosestByRange(
+        toppableTowers(creep.room).filter(
+            (s) => reservations.availableDeliver(creep, s) > 0
+        )
+    );
 }
 
 // ROADMAP 0074 (user request, refined same-day): a non-critical tower
@@ -343,27 +351,53 @@ function estimatedDropAmount(creep, resource) {
     return Math.max(0, resource.amount - perTick * eta);
 }
 
-// Where to pick energy up, closest-by-path within each tier: the terminal
-// first (only the withdrawable slice of it, see terminalWithdrawable above -
-// tagged `dest: "storage"` so the delivery side routes it straight to
-// storage instead of the normal spawn/tower/lab cascade, constitution §5:
-// terminal energy is for the market/inter-room side of the economy, not
-// this room's regular consumers) - then dropped energy worth more than
-// hauler.minDropLoad (100) BY THE TIME IT'D ARRIVE (decay-aware, see
-// estimatedDropAmount) - then tombstones/ruins (one-shot piles same as
-// drops, just not decaying per-tick) - then the base link (it bottlenecks
-// the whole link network) - then storage: unconditionally when spawn/ext/
-// a critical tower need it (essentialConsumer - keeping the room able to
-// spawn and defend itself always outranks the reserve), or, once above the
-// reserve (resourceTiers.aboveReserve, ROADMAP 0054), when any optional
-// consumer needs it - a non-critical tower first, then a lab/factory/power
-// spawn/controller container (satisfactoryConsumer, ROADMAP 0074 - both
-// genuinely optional, but a tower still outranks the rest within that
-// tier) - never storage -> storage either way - then the
-// closest source container built up past hauler.minContainerLoad (not the
-// fullest one - a far container isn't worth the trip when a closer one
-// already qualifies).
+// Where to pick energy up, closest-by-path within each tier. ROADMAP 0107
+// (user request) put a decaying, one-shot tier ahead of EVERYTHING else,
+// terminal/essentialConsumer included - a dropped pile that's about to
+// shrink outranks a routine spawn refill, which can just wait a few more
+// ticks without going critical: a dropped energy pile worth more than
+// hauler.bigDropLoad (500) BY THE TIME IT'D ARRIVE (decay-aware, see
+// estimatedDropAmount) - `tier: "bigDrop"` on the return value, so run()
+// knows to short-circuit straight to it, skipping even battlefield loot.
+// Tombstone/ruin loot (any resource, energy included) is NOT part of this
+// function at all any more - it's a single all-in-one trip handled by
+// battlefieldLootJob/runLootJob (checked by run() right after bigDrop,
+// before falling through to the rest of the cascade below), since a
+// hauler grabbing loot off a body now takes everything sitting there and
+// delivers straight to storage, not just the energy slice.
+// Below bigDrop: the terminal (only the withdrawable slice of it, see
+// terminalWithdrawable above - tagged `dest: "storage"` so the delivery
+// side routes it straight to storage instead of the normal spawn/tower/lab
+// cascade, constitution §5: terminal energy is for the market/inter-room
+// side of the economy, not this room's regular consumers) - then the base
+// link (it bottlenecks the whole link network) - then storage:
+// unconditionally when spawn/ext/a critical tower need it (essentialConsumer
+// - keeping the room able to spawn and defend itself always outranks the
+// reserve), or, once above the reserve (resourceTiers.aboveReserve, ROADMAP
+// 0054), when any optional consumer needs it - a non-critical tower first,
+// then a lab/factory/power spawn/controller container (satisfactoryConsumer,
+// ROADMAP 0074 - both genuinely optional, but a tower still outranks the
+// rest within that tier) - never storage -> storage either way - a smaller
+// dropped energy pile (below bigDropLoad, still worth hauler.minDropLoad)
+// - then the closest source container built up past hauler.minContainerLoad
+// (not the fullest one - a far container isn't worth the trip when a closer
+// one already qualifies).
 function pickLoad(creep) {
+    const bigDropMin = config.get("hauler.bigDropLoad", 500);
+    const bigDrop = creep.pos.findClosestByPath(FIND_DROPPED_RESOURCES, {
+        filter: (r) =>
+            r.resourceType === RESOURCE_ENERGY &&
+            estimatedDropAmount(creep, r) > bigDropMin &&
+            reservations.available(creep, r) >= 50,
+    });
+    if (bigDrop) return { id: bigDrop.id, act: "pickup", tier: "bigDrop" };
+
+    // Tombstone/ruin loot (energy included) is handled entirely by
+    // battlefieldLootJob/runLootJob below (ROADMAP 0107, user request: one
+    // trip grabs everything a body's holding, straight to storage) - not
+    // this energy-only pipeline, so there's no separate tier for it here
+    // any more.
+
     if (creep.room.terminal) {
         const minTerminal = config.get("hauler.minTerminalLoad", 100);
         const withdrawable = terminalWithdrawable(creep.room);
@@ -444,20 +478,6 @@ function pickLoad(creep) {
     });
     if (dropped) return { id: dropped.id, act: "pickup" };
 
-    const tomb = creep.pos.findClosestByPath(FIND_TOMBSTONES, {
-        filter: (t) =>
-            t.store[RESOURCE_ENERGY] > minDrop &&
-            reservations.available(creep, t) >= 50,
-    });
-    if (tomb) return { id: tomb.id, act: "withdraw" };
-
-    const ruin = creep.pos.findClosestByPath(FIND_RUINS, {
-        filter: (r) =>
-            r.store[RESOURCE_ENERGY] > minDrop &&
-            reservations.available(creep, r) >= 50,
-    });
-    if (ruin) return { id: ruin.id, act: "withdraw" };
-
     const link = creep.pos.findClosestByRange(
         nonCollectorLinksWithEnergy(creep.room).filter(
             (s) => reservations.available(creep, s) >= 50
@@ -535,13 +555,28 @@ function isSourceDefenseTower(structure) {
     );
 }
 
+// ROADMAP 0107 (user request): every candidate list below is filtered
+// through reservations.availableDeliver before the closest-by pick, same
+// idiom as pickLoad's reservations.available on the pickup side - a
+// target another hauler already carries enough to fill (e.g. an
+// extension with 50 free capacity and a hauler already en route with
+// 50+ energy) drops out so a second hauler doesn't also head there to
+// dump into an already-spoken-for slot.
 function pickDeliver(creep) {
     // Production continuity comes before optional defense refill: a hungry
     // spawn/extension must win over a tower sitting below its refill ratio.
-    let target = creep.pos.findClosestByPath(spawnExtNeedingEnergy(creep.room));
+    let target = creep.pos.findClosestByPath(
+        spawnExtNeedingEnergy(creep.room).filter(
+            (s) => reservations.availableDeliver(creep, s) > 0
+        )
+    );
     if (target) return target.id;
 
-    target = creep.pos.findClosestByRange(criticalTowers(creep.room));
+    target = creep.pos.findClosestByRange(
+        criticalTowers(creep.room).filter(
+            (s) => reservations.availableDeliver(creep, s) > 0
+        )
+    );
     if (target) return target.id;
 
     // keep a minimum emergency buffer in storage - below the reserve it
@@ -578,7 +613,11 @@ function pickDeliver(creep) {
     // capacity - not worth a dedicated trip, but with the hauler already
     // idle and nothing else to do, topping one off anyway beats sitting
     // full nearby.
-    target = creep.pos.findClosestByRange(fallbackTowers(creep.room));
+    target = creep.pos.findClosestByRange(
+        fallbackTowers(creep.room).filter(
+            (s) => reservations.availableDeliver(creep, s) > 0
+        )
+    );
     if (target) return target.id;
 
     return null;
@@ -805,6 +844,88 @@ function spawnsAndExtensionsFull(room) {
     );
 }
 
+// A dead creep's tombstone (or a destroyed structure's ruin) can hold
+// several resource types at once - energy plus whatever compounds a
+// boosted invader/hostile carried - and either pile decays away for good
+// if nobody grabs it in time. ROADMAP 0107 (user request): a hauler that
+// goes for one of these grabs EVERYTHING sitting there in a single trip
+// (not a separate pickLoad energy trip plus a separate mineralJob per
+// compound) and dumps it all straight into storage, never terminal - so
+// this doesn't fit the {kind, resourceType, from, to} single-resource
+// shape every other mineral job here uses; see runLootJob below for the
+// multi-resource pickup/delivery loop it drives instead. Checked first,
+// ahead of the rest of the mineral cascade (pickMineralJob), because,
+// unlike a container/lab/factory backlog, a decaying tombstone really can
+// vanish for good before a hauler gets around to it.
+function battlefieldLootJob(room) {
+    const minLoot = config.get("hauler.minLootLoad", 50);
+    const piles = roomCache.tombstones(room).concat(roomCache.ruins(room));
+    const pile = piles.find((p) =>
+        Object.keys(p.store).some((k) => p.store[k] > minLoot)
+    );
+    if (!pile) return null;
+    if (!room.storage || room.storage.store.getFreeCapacity() <= 0) return null;
+    return { kind: "battlefieldLoot", from: pile, to: room.storage };
+}
+
+function clearLootJob(creep) {
+    delete creep.memory.lootJob;
+    nonEnergyLogistics.release(creep);
+}
+
+function assignLootJob(creep, job) {
+    if (!job || !nonEnergyLogistics.claim(creep)) return false;
+    reservations.release(creep);
+    creep.memory.lootJob = { fromId: job.from.id, toId: job.to.id };
+    return true;
+}
+
+// One pickup/delivery action per tick, same idiom as runMineralJob, but
+// loops through every resource type present instead of committing to one:
+// withdraw whatever's left on the pile while there's still room for it and
+// still something to take, then once full (or the pile's drained/gone)
+// switch to unloading everything carried into storage, one resource type
+// per transfer() call - Screeps only allows a single resource type per
+// pickup/withdraw/transfer, so a multi-resource pile takes one call per
+// resource type either way, just all in the same trip instead of a
+// separate mineralJob per compound.
+function runLootJob(creep) {
+    const job = creep.memory.lootJob;
+    const from = Game.getObjectById(job.fromId);
+    const pileHasLoot = from && _.some(from.store, (n) => n > 0);
+
+    if (creep.store.getFreeCapacity() > 0 && pileHasLoot) {
+        const resourceType = _.findKey(from.store, (n) => n > 0);
+        const status = creep.withdraw(from, resourceType);
+        if (status === ERR_NOT_IN_RANGE) creep.moveTo(from, { range: 1 });
+        return;
+    }
+
+    if (creep.store.getUsedCapacity() === 0) {
+        clearLootJob(creep);
+        return;
+    }
+
+    const to = Game.getObjectById(job.toId) || creep.room.storage;
+    if (!to || to.store.getFreeCapacity() <= 0) {
+        // nowhere to dump it right now - hold near storage and wait rather
+        // than lose it, same fail-soft spirit as runMineralJob's
+        // preserveMineralCargo (storage-only here, so no terminal anchor)
+        if (creep.room.storage && !creep.pos.inRangeTo(creep.room.storage, 1)) {
+            creep.moveTo(creep.room.storage, { range: 1, reusePath: 10 });
+        }
+        return;
+    }
+    const resourceType = _.findKey(creep.store, (n) => n > 0);
+    const status = creep.transfer(to, resourceType);
+    if (status === ERR_NOT_IN_RANGE) creep.moveTo(to, { range: 1 });
+}
+
+// battlefieldLootJob is deliberately NOT part of this cascade - its shape
+// (multi-resource, no single resourceType) doesn't fit runMineralJob, so
+// run() checks it separately via assignLootJob/runLootJob, at the same
+// priority spot pickMineralJob() used to give it (first, ahead of every
+// job below).
 function pickMineralJob(room) {
     return (
         mineralContainerJob(room) ||
@@ -935,6 +1056,15 @@ var hauler = {
         if (takeCover(creep)) return;
         if (terminalOps.runHauler(creep)) return;
 
+        // ROADMAP 0107 (user request): an in-progress battlefield loot trip
+        // always runs to completion - grab everything the body's still
+        // holding, then dump it all in storage - before anything else below
+        // gets a look in, same as the mineralJob commitment right after.
+        if (creep.memory.lootJob) {
+            runLootJob(creep);
+            return;
+        }
+
         // ROADMAP 0051: finish an in-progress non-energy job before
         // touching energy logic again - see the block's own comment above.
         // Exception: if the creep hasn't picked the resource up yet (nothing
@@ -958,6 +1088,14 @@ var hauler = {
                 clearMineralJob(creep);
             } else {
                 const energySource = pickLoad(creep);
+                // ROADMAP 0107: a >500 dropped pile preempts even an
+                // in-progress (not-yet-loaded) mineral job outright - same
+                // priority as the fresh-pick case in the "load" branch below.
+                if (energySource && energySource.tier === "bigDrop") {
+                    clearMineralJob(creep);
+                    loadEnergy(creep, energySource);
+                    return;
+                }
                 const pressuredJob = pickPressuredJob(creep.room);
                 if (pressuredJob) {
                     assignMineralJob(creep, pressuredJob);
@@ -985,6 +1123,7 @@ var hauler = {
             // whatever forced this delivery (e.g. terminal -> storage) is
             // done once the tank is empty again - the next load starts fresh
             delete creep.memory.forcedDeliver;
+            reservations.releaseDeliver(creep);
         } else if (creep.memory.job !== "deliver" && free === 0) {
             creep.memory.job = "deliver";
         } else if (!creep.memory.job) {
@@ -993,6 +1132,31 @@ var hauler = {
 
         if (creep.memory.job === "load") {
             const src = pickLoad(creep);
+
+            // ROADMAP 0107 (user request): a >500 dropped pile wins outright
+            // - even over a pressured job - decay-aware (estimatedDropAmount)
+            // and by far the biggest one-shot amount on the ground.
+            if (src && src.tier === "bigDrop") {
+                loadEnergy(creep, src);
+                return;
+            }
+
+            // Tombstone/ruin loot (every resource a body is holding, energy
+            // included - ROADMAP 0107, user request) is the next tier - it
+            // decays away for good if nobody grabs it in time, so it
+            // outranks the regular pressuredJob/terminal/essentialConsumer
+            // cascade below, but never the bigDrop pile above. Only while
+            // the tank's empty - already carrying energy rules out starting
+            // a fresh lootJob mid-trip (runLootJob commits to finishing one
+            // it's already on, same as the rest of this file's job idiom).
+            if (creep.store.getUsedCapacity() === 0) {
+                const loot = battlefieldLootJob(creep.room);
+                if (loot && assignLootJob(creep, loot)) {
+                    runLootJob(creep);
+                    return;
+                }
+            }
+
             if (src) {
                 const pressuredJob = hasPressureCapacity(creep.room)
                     ? pickPressuredJob(creep.room)
@@ -1045,6 +1209,7 @@ var hauler = {
         }
         const target = Game.getObjectById(id);
         if (!target) return;
+        reservations.claimDeliver(creep, id);
         if (creep.transfer(target, RESOURCE_ENERGY) === ERR_NOT_IN_RANGE) {
             creep.moveTo(target, { range: 1 });
         }
@@ -1068,6 +1233,8 @@ var hauler = {
 
     // exposed for the offline smoke test only
     pickMineralJob,
+    battlefieldLootJob,
+    runLootJob,
     optionalConsumer,
     spawnsAndExtensionsFull,
     shouldMinerFeedTower,

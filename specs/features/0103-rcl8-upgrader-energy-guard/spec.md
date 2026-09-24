@@ -66,16 +66,34 @@ nada enquanto o controller não estiver literalmente no teto. O gate agora
 checa `ticksToDowngrade >= CONTROLLER_DOWNGRADE[8]` (100% real), não mais o
 limiar de 50%.
 
+**Quinto follow-up (mesma sessão, 2026-09-24, pedido do usuário)**: o gate
+literal (`ticksToDowngrade >= CONTROLLER_DOWNGRADE[8]`) do quarto follow-up
+acima soava certo no papel, mas na prática nunca disparava — o timer fica
+pinado exatamente no teto assim que qualquer creep completa um
+`upgradeController()`, e fica ali por muito tempo, então "teto literal" na
+prática equivalia a "nunca parar de upgradar" (bug real reportado em
+produção: um builder ainda gastando energia num controller já no teto).
+`roles/builder.js` volta a reusar `upgrader.rcl8SafeRatio` (99%) — a mesma
+marca que `isExcessUpgrader()` já trata como "seguro" — em vez do teto
+literal: abaixo dela ainda há espaço real para receber progresso; nela ou
+acima, o controller não está genuinamente em risco e um builder com energia
+na mão deve procurar obra/reparo de verdade em vez de fixar energia ali.
+Isso volta a ser uma marca de aquisição/role sendo reaproveitada
+deliberadamente, não um novo teto literal — "seguro para parar" e "seguro
+para converter" são a mesma pergunta feita por dois creeps diferentes.
+
 ## Acceptance criteria
 
 1. Um builder/upgrader com estado `GetEnergy` apontando para link não-coletor
    não retira energia quando a economia da sala deixa de estar estável.
 2. ~~Builder não usa controller RCL 8 como fallback de gasto~~ (ajustado pelo
-   segundo follow-up acima, depois corrigido de novo pelo quarto — builder só
-   deixa de usar o controller RCL 8 como fallback quando ele está
-   *literalmente* no teto, `ticksToDowngrade >= CONTROLLER_DOWNGRADE[8]`; o
-   limiar de demanda `upgrader.rcl8UpkeepRatio` continua controlando só quem
-   é *desejado*, nunca se um creep já com energia na mão pode gastá-la).
+   segundo follow-up acima, corrigido de novo pelo quarto, e mais uma vez
+   pelo quinto — o teto *literal* do quarto follow-up na prática nunca
+   disparava porque o timer fica pinado no máximo; builder agora para de
+   gastar assim que `ticksToDowngrade` atinge `upgrader.rcl8SafeRatio`
+   (99%), a mesma marca de "seguro para converter" que `isExcessUpgrader()`
+   usa. `upgrader.rcl8UpkeepRatio` continua controlando só quem é
+   *desejado*).
 3. ~~RCL 8 completo deseja zero upgraders~~ (revertido pelo follow-up
    acima — RCL 8 deseja 1 upgrader de manutenção sempre que
    `ticksToDowngrade` cai abaixo de `upgrader.rcl8UpkeepRatio`, zero caso

@@ -37,7 +37,15 @@ function freeCapacity(store, resource) { return !store || typeof store.getFreeCa
 function room(name) { return Game.rooms && Game.rooms[name]; }
 function owned(name) { const value = room(name); return value && value.controller && value.controller.my && value.storage && value.terminal ? value : null; }
 function txCost(value, from, to) { return Game.market && typeof Game.market.calcTransactionCost === "function" ? Game.market.calcTransactionCost(value, from, to) : 0; }
-function touch(op, state) { if (state) op.state = state; op.updatedTick = Game.time; }
+// Single choke point for state changes, so every path that gives up on an
+// operation (credits, market unavailable, createOrder error, ...) is reported
+// here instead of requiring each call site to remember to log it. Silent
+// "failed" ops used to only be visible via terminalOperations() polling.
+function touch(op, state) {
+    if (state === "failed" && op.state !== "failed") console.log("[terminalOps] " + op.id + " (" + op.kind + " " + op.resourceType + ", " + (op.sourceRoom || "?") + (op.targetRoom ? "->" + op.targetRoom : "") + ") falhou: " + (op.error || "motivo desconhecido"));
+    if (state) op.state = state;
+    op.updatedTick = Game.time;
+}
 
 // One logical operation owns its source resource and involved terminals until
 // it reaches a final state. This prevents manual and automatic work from
@@ -126,22 +134,55 @@ function assign(op, home, direction, from, to, value, resourceType) {
 }
 
 function orderAmount(order) { return order && (order.remainingAmount || order.amount) || 0; }
-function candidateOrders(op) {
+// Scores every order in the book against the estimated delivery cost
+// (converted to currency via energyFairPrice), without dropping the ones
+// that miss op.limit. candidateOrders() filters this down to what's
+// actually dealable; executeDeal() also uses the unfiltered list to
+// explain, when nothing matches, how close the best order actually was.
+function scoredOrders(op) {
     if (!Game.market || typeof Game.market.getAllOrders !== "function") return [];
     const wanted = op.kind === "buy" ? ORDER_SELL : ORDER_BUY;
     let orders = [];
     try { orders = Game.market.getAllOrders({ type: wanted, resourceType: op.resourceType }) || []; } catch (error) { return []; }
     return orders.filter((order) => order && order.roomName && order.price > 0 && orderAmount(order) > 0).map((order) => {
-        const origin = room(op.sourceRoom);
         const quantity = Math.min(op.remaining, orderAmount(order), op.kind === "sell" && !op.marketOnly ? (op.loadedAmount || 0) : op.remaining);
         const cost = op.marketOnly ? 0 : txCost(quantity, op.sourceRoom, order.roomName);
         const fee = quantity ? cost * (op.energyFairPrice || 0) / quantity : Infinity;
         return { order, quantity, cost, effective: op.kind === "buy" ? order.price + fee : order.price - fee };
-    }).filter((item) => item.quantity > 0 && (op.kind === "buy" ? item.effective <= op.limit : item.effective >= op.limit)).sort((a, b) => op.kind === "buy" ? a.effective - b.effective : b.effective - a.effective);
+    });
+}
+// op.limit gates on the order's own raw price - the number the user reads
+// straight off the market (marketPrice()/order book) when they pick a
+// limit - not the delivery-cost-adjusted "effective" price. Reversed
+// 2026-09-24 (real report): a SELL with limit 43 found a buy order at 43.925
+// but skipped it because delivery cost to a distant room netted the
+// "effective" price down to 32.113 - correct per the original 0098 design
+// ("limite sempre é líquido"), but not what the user expects: they set the
+// limit by watching the raw market price, so 43.925 should have qualified.
+// `effective` still breaks ties/ranks among orders that clear the raw bar,
+// so a cheaper-to-deliver order is still preferred over a pricier-to-reach
+// one at the same raw price.
+function candidateOrders(op) {
+    // deadOrderIds excludes orders that already burned a deal() call this
+    // operation without any observable effect (see the verification in
+    // executeDeal()) - without this, a permanently-broken order would keep
+    // winning the sort every tick and the operation would never move on to
+    // an order that actually works.
+    const dead = op.deadOrderIds || [];
+    return scoredOrders(op).filter((item) => item.quantity > 0 && dead.indexOf(item.order.id) < 0 && (op.kind === "buy" ? item.order.price <= op.limit : item.order.price >= op.limit)).sort((a, b) => op.kind === "buy" ? a.effective - b.effective : b.effective - a.effective);
+}
+function reportNoCandidate(op) {
+    const scored = scoredOrders(op).filter((item) => item.quantity > 0);
+    if (!scored.length) { console.log("[terminalOps] " + op.id + " (" + op.kind + " " + op.resourceType + " em " + op.sourceRoom + "): nenhuma ordem no mercado, indo para listagem própria (limite " + op.limit + ")"); return; }
+    const best = scored.sort((a, b) => op.kind === "buy" ? a.order.price - b.order.price : b.order.price - a.order.price)[0];
+    console.log("[terminalOps] " + op.id + " (" + op.kind + " " + op.resourceType + " em " + op.sourceRoom + "): nenhuma ordem cobre o limite " + op.limit + " (preço bruto)" +
+        "; melhor encontrada em " + best.order.roomName + " preço " + best.order.price +
+        ", custo de entrega " + best.cost + " energia (fair price " + (op.energyFairPrice || 0) + "), efetivo " + best.effective.toFixed(3) +
+        " — indo para listagem própria");
 }
 function executeDeal(op, target) {
     const candidate = candidateOrders(op)[0];
-    if (!candidate) { touch(op, "listing"); return; }
+    if (!candidate) { reportNoCandidate(op); touch(op, "listing"); return; }
     if (!op.marketOnly && target.terminal.cooldown) { op.error = "terminal em cooldown"; touch(op, "waiting"); return; }
     if (!op.marketOnly && storeValue(target.terminal.store, RESOURCE_ENERGY) < candidate.cost) {
         const missingEnergy = candidate.cost - storeValue(target.terminal.store, RESOURCE_ENERGY);
@@ -155,12 +196,86 @@ function executeDeal(op, target) {
         op.error = "energia de taxa insuficiente"; touch(op, "waiting"); return;
     }
     if (op.kind === "buy" && (!Game.market || Game.market.credits < candidate.order.price * candidate.quantity)) { op.error = "créditos insuficientes"; touch(op, "waiting"); return; }
+    // Diagnostic (2026-09-24, usuário reportou em produção): status OK de
+    // deal() nem sempre correspondeu a uma troca real observável (créditos
+    // parados em 0, O "vendido" reaparecendo em um receipt logo depois).
+    // Persistir o pedido exato ajuda a cruzar com Game.market.getOrderById()
+    // depois do fato, já que candidate.order não sobrevive além deste tick.
+    op.lastDealOrderId = candidate.order.id;
+    op.lastDealOrderRoom = candidate.order.roomName;
+    op.lastDealOrderPrice = candidate.order.price;
+    op.lastDealQuantity = candidate.quantity;
     const status = Game.market.deal(candidate.order.id, candidate.quantity, op.sourceRoom);
+    op.lastDealStatus = status;
+    console.log("[terminalOps] " + op.id + " deal(" + candidate.order.id + ", " + candidate.quantity + ", " + op.sourceRoom + ") -> " + status +
+        " (ordem em " + candidate.order.roomName + ", preço " + candidate.order.price + ", créditos antes " + (Game.market ? Game.market.credits : "?") + ")");
     if (status !== OK) { op.error = "deal retornou " + status; touch(op, "waiting"); return; }
-    op.remaining -= candidate.quantity; op.dealtAmount = (op.dealtAmount || 0) + candidate.quantity; op.transactionCost += candidate.cost;
-    op.feeLoadedAmount = Math.max(0, (op.feeLoadedAmount || 0) - candidate.cost);
-    if (op.kind === "sell") op.loadedAmount = Math.max(0, (op.loadedAmount || 0) - candidate.quantity);
-    record(op, candidate.quantity, candidate.order.price * candidate.quantity * (op.kind === "buy" ? -1 : 1), candidate.cost);
+    // deal() only REGISTERS an intent - the engine executes it after the
+    // script finishes, so nothing about the trade is observable in the tick
+    // that called it: not Game.market.credits, not the order's
+    // remainingAmount, not this terminal's own store. Settling here (the old
+    // behaviour) was the root cause of the "nenhuma ordem foi efetivada" bug
+    // (2026-09-24, usuário reportou em produção): zeroing loadedAmount /
+    // feeLoadedAmount and marking the operation "completed" dropped the
+    // operation's claim over stock that was still physically sitting in the
+    // terminal, and scanTerminalBalances() - which runs at the end of this
+    // very same tick() - then saw that cargo and fee energy as unclaimed
+    // surplus, minted receipts for both and dispatched haulers to withdraw
+    // them straight back to storage. Those withdraw intents are processed in
+    // the same end-of-tick batch as the deal, emptying the terminal out from
+    // under the pending trade: deal() had returned OK but nothing happened -
+    // no transaction in the history, credits frozen, the order's
+    // remainingAmount untouched - and the hauler kept shuttling the same
+    // stock in and out of the terminal forever. So: park the operation in
+    // "settling", keep every claim intact, and let settleDeal() do the
+    // bookkeeping on the next tick against evidence that actually exists.
+    op.pendingDeal = {
+        orderId: candidate.order.id, quantity: candidate.quantity, cost: candidate.cost,
+        price: candidate.order.price, tick: Game.time,
+        orderRemaining: orderAmount(candidate.order),
+        terminalBefore: op.marketOnly ? 0 : storeValue(target.terminal.store, op.resourceType),
+    };
+    touch(op, "settling");
+}
+// Did the trade the engine was asked for last tick actually happen? The
+// terminal's own store is the strongest evidence available: it is local,
+// exact, and - unlike the order book or Game.market.credits - cannot be moved
+// by other players trading against the same order in between. It stays clean
+// while the operation sits in "settling" because the claim over the staged
+// cargo was never released, so no receipt and no further load can touch it.
+function dealTraded(op, source, pending) {
+    if (!op.marketOnly && source && source.terminal) {
+        const now = storeValue(source.terminal.store, op.resourceType);
+        const moved = op.kind === "buy" ? now - pending.terminalBefore : pending.terminalBefore - now;
+        return moved >= pending.quantity ? pending.quantity : 0;
+    }
+    // marketOnly (pixel / CPU unlock): no terminal is involved at all, so the
+    // order book is the only signal. A real trade can only ever lower
+    // remainingAmount, and a fully consumed order disappears outright.
+    const verify = typeof Game.market.getOrderById === "function" ? Game.market.getOrderById(pending.orderId) : null;
+    if (!verify) return pending.quantity;
+    return orderAmount(verify) < pending.orderRemaining ? pending.quantity : 0;
+}
+function settleDeal(op, source) {
+    const pending = op.pendingDeal;
+    if (!pending) { touch(op, "waiting"); return; }
+    if (Game.time <= pending.tick) return; // the engine has not run the intent yet
+    const traded = dealTraded(op, source, pending);
+    delete op.pendingDeal;
+    if (!traded) {
+        // The deal was accepted and then silently did nothing. Blacklist the
+        // order so the next attempt picks a different one instead of burning
+        // the same dead deal forever, and fall back without touching any
+        // bookkeeping so the staged cargo/fee stay claimed and protected.
+        op.error = "deal retornou OK mas nenhuma troca foi observada";
+        op.deadOrderIds = (op.deadOrderIds || []).concat(pending.orderId).slice(-10);
+        touch(op, op.kind === "sell" && !op.marketOnly ? "atTerminal" : "waiting");
+        return;
+    }
+    op.remaining = Math.max(0, op.remaining - traded); op.dealtAmount = (op.dealtAmount || 0) + traded; op.transactionCost += pending.cost;
+    op.feeLoadedAmount = Math.max(0, (op.feeLoadedAmount || 0) - pending.cost);
+    if (op.kind === "sell") op.loadedAmount = Math.max(0, (op.loadedAmount || 0) - traded);
+    record(op, traded, pending.price * traded * (op.kind === "buy" ? -1 : 1), pending.cost);
     touch(op, op.remaining ? "queued" : (op.kind === "buy" && !op.marketOnly ? "awaitingReceipt" : "completed"));
 }
 function competitivePrice(op) {
@@ -259,9 +374,21 @@ function scanIncoming() {
     Object.keys(memory().seenIncoming).forEach((id) => { if (Game.time - memory().seenIncoming[id] > 1000) delete memory().seenIncoming[id]; });
 }
 function managedTerminalIncrease(roomName, resourceType) {
+    // loadedAmount and feeLoadedAmount are different currencies: loadedAmount
+    // is measured in the operation's own resourceType (only relevant when it
+    // matches the resourceType being queried), but feeLoadedAmount is always
+    // energy staged to pay a market fee, regardless of what the operation is
+    // selling. Real bug: a SELL of "O" stages energy in the terminal for its
+    // own fee (feeLoadedAmount), but querying this for "energy" surplus used
+    // to bail out on the very first resourceType mismatch (op.resourceType
+    // "O" !== "energy") before ever reaching the feeLoadedAmount line - so
+    // that staged fee energy looked like unclaimed surplus every tick and got
+    // folded into an unrelated energy receipt's amount, ballooning it, while
+    // the receipt's hauler hauled the same fee-staged energy straight back to
+    // storage the instant it landed, undoing the SELL's own fee job forever.
     return activeForRoom(roomName).reduce((sum, op) => {
-        if (op.sourceRoom !== roomName || op.resourceType !== resourceType) return sum;
-        if (op.kind === "sell" || op.kind === "transfer") sum += Math.max(0, op.loadedAmount || 0);
+        if (op.sourceRoom !== roomName) return sum;
+        if (op.resourceType === resourceType && (op.kind === "sell" || op.kind === "transfer")) sum += Math.max(0, op.loadedAmount || 0);
         if (resourceType === RESOURCE_ENERGY) sum += Math.max(0, op.feeLoadedAmount || 0);
         return sum;
     }, 0);
@@ -274,18 +401,35 @@ function scanTerminalBalances() {
         Object.keys(target.terminal.store || {}).forEach((resourceType) => {
             if (!validResource(resourceType)) return;
             const current = storeValue(target.terminal.store, resourceType), key = name + ":" + resourceType;
-            const previous = seen[key] || 0;
-            const reserved = activeForRoom(name).filter((op) => op.targetRoom === name && op.kind !== "receipt" && op.resourceType === resourceType && (op.state === "awaitingReceipt" || op.state === "unloading")).reduce((sum, op) => sum + Math.max(0, op.amount - (op.receivedAmount || 0)), 0);
+            // "waiting" belongs here alongside "awaitingReceipt"/"unloading":
+            // assign()'s no-hauler fallback (see assign()) demotes a transfer's
+            // unload attempt straight to "waiting" the instant no hauler is
+            // free, even though its cargo already physically landed in this
+            // terminal. Without "waiting" in this list, that stuck-but-already
+            // -delivered cargo looked unclaimed on every subsequent tick and
+            // got re-detected as fresh surplus, minting a duplicate receipt for
+            // the same stock again and again (real bug: a stuck transfer's
+            // energy ballooned a receipt's amount from 10000 to 103000 in a
+            // handful of ticks). awaitingReceiptFor() below already treats
+            // "waiting" the same way for the same reason.
+            const reserved = activeForRoom(name).filter((op) => op.targetRoom === name && op.kind !== "receipt" && op.resourceType === resourceType && ["awaitingReceipt", "unloading", "waiting"].indexOf(op.state) >= 0).reduce((sum, op) => sum + Math.max(0, op.amount - (op.receivedAmount || 0)), 0);
             const receiptPending = activeForRoom(name).filter((op) => op.kind === "receipt" && op.targetRoom === name && op.resourceType === resourceType).reduce((sum, op) => sum + Math.max(0, op.amount - (op.receivedAmount || 0) - (op.recoveredAmount || 0)), 0);
             // A load performed by our own sell/transfer operation is not an
             // incoming transaction. Without this subtraction, every batch
             // loaded for SELL becomes a synthetic receipt and gets hauled back
             // to storage, creating an endless terminal/storage cycle.
             const managedIncrease = managedTerminalIncrease(name, resourceType);
-            const delta = Math.max(0, current - previous - managedIncrease - reserved - receiptPending);
-            if (delta > 0) {
+            // Surplus is whatever the terminal holds beyond what an active
+            // operation has staged or a pending receipt already claims - not
+            // merely growth since the last tick. The terminal should only ever
+            // hold what pending operations need; anything else (a leftover
+            // batch, or logistics that dropped resource here before any
+            // operation existed) is swept back to storage even if it has sat
+            // there unnoticed for a while.
+            const surplus = Math.max(0, current - managedIncrease - reserved - receiptPending);
+            if (surplus > 0) {
                 const parent = awaitingReceiptFor(name, resourceType);
-                incomingReceipt(name, resourceType, delta, parent && parent.id);
+                incomingReceipt(name, resourceType, surplus, parent && parent.id);
             }
             seen[key] = current;
         });
@@ -330,7 +474,15 @@ function tickTransfer(op, source, target) {
 }
 function tickReceipt(op, target) {
     if (["awaitingReceipt", "waiting", "unloading"].indexOf(op.state) < 0) return;
-    const available = storeValue(target.terminal.store, op.resourceType);
+    // Exclude what managedTerminalIncrease() already earmarks for this same
+    // room (e.g. energy a SELL just staged in the terminal to pay its market
+    // fee): without this, a receipt for the same resourceType (energy) races
+    // a SELL's fee job for the exact same physical stock. The receipt's
+    // hauler was seen withdrawing it back to storage the instant the fee
+    // hauler dropped it off, so the SELL never had enough to deal and kept
+    // restaging the same amount forever - real bug, a receipt and a SELL's
+    // fee job pulling 856 energy in and out of the terminal in a loop.
+    const available = Math.max(0, storeValue(target.terminal.store, op.resourceType) - managedTerminalIncrease(target.name, op.resourceType));
     const remainingAmount = Math.max(0, op.amount - (op.receivedAmount || 0) - (op.recoveredAmount || 0));
     if (available > 0 && remainingAmount > 0) assign(op, target, "unload", target.terminal, target.storage, Math.min(remainingAmount, available));
     else if (remainingAmount <= 0) touch(op, "completed");
@@ -344,7 +496,7 @@ function gcOperations() {
 }
 function tick() {
     if (!config.get("terminalOps.enabled", true)) return;
-    memory(); gcOperations(); bindCreatedOrders(); syncManagedOrders(); scanIncoming(); scanTerminalBalances();
+    memory(); gcOperations(); bindCreatedOrders(); syncManagedOrders(); scanIncoming();
     Object.keys(memory().operations).forEach((id) => {
         const op = operation(id); if (!active(op)) return;
         const marketOnly = op.marketOnly || marketOnlyResource(op.resourceType);
@@ -357,7 +509,8 @@ function tick() {
         }
         if (!source || (op.kind === "transfer" && !target)) { op.error = "terminal/storage indisponível"; touch(op, "waiting"); return; }
         if (marketOnly) {
-            if (op.state === "queued" || op.state === "waiting") executeDeal(op, source);
+            if (op.state === "settling") settleDeal(op, source);
+            else if (op.state === "queued" || op.state === "waiting") executeDeal(op, source);
             else if (op.state === "listing" || op.state === "listed") listResidual(op, source);
             return;
         }
@@ -366,18 +519,32 @@ function tick() {
         if (["loading", "unloading", "recovering"].indexOf(op.state) >= 0) return;
         if (op.kind === "transfer") tickTransfer(op, source, target);
         else if (op.kind === "sell") {
-            if (["queued", "waiting"].indexOf(op.state) >= 0) {
+            if (op.state === "settling") settleDeal(op, source);
+            else if (["queued", "waiting"].indexOf(op.state) >= 0) {
                 const buffer = Math.min(config.get("terminalOps.saleBufferAmount", 10000), Math.floor((source.terminal.store.getCapacity(op.resourceType) || 0) * config.get("terminalOps.saleBufferCapacityRatio", 0.1)));
                 const already = storeValue(source.terminal.store, op.resourceType);
-                assign(op, source, "load", source.storage, source.terminal, Math.min(op.remaining, Math.max(0, buffer - already)));
+                // lockConflict guarantees this op is the sole active sell/transfer
+                // for this resource/room, so anything already in the terminal - a
+                // previous batch, or logistics that dropped it here before this
+                // operation existed - is usable cargo. Without crediting it here,
+                // loadedAmount stays zero whenever the terminal already holds at
+                // least the staging buffer, and candidateOrders' cargo cap then
+                // blocks every deal forever.
+                const usable = Math.min(already, op.remaining);
+                if (usable > op.loadedAmount) op.loadedAmount = usable;
+                assign(op, source, "load", source.storage, source.terminal, Math.min(op.remaining - op.loadedAmount, Math.max(0, buffer - already)));
             }
             else if (op.state === "atTerminal") executeDeal(op, source);
             else if (op.state === "listing" || op.state === "listed") listResidual(op, source);
         } else if (op.kind === "buy") {
-            if (["queued", "waiting"].indexOf(op.state) >= 0) executeDeal(op, source);
+            if (op.state === "settling") settleDeal(op, source);
+            else if (["queued", "waiting"].indexOf(op.state) >= 0) executeDeal(op, source);
             else if (op.state === "listing" || op.state === "listed") listResidual(op, source);
         }
     });
+    // Runs after the operations above so managedTerminalIncrease() reflects
+    // this tick's staged/reconciled amounts before deciding what's surplus.
+    scanTerminalBalances();
 }
 function runHauler(creep) {
     const job = creep.memory.terminalJob; if (!job) return false;

@@ -46,6 +46,20 @@ function droppedResources(room) {
     return s.droppedResources;
 }
 
+// A dead creep's leftovers (tombstones) and a destroyed structure's
+// leftovers (ruins) - roles/hauler.js's battlefieldLootJob wants both.
+function tombstones(room) {
+    const s = slot(room);
+    if (!s.tombstones) s.tombstones = room.find(FIND_TOMBSTONES);
+    return s.tombstones;
+}
+
+function ruins(room) {
+    const s = slot(room);
+    if (!s.ruins) s.ruins = room.find(FIND_RUINS);
+    return s.ruins;
+}
+
 // Structures of a given type, derived from the cached full list.
 function structuresByType(room, structureType) {
     const s = slot(room);
@@ -66,4 +80,6 @@ module.exports = {
     structuresByType,
     minerals,
     droppedResources,
+    tombstones,
+    ruins,
 };

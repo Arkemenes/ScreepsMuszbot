@@ -165,6 +165,35 @@ pronto e deixa a operação observável e cancelável.
   preço de ordem própria incorpora a taxa de criação de 5%. Compra usa
   `buyPrice`, venda usa `sellPrice`, com um passo competitivo configurável de
   `0.001 Cr`. Sem cotação necessária, espera.
+  **Revisto em 2026-09-24 (bug real, usuário reportou em produção):** essa
+  regra valia só pra fixar o preço de listagem própria (`listResidual()`); pra
+  aceitar um `deal()` direto contra uma ordem existente, o limite agora
+  compara contra o preço bruto da ordem (o número que o usuário lê direto no
+  `marketPrice()`/livro de ofertas), não contra o efetivo líquido do custo de
+  entrega. Caso real: SELL com limite 43 achou uma ordem de compra a 43.925,
+  mas `candidateOrders()` descartou porque o custo de entrega até uma sala
+  distante (`calcTransactionCost()`, convertido a crédito via
+  `fairPrice(energy)`) derrubava o efetivo pra 32.113 — abaixo do limite. O
+  usuário definiu o limite observando o preço bruto do mercado, então uma
+  ordem acima dele deve fechar negócio mesmo que o líquido não cobrisse; o
+  efetivo continua sendo usado só para desempatar entre ordens que já
+  passaram no bruto (`src/utils/terminalOps.js`'s `candidateOrders()`).
+  **Revisto novamente em 2026-09-24 (bug real, usuário reportou em
+  produção):** "nenhuma ordem foi efetivada" apesar de `terminalOperations()`
+  mostrar SELLs `completed` com `dealtAmount` preenchido. Causa raiz:
+  `Game.market.deal()` apenas registra um intent — o motor executa a troca
+  depois que o script retorna —, mas `executeDeal()` liquidava a operação no
+  mesmo tick, largando a posse sobre carga ainda fisicamente no terminal.
+  `scanTerminalBalances()`, que roda no fim desse mesmo `tick()`, via a carga
+  e a energia da taxa como superávit e despachava haulers para devolvê-las ao
+  storage; esses `withdraw` caem na mesma leva de intents do `deal()` e
+  esvaziavam o terminal por baixo da troca pendente. Corrigido com o estado
+  `settling`: `executeDeal()` grava `op.pendingDeal` e não muta nada; no tick
+  seguinte `settleDeal()` confirma a troca pelo store do terminal
+  (`dealTraded()`; `marketOnly` cai no livro de ordens) e só então liquida.
+  Não confirmada, volta para `atTerminal` e bloqueia a ordem via
+  `op.deadOrderIds`. Ver `specs/ARCHITECTURE.md`, "Deal settlement is a tick
+  late, on purpose".
 - O terminal é trânsito, nunca storage: recebimentos de qualquer origem vão ao
   storage; uma baseline zero trata saldo não reservado como recebido. Carga de
   saída é rastreada pela operação e nunca é recolhida por engano.

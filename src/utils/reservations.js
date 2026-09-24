@@ -136,6 +136,71 @@ function release(creep) {
     }
 }
 
+// ROADMAP 0107 (user request): the delivery-side mirror of the ledger
+// above - don't send a second hauler to top off a target a first hauler
+// already carries enough to fill, e.g. two haulers each heading for an
+// extension with only 50 free capacity when one of them alone covers it.
+// Same per-tick rebuild-from-live-creeps idiom, its own ledger and memory
+// key (`deliverTarget`) so it can't collide with the pickup one above, and
+// deliberately no rank system - delivery targets aren't contested by role
+// priority the way piles are, just by remaining capacity.
+let deliverTick = -1;
+let byDeliverTarget = {};
+
+function rebuildDeliver() {
+    if (deliverTick === Game.time) return;
+    deliverTick = Game.time;
+    byDeliverTarget = {};
+    for (const name in Game.creeps) {
+        const c = Game.creeps[name];
+        const id = c.memory.deliverTarget;
+        if (!id) continue;
+        // nothing carried means nothing to deliver - not really contending
+        if (c.store.getUsedCapacity(RESOURCE_ENERGY) === 0) continue;
+        (byDeliverTarget[id] || (byDeliverTarget[id] = [])).push(c);
+    }
+}
+
+// Free capacity still up for grabs on `target` once what other claimants
+// already carry (and so are about to dump there) is subtracted. Using what
+// they're currently carrying rather than the target's remaining need at
+// claim time slightly over-subtracts - a target can read "full" a tick or
+// two before it truly is - but that's the safe direction: it never goes
+// negative, and it never invites a second creep in to find nothing left.
+function availableDeliver(creep, target) {
+    rebuildDeliver();
+    let free = target.store.getFreeCapacity(RESOURCE_ENERGY);
+    for (const other of byDeliverTarget[target.id] || []) {
+        if (other.name === creep.name) continue;
+        free -= other.store.getUsedCapacity(RESOURCE_ENERGY);
+    }
+    return Math.max(0, free);
+}
+
+// keep only the targets `creep` can still usefully deliver to this tick
+function usableDeliver(creep, targets, min = 50) {
+    return _.filter(targets, (t) => availableDeliver(creep, t) >= min);
+}
+
+// register / clear `creep`'s intent to deliver to `id`
+function claimDeliver(creep, id) {
+    creep.memory.deliverTarget = id;
+    rebuildDeliver();
+    const list = byDeliverTarget[id] || (byDeliverTarget[id] = []);
+    if (!_.some(list, (o) => o.name === creep.name)) list.push(creep);
+}
+
+function releaseDeliver(creep) {
+    const id = creep.memory.deliverTarget;
+    if (!id) return;
+    delete creep.memory.deliverTarget;
+    if (deliverTick === Game.time && byDeliverTarget[id]) {
+        byDeliverTarget[id] = byDeliverTarget[id].filter(
+            (other) => other.name !== creep.name
+        );
+    }
+}
+
 module.exports = {
     available,
     usable,
@@ -143,4 +208,8 @@ module.exports = {
     release,
     economyStable,
     ECONOMY_PICKERS,
+    availableDeliver,
+    usableDeliver,
+    claimDeliver,
+    releaseDeliver,
 };

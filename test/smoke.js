@@ -1402,6 +1402,105 @@ function withFindLookup(pos, lists) {
     room.storage = null;
 }
 
+// --- ROADMAP 0107 (user request): a dropped pile over hauler.bigDropLoad
+// (500) wins outright - even over spawn/extension hunger (essentialConsumer)
+// and the receiving link it would otherwise pull from. It's about to decay
+// or get scooped by someone else; a routine spawn refill can wait a few
+// more ticks without going critical. -----
+{
+    const savedSpawnStoreBig = spawn.store;
+    spawn.store = Object.assign(store(0, 300), { getFreeCapacity: () => 300 });
+
+    const bigDrop = Object.assign(new Resource(), {
+        id: "bigdrop1", resourceType: RESOURCE_ENERGY, amount: 600,
+        pos: new RoomPosition(20, 21, "W1N1"),
+    });
+    REG[bigDrop.id] = bigDrop;
+
+    const bigDropLink = Object.assign(new StructureLink(), {
+        id: "bigdroplink", structureType: STRUCTURE_LINK, room, my: true,
+        pos: new RoomPosition(21, 20, "W1N1"),
+        store: store(400, 800), isCollector: () => false,
+    });
+    REG.bigdroplink = bigDropLink;
+    findMap[FIND_MY_STRUCTURES].push(bigDropLink);
+
+    Game.time++;
+    const hBigDrop = makeCreep("HBigDrop", "hauler", {
+        store: store(0, 800),
+        pos: withFindLookup(new RoomPosition(20, 20, "W1N1"),
+            { [FIND_DROPPED_RESOURCES]: [bigDrop] }),
+    });
+    hBigDrop.pickup = (t) => { hBigDrop._picked = t && t.id; return OK; };
+    hBigDrop.withdraw = (t) => { hBigDrop._from = t && t.id; return OK; };
+    hBigDrop.memory.job = "load";
+    hauler.run(hBigDrop);
+    assert(hBigDrop._picked === "bigdrop1" && !hBigDrop._from,
+        "a >500 dropped energy pile wins outright, even over spawn/extension " +
+            "hunger and the receiving link (ROADMAP 0107, got picked=" +
+            hBigDrop._picked + " from=" + hBigDrop._from + ")");
+
+    // same pile, but below the bigDrop bar (300) - essentialConsumer's link
+    // still wins, same as the ROADMAP 0065 case above
+    const modestDrop = Object.assign(new Resource(), {
+        id: "modestdrop1", resourceType: RESOURCE_ENERGY, amount: 300,
+        pos: new RoomPosition(20, 21, "W1N1"),
+    });
+    REG[modestDrop.id] = modestDrop;
+    Game.time++;
+    const hModestDrop = makeCreep("HModestDrop", "hauler", {
+        store: store(0, 800),
+        pos: withFindLookup(new RoomPosition(20, 20, "W1N1"),
+            { [FIND_DROPPED_RESOURCES]: [modestDrop] }),
+    });
+    hModestDrop.pickup = (t) => { hModestDrop._picked = t && t.id; return OK; };
+    hModestDrop.withdraw = (t) => { hModestDrop._from = t && t.id; return OK; };
+    hModestDrop.memory.job = "load";
+    hauler.run(hModestDrop);
+    assert(hModestDrop._from === "bigdroplink" && !hModestDrop._picked,
+        "a dropped pile at/below the bigDrop bar doesn't preempt essentialConsumer " +
+            "(only the >500 tier does, got from=" + hModestDrop._from +
+            " picked=" + hModestDrop._picked + ")");
+
+    findMap[FIND_MY_STRUCTURES] =
+        findMap[FIND_MY_STRUCTURES].filter((s) => s.id !== "bigdroplink");
+    spawn.store = savedSpawnStoreBig;
+}
+
+// --- ROADMAP 0107 (user request): delivery-side contention avoidance -----
+// two haulers shouldn't both head for the same near-full extension when
+// one of them alone already covers what it needs.
+{
+    // required locally - the top-level `reservations` require lives further
+    // down the file (require() is cached, so this is the same module)
+    const reservations = require(path.join(PROJECT, "src/utils/reservations"));
+    const dc1 = makeCreep("HDeliverContend1", "hauler", { store: store(200, 200) });
+    const dc2 = makeCreep("HDeliverContend2", "hauler", { store: store(200, 200) });
+    const dcExt = Object.assign(new OwnedStructure(), {
+        id: "dcExt1", structureType: STRUCTURE_EXTENSION, my: true,
+        pos: new RoomPosition(22, 22, "W1N1"), room,
+        store: store(200, 250), // only 50 free
+    });
+    REG.dcExt1 = dcExt;
+    const savedFind = findMap[FIND_MY_STRUCTURES];
+    findMap[FIND_MY_STRUCTURES] = [dcExt];
+    reservations.claimDeliver(dc1, "dcExt1");
+    assert(
+        reservations.availableDeliver(dc2, dcExt) === 0,
+        "availableDeliver() zeroes out a target another hauler already carries enough to fill"
+    );
+    assert(
+        reservations.availableDeliver(dc1, dcExt) === 50,
+        "availableDeliver() doesn't subtract the asking creep's own claim from itself"
+    );
+    reservations.releaseDeliver(dc1);
+    assert(
+        reservations.availableDeliver(dc2, dcExt) === 50,
+        "releaseDeliver() frees the target back up for other haulers"
+    );
+    findMap[FIND_MY_STRUCTURES] = savedFind;
+}
+
 // --- ROADMAP 0065 follow-up: a backed-up source container (throughput /
 // "vazão" problem) makes the hauler drain the receiving link straight into
 // storage, even overriding a hungry spawn (essentialConsumer) - draining the
@@ -2905,11 +3004,35 @@ assert(mNoContainer.memory.seat && mNoContainer.memory.seat[0] === 21 && mNoCont
     assert(traffic.worthRepairing(hotRoad) === true,
         "a road below the repair floor with recent traffic is worth repairing");
     assert(traffic.worthRepairing(coldRoad) === false,
-        "a road below the repair floor with NO recent traffic is left to decay");
+        "a road below the repair floor with NO recent traffic, on a tile the plan says nothing about, is left to decay");
     assert(traffic.worthRepairing(healthyHotRoad) === false,
         "a road still above the repair floor is skipped even with traffic");
     assert(traffic.worthRepairing(wall) === true,
         "the traffic rule only applies to roads - any other structure type is always worth repairing");
+
+    // 0108: on a tile the city plan reserves for a road, the heat
+    // requirement no longer applies - the plan outranks the counter.
+    // Its own room: W9N9 above must stay plan-less for the architect
+    // preview test further down.
+    const planStoreTraffic = require(path.join(PROJECT, "src/utils/planStore"));
+    const TRP = "W9N8";
+    const plannedRoom = { name: TRP };
+    planStoreTraffic.mutate(TRP, (plan) => {
+        plan.buildings.push({ x: 31, y: 31, structureType: STRUCTURE_ROAD, minimalRCL: 3 });
+    });
+    const plannedColdRoad = Object.assign(new Structure(), {
+        structureType: STRUCTURE_ROAD, hits: 100, hitsMax: 5000,
+        pos: new RoomPosition(31, 31, TRP), room: plannedRoom,
+    });
+    const plannedHealthyRoad = Object.assign(new Structure(), {
+        structureType: STRUCTURE_ROAD, hits: 4000, hitsMax: 5000,
+        pos: new RoomPosition(31, 31, TRP), room: plannedRoom,
+    });
+    Game.time++;
+    assert(traffic.worthRepairing(plannedColdRoad) === true,
+        "a PLANNED road below the repair floor is worth repairing even with no traffic at all");
+    assert(traffic.worthRepairing(plannedHealthyRoad) === false,
+        "the repair floor still applies to a planned road - a healthy one is skipped");
 }
 
 // --- builder actually skips a cold planned road end-to-end, and queues it
@@ -2941,23 +3064,30 @@ assert(mNoContainer.memory.seat && mNoContainer.memory.seat[0] === 21 && mNoCont
     });
     builder.run(bRoad);
     assert(
-        !bRoad.memory.stack || bRoad.memory.stack[0][1] !== "cold_road",
-        "builder does not queue repair for a planned road with no recent traffic, even though it's damaged"
+        bRoad.memory.stack && bRoad.memory.stack[0][1] === "cold_road",
+        "builder queues repair for a PLANNED damaged road even with no recent traffic on its tile"
     );
 
-    // the same tile with recent traffic recorded - now it's worth repairing
-    for (let i = 0; i < 60; i++) {
-        traffic2.record({ pos: coldPlannedRoad.pos, room });
-    }
+    // an equally damaged road the plan does NOT reserve stays out of the
+    // queue - being in the plan is what replaced the traffic requirement,
+    // not the traffic rule disappearing altogether
+    const unplannedRoad = Object.assign(new Structure(), {
+        id: "unplanned_road", structureType: STRUCTURE_ROAD, hits: 100, hitsMax: 5000,
+        pos: new RoomPosition(3, 48, "W1N1"), room,
+    });
+    REG.unplanned_road = unplannedRoad;
+    findMap[FIND_STRUCTURES] = findMap[FIND_STRUCTURES].filter((s) => s.id !== "cold_road");
+    findMap[FIND_STRUCTURES].push(unplannedRoad);
     Game.time++;
     const bRoad2 = makeCreep("BldRoad2", "builder", {
-        store: store(50, 50), pos: new RoomPosition(2, 47, "W1N1"),
+        store: store(50, 50), pos: new RoomPosition(3, 47, "W1N1"),
     });
     builder.run(bRoad2);
     assert(
-        bRoad2.memory.stack && bRoad2.memory.stack[0][1] === "cold_road",
-        "once the tile has recent traffic, the same damaged road is queued for repair"
+        !bRoad2.memory.stack || bRoad2.memory.stack[0][1] !== "unplanned_road",
+        "builder still ignores a damaged road that is neither planned nor on a tile with traffic"
     );
+    findMap[FIND_STRUCTURES] = findMap[FIND_STRUCTURES].filter((s) => s.id !== "unplanned_road");
 
     findMap[FIND_STRUCTURES] = findMap[FIND_STRUCTURES].filter((s) => s.id !== "cold_road");
 }
@@ -9264,6 +9394,124 @@ function mineralStore(resources, freeCap) {
     delete Memory.rooms.PickJobRoom;
 }
 
+// --- battlefieldLootJob()/runLootJob(): a body's loot is one all-in-one --
+// trip. A dead creep (e.g. a killed invader) drops a tombstone that may
+// carry boosted mineral compounds alongside its energy; ROADMAP 0107 (user
+// request) has the hauler scoop up EVERYTHING sitting there in a single
+// trip, straight to storage - not a separate pickLoad energy pickup plus a
+// separate mineralJob per compound. That means it's its own job type, not
+// part of pickMineralJob's single-resource-type cascade any more.
+{
+    const lootTomb = { id: "lootTomb1", store: mineralStore({ energy: 100, U: 80 }, 0) };
+    const lootContainer = Object.assign(new StructureContainer(), {
+        id: "lootContainer1", structureType: STRUCTURE_CONTAINER,
+        store: mineralStore({ H: 50 }, 1950),
+    });
+    const lootMineral = Object.assign(new RoomObject(), {
+        id: "lootMineral1", mineralType: "H", mineralAmount: 3000,
+        pos: new RoomPosition(10, 10, "LootJobRoom"),
+    });
+    lootMineral.pos.findInRange = (type, range, opts) => {
+        let list = type === FIND_STRUCTURES ? [lootContainer] : [];
+        if (opts && typeof opts.filter === "function") list = list.filter(opts.filter);
+        return list;
+    };
+    const lootStorage = { store: mineralStore({}, 100000) };
+    const lootRoom = {
+        name: "LootJobRoom", storage: lootStorage, terminal: null,
+        find: (type) => {
+            if (type === FIND_MINERALS) return [lootMineral];
+            if (type === FIND_TOMBSTONES) return [lootTomb];
+            return [];
+        },
+    };
+    Game.time++;
+    const lootJob = hauler.battlefieldLootJob(lootRoom);
+    assert(
+        lootJob && !lootJob.resourceType &&
+            lootJob.from === lootTomb && lootJob.to === lootStorage,
+        "battlefieldLootJob() targets a tombstone holding energy + a mineral compound, straight to storage, no single resourceType"
+    );
+
+    // pickMineralJob() itself no longer knows about tombstone/ruin loot at
+    // all - run() checks battlefieldLootJob separately (and first), so this
+    // falls straight to the mineral container even while the tombstone's
+    // still sitting there.
+    const containerJob = hauler.pickMineralJob(lootRoom);
+    assert(
+        containerJob && containerJob.resourceType === "H" && containerJob.from === lootContainer,
+        "pickMineralJob() no longer includes battlefield loot - falls straight to the mineral container"
+    );
+
+    // Withdraws one resource type per tick (Screeps only allows one per
+    // withdraw()/transfer() call) until the tombstone's drained, then
+    // switches to delivering everything carried into storage, same way.
+    // Needs real (dynamic, not snapshot) getFreeCapacity/getUsedCapacity on
+    // the hauler's own store, since this test mutates it call by call -
+    // mineralStore()'s freeCap is a fixed snapshot, so a small local
+    // variant is used here instead.
+    function capacityStore(resources, capacity) {
+        return Object.assign(
+            Object.create({
+                getFreeCapacity() { return capacity - _.sum(_.values(this)); },
+                getUsedCapacity() { return _.sum(_.values(this)); },
+            }),
+            resources
+        );
+    }
+    lootTomb.id = "lootTomb1";
+    lootStorage.id = "lootStorage1";
+    REG[lootTomb.id] = lootTomb;
+    REG[lootStorage.id] = lootStorage;
+    const lootHauler = Object.assign(new Creep(), {
+        pos: new RoomPosition(10, 10, "LootJobRoom"),
+        room: lootRoom,
+        memory: { lootJob: { fromId: lootTomb.id, toId: lootStorage.id } },
+        store: capacityStore({}, 300),
+    });
+    lootHauler.pos.inRangeTo = () => true;
+    lootHauler.withdraw = (target, resourceType) => {
+        lootHauler.store[resourceType] =
+            (lootHauler.store[resourceType] || 0) + target.store[resourceType];
+        target.store[resourceType] = 0;
+        return OK;
+    };
+    lootHauler.transfer = (target, resourceType) => {
+        target.store[resourceType] = (target.store[resourceType] || 0) +
+            lootHauler.store[resourceType];
+        lootHauler.store[resourceType] = 0;
+        return OK;
+    };
+
+    hauler.runLootJob(lootHauler);
+    hauler.runLootJob(lootHauler);
+    assert(
+        lootTomb.store[RESOURCE_ENERGY] === 0 && lootTomb.store.U === 0 &&
+            lootHauler.store[RESOURCE_ENERGY] === 100 && lootHauler.store.U === 80,
+        "runLootJob() withdraws every resource type off the tombstone (one per tick) before delivering anything"
+    );
+    hauler.runLootJob(lootHauler);
+    hauler.runLootJob(lootHauler);
+    assert(
+        lootStorage.store[RESOURCE_ENERGY] === 100 && lootStorage.store.U === 80 &&
+            lootHauler.store.getUsedCapacity() === 0,
+        "runLootJob() delivers every resource type it picked up into storage, one per tick"
+    );
+    hauler.runLootJob(lootHauler);
+    assert(
+        !lootHauler.memory.lootJob,
+        "runLootJob() clears memory.lootJob once fully delivered"
+    );
+
+    Game.time++;
+    lootRoom.find = (type) => (type === FIND_MINERALS ? [lootMineral] : []);
+    const noLootJob = hauler.battlefieldLootJob(lootRoom);
+    assert(
+        noLootJob === null,
+        "battlefieldLootJob() returns null once no tombstone/ruin loot remains"
+    );
+}
+
 // --- hauler.spawnsAndExtensionsFull() gates the mineral-job cascade ------
 // a hauler must never chase mineral/lab/factory errands while a spawn or
 // extension is still hungry for energy (that's this role's actual job).
@@ -9798,6 +10046,34 @@ function mineralStore(resources, freeCap) {
             "inside the 50%-99% demand gap, not just below the low-water mark");
     delete Game.creeps.Rcl8GapBuilder;
     delete Memory.creeps.Rcl8GapBuilder;
+
+    // ROADMAP 0103 fifth follow-up (real bug reported in production,
+    // 2026-09-24): a LITERAL `>= CONTROLLER_DOWNGRADE[8]` gate sounds right
+    // but never actually fires in practice - ticksToDowngrade pins exactly
+    // at that max the instant any creep tops it off and sits there, so a
+    // builder kept spending on an already-safe controller instead of going
+    // to find real building/repair work. The gate now reuses the same
+    // rcl8SafeRatio mark (99%) isExcessUpgrader() treats as "safe".
+    const rcl8SafeConfig = require(path.join(PROJECT, "src/utils/config"));
+    controller.ticksToDowngrade = Math.floor(
+        CONTROLLER_DOWNGRADE[8] *
+            rcl8SafeConfig.get("upgrader.rcl8SafeRatio", 0.99)
+    ); // at the safe mark, below the literal max
+    const rcl8SafeBuilder = makeCreep("Rcl8SafeBuilder", "builder", {
+        store: store(50, 50),
+    });
+    let safeUpgraded = false;
+    rcl8SafeBuilder.upgradeController = () => {
+        safeUpgraded = true;
+        return OK;
+    };
+    Game.time++;
+    builderMod.run(rcl8SafeBuilder);
+    assert(!safeUpgraded,
+        "builder stops spending on an RCL8 controller once ticksToDowngrade " +
+            "reaches the safe mark, even though it is not literally at the max");
+    delete Game.creeps.Rcl8SafeBuilder;
+    delete Memory.creeps.Rcl8SafeBuilder;
     controller.ticksToDowngrade = savedTicksToDowngrade;
 
     controller.level = savedLevel;
@@ -10308,7 +10584,8 @@ origLog("\nMemory:", memStr.length, "bytes  |  rooms.W1N1 keys:",
 {
     const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
     const makeStore = (energy, capacity) => ({ [RESOURCE_ENERGY]: energy, getFreeCapacity: () => capacity - energy, getUsedCapacity: () => energy, getCapacity: () => capacity });
-    const marketRoom = { name: "W7N5", controller: { my: true }, find: () => [], storage: { id: "W7N5-storage", store: makeStore(20000, 30000) }, terminal: { id: "W7N5-terminal", cooldown: 0, store: makeStore(500, 30000) } };
+    const terminalStore = makeStore(500, 30000);
+    const marketRoom = { name: "W7N5", controller: { my: true }, find: () => [], storage: { id: "W7N5-storage", store: makeStore(20000, 30000) }, terminal: { id: "W7N5-terminal", cooldown: 0, store: terminalStore } };
     const oldRooms = Game.rooms, oldMarket = Game.market, oldOps = Memory.terminalOps;
     Game.rooms = Object.assign({}, oldRooms, { W7N5: marketRoom });
     let dealAmount = 0;
@@ -10317,9 +10594,17 @@ origLog("\nMemory:", memStr.length, "bytes  |  rooms.W1N1 keys:",
     Memory.terminalOps.operations.sellTest = { id: "sellTest", kind: "sell", sourceRoom: "W7N5", resourceType: RESOURCE_ENERGY, amount: 100, remaining: 100, loadedAmount: 20, limit: 1, energyFairPrice: 0, state: "atTerminal", sentAmount: 0, createdTick: Game.time, updatedTick: Game.time };
     terminalOps.tick();
     assert(dealAmount === 20, "0098 SELL deals only the operation's tracked terminal cargo");
+    // deal() is an intent: the engine only moves the goods after the script
+    // returns, so every operation settles on the tick AFTER the deal, against
+    // the terminal's real store (see the settling regression at the end).
+    terminalStore[RESOURCE_ENERGY] -= 20; Game.time++;
     Memory.terminalOps.operations.buyTest = { id: "buyTest", kind: "buy", sourceRoom: "W7N5", resourceType: RESOURCE_ENERGY, amount: 100, remaining: 100, loadedAmount: 0, limit: 2, energyFairPrice: 0, state: "queued", sentAmount: 0, createdTick: Game.time, updatedTick: Game.time };
     terminalOps.tick();
-    assert(Memory.terminalOps.operations.buyTest.state === "awaitingReceipt" && dealAmount === 100, "0098 BUY deal transitions to receipt handling");
+    assert(Memory.terminalOps.operations.sellTest.dealtAmount === 20, "0098 a SELL books its sale only once the terminal's store confirms the goods left");
+    assert(Memory.terminalOps.operations.buyTest.state === "settling" && dealAmount === 100, "0098 BUY deal waits in settling before touching any bookkeeping");
+    terminalStore[RESOURCE_ENERGY] += 100; Game.time++;
+    terminalOps.tick();
+    assert(Memory.terminalOps.operations.buyTest.state === "awaitingReceipt", "0098 BUY deal transitions to receipt handling");
     Game.rooms = oldRooms; Game.market = oldMarket; Memory.terminalOps = oldOps;
 }
 // 0098 send boundary: a loaded transfer issues one native intent.
@@ -10424,6 +10709,55 @@ origLog("\nMemory:", memStr.length, "bytes  |  rooms.W1N1 keys:",
     assert(!Object.values(Memory.terminalOps.operations).some((op) => op.kind === "receipt"), "0098 does not turn managed SELL cargo into a synthetic receipt");
     Game.rooms = oldRooms; Game.creeps = oldCreeps; Game.market = oldMarket; Memory.terminalOps = oldOps;
 }
+// A SELL must reconcile against terminal stock that already sits at/above
+// the staging buffer (e.g. dumped there by unrelated logistics before the
+// operation existed) instead of stalling forever with loadedAmount stuck
+// at zero, unable to ever pass candidateOrders' cargo cap. The excess over
+// what the operation actually needs must be swept back to storage, even
+// though it predates this tick's bookkeeping (no prior "seen" baseline).
+{
+    const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
+    const makeStore = (used, capacity) => ({ [RESOURCE_ENERGY]: used, getFreeCapacity: () => capacity - used, getUsedCapacity: () => used, getCapacity: () => capacity });
+    const room = { name: "W7N21", controller: { my: true }, find: () => [], storage: { id: "W7N21-storage", store: makeStore(0, 30000) }, terminal: { id: "W7N21-terminal", cooldown: 0, store: makeStore(5000, 30000), send: () => OK } };
+    const oldRooms = Game.rooms, oldMarket = Game.market, oldOps = Memory.terminalOps;
+    Game.rooms = Object.assign({}, oldRooms, { W7N21: room });
+    let dealAmount = 0;
+    Game.market = { credits: 100000, incomingTransactions: [], orders: {}, getAllOrders: () => [{ id: "buy-1", roomName: "W7N22", price: 50, remainingAmount: 5000 }], deal: (id, value) => { dealAmount = value; return OK; }, calcTransactionCost: () => 0 };
+    Memory.terminalOps = {
+        nextId: 1,
+        operations: { preloaded: { id: "preloaded", kind: "sell", sourceRoom: "W7N21", targetRoom: null, resourceType: RESOURCE_ENERGY, amount: 1000, remaining: 1000, loadedAmount: 0, limit: 45, energyFairPrice: 0, state: "queued", sentAmount: 0, createdTick: Game.time, updatedTick: Game.time } },
+        seenIncoming: {}, events: [], terminalBalance: {},
+    };
+    terminalOps.tick();
+    const surplusReceipt = Object.values(Memory.terminalOps.operations).find((op) => op.kind === "receipt");
+    assert(surplusReceipt && surplusReceipt.amount === 4000, "0098 terminal stock beyond what a pending SELL needs is swept back to storage as a receipt, even with no prior 'seen' baseline");
+    terminalOps.tick();
+    assert(dealAmount === 1000, "0098 SELL deals terminal stock that already exceeds the staging buffer instead of stalling with loadedAmount stuck at zero");
+    Game.rooms = oldRooms; Game.market = oldMarket; Memory.terminalOps = oldOps;
+}
+// A transfer's cargo that already landed in the destination terminal must
+// stay reserved even after a failed unload attempt demotes the transfer's
+// own state from "awaitingReceipt" to plain "waiting" (assign()'s no-hauler
+// fallback) - otherwise the exact same physical stock looks unclaimed on
+// every following tick and gets minted into a duplicate receipt again and
+// again. Real bug: a stuck transfer's energy ballooned a receipt's amount
+// from 10000 to 103000 within a handful of ticks in production.
+{
+    const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
+    const makeStore = (used, capacity) => ({ [RESOURCE_ENERGY]: used, getFreeCapacity: () => capacity - used, getUsedCapacity: () => used, getCapacity: () => capacity });
+    const room = { name: "W7N30", controller: { my: true }, find: () => [], storage: { id: "W7N30-storage", store: makeStore(0, 30000) }, terminal: { id: "W7N30-terminal", cooldown: 0, store: makeStore(5000, 30000), send: () => OK } };
+    const oldRooms = Game.rooms, oldOps = Memory.terminalOps;
+    Game.rooms = Object.assign({}, oldRooms, { W7N30: room });
+    Memory.terminalOps = {
+        nextId: 1,
+        operations: { stuck: { id: "stuck", kind: "transfer", sourceRoom: "W7N29", targetRoom: "W7N30", resourceType: RESOURCE_ENERGY, amount: 5000, remaining: 0, loadedAmount: 5000, sentAmount: 5000, receivedAmount: 0, transactionCost: 0, targetTerminalBaseline: 0, state: "waiting", waitingDirection: "unload", error: "sem hauler disponível", createdTick: Game.time - 5, updatedTick: Game.time } },
+        seenIncoming: {}, events: [], terminalBalance: {},
+    };
+    terminalOps.tick();
+    const duplicateReceipt = Object.values(Memory.terminalOps.operations).find((op) => op.kind === "receipt");
+    assert(!duplicateReceipt, "0098 a stuck-waiting transfer's already-delivered cargo is not re-detected as surplus and duplicated into a receipt");
+    Game.rooms = oldRooms; Memory.terminalOps = oldOps;
+}
 // A market SELL without credits fails before createOrder and releases its
 // resource lock; with enough credits it reaches order creation.
 {
@@ -10451,12 +10785,24 @@ origLog("\nMemory:", memStr.length, "bytes  |  rooms.W1N1 keys:",
  marketHistoryStore.clear(); market.reset();
     Game.time++;
     market.scan();
+    logs.length = 0;
+    console.log = (...a) => { logs.push(a.join(" ")); };
     const noFunds = terminalOps.sell("W7N19", "pixel", 50, 49500);
     terminalOps.tick();
     terminalOps.tick();
+    console.log = origLog;
     const noFundsOp = Memory.terminalOps.operations[noFunds.id];
     assert(noFundsOp.state === "failed" && createCalls === 0 && /disponível 0/.test(noFundsOp.error),
         "pixel SELL without credits fails before createOrder with the fee diagnostics");
+    // Both failure points along the deal->list fallback chain must be
+    // visible on the console, not just recorded in op.error - a user with no
+    // credits yet must be able to see WHY nothing happened without polling
+    // terminalOperations() (bug real reportado, 2026-09-24: falhas ficavam
+    // silenciosas fora do console).
+    assert(logs.some((line) => line.indexOf(noFunds.id) >= 0 && line.indexOf("nenhuma ordem cobre o limite") >= 0),
+        "executeDeal() logs the best near-miss order and its delivery-cost-adjusted price when no candidate meets the limit");
+    assert(logs.some((line) => line.indexOf(noFunds.id) >= 0 && line.indexOf("falhou") >= 0 && line.indexOf(noFundsOp.error) >= 0),
+        "touch() logs to console when an operation reaches the final 'failed' state");
     const retry = terminalOps.sell("W7N19", "pixel", 50, 49500);
     assert(retry.ok, "failed pixel SELL releases the terminal/resource lock");
 
@@ -10491,10 +10837,192 @@ origLog("\nMemory:", memStr.length, "bytes  |  rooms.W1N1 keys:",
     Game.market = { credits: 100000, incomingTransactions: [], getAllOrders: () => orders, calcTransactionCost: () => 999999, deal: () => { deals++; return OK; } };
     Memory.terminalOps = { nextId: 1, operations: {}, seenIncoming: {}, events: [], terminalBalance: {} };
     marketHistoryStore.clear(); market.reset(); Game.time++; market.scan();
+    // A market-only operation has no terminal to cross-check, so it settles
+    // against the order book instead - but still only on the tick after
+    // deal(), never within it (see the settling regression at the end).
     const pixelBuy = terminalOps.buy("W7N17", "pixel", 2, 600);
     terminalOps.tick();
+    Game.time++; terminalOps.tick();
     const pixelSell = terminalOps.sell("W7N17", "pixel", 2, 400);
     terminalOps.tick();
+    Game.time++; terminalOps.tick();
     assert(pixelBuy.ok && pixelSell.ok && Memory.terminalOps.operations[pixelBuy.id].state === "completed" && Memory.terminalOps.operations[pixelSell.id].state === "completed" && deals === 2, "0098 market-only pixel BUY and SELL work without storage or terminal");
     Game.rooms = oldRooms; Game.market = oldMarket; Memory.terminalOps = oldOps;
+}
+
+// op.limit gates on the order's raw price, not the delivery-cost-adjusted
+// "effective" price - reversed 2026-09-24 (bug real, usuário reportou em
+// produção): a SELL with limit 43 found a buy order at 43.925 but skipped it
+// because delivery cost to a distant room netted the effective price down to
+// 32.113. The original 0098 design ("limite sempre é líquido") did that on
+// purpose, but the user sets the limit by reading the market's raw price
+// (marketPrice()/order book), so a raw price above the limit must deal even
+// when its delivery-cost-adjusted net would not have cleared it.
+{
+    const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
+    const makeStore = (contents, capacity) => Object.assign({
+        getFreeCapacity: () => capacity - Object.keys(contents).reduce((sum, key) => sum + contents[key], 0),
+        getUsedCapacity: () => Object.keys(contents).reduce((sum, key) => sum + contents[key], 0),
+        getCapacity: () => capacity,
+    }, contents);
+    const room = {
+        name: "W7N40", controller: { my: true }, find: () => [],
+        storage: { id: "W7N40-storage", store: makeStore({ [RESOURCE_ENERGY]: 20000 }, 30000) },
+        terminal: { id: "W7N40-terminal", cooldown: 0, store: makeStore({ [RESOURCE_ENERGY]: 500, [RESOURCE_OXYGEN]: 20 }, 30000) },
+    };
+    const oldRooms = Game.rooms, oldMarket = Game.market, oldOps = Memory.terminalOps;
+    Game.rooms = Object.assign({}, oldRooms, { W7N40: room });
+    let dealAmount = 0, dealOrderId = null;
+    Game.market = {
+        credits: 100000, incomingTransactions: [], orders: {},
+        getAllOrders: () => [{ id: "far-buy", roomName: "E2N39", price: 50, remainingAmount: 1000 }],
+        calcTransactionCost: () => 200,
+        deal: (id, value) => { dealOrderId = id; dealAmount = value; return OK; },
+    };
+    Memory.terminalOps = { nextId: 1, operations: {}, seenIncoming: {}, events: [], terminalBalance: {} };
+    Memory.terminalOps.operations.rawGate = {
+        id: "rawGate", kind: "sell", sourceRoom: "W7N40", resourceType: RESOURCE_OXYGEN, amount: 20, remaining: 20,
+        loadedAmount: 20, limit: 45, energyFairPrice: 1, state: "atTerminal", sentAmount: 0,
+        createdTick: Game.time, updatedTick: Game.time,
+    };
+    // Sanity: raw price 50 clears limit 45, but 200 energy of delivery cost
+    // at fairPrice 1 over a 20-unit deal nets 50 - (200*1/20) = 40 - which
+    // would have missed the old effective-price gate.
+    terminalOps.tick();
+    assert(dealOrderId === "far-buy" && dealAmount === 20,
+        "0098 SELL deals against an order whose raw price (50) clears op.limit (45) even though its net effective price (40) would not");
+    Game.rooms = oldRooms; Game.market = oldMarket; Memory.terminalOps = oldOps;
+}
+// managedTerminalIncrease() must recognize a SELL's feeLoadedAmount even
+// when the operation's own resourceType ("O") differs from the resourceType
+// being queried ("energy") - a market fee is always paid in energy no matter
+// what is being sold. Real bug (2026-09-24, produção): a SELL of "O" staged
+// energy in the terminal to pay its own fee; the resourceType mismatch made
+// that staged energy invisible to managedTerminalIncrease(), so (a)
+// scanTerminalBalances() treated it as unclaimed surplus and folded it into
+// an unrelated energy receipt's amount every tick (ballooning it well past
+// what was ever actually received), and (b) that same receipt's tickReceipt()
+// happily withdrew the fee-staged energy back to storage the instant it
+// landed, undoing the SELL's fee job forever - a hauler looping the same
+// ~3424 energy in and out of the terminal without end.
+{
+    const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
+    const makeStore = (used, capacity) => ({ [RESOURCE_ENERGY]: used, getFreeCapacity: () => capacity - used, getUsedCapacity: () => used, getCapacity: () => capacity });
+    const room = {
+        name: "W7N45", controller: { my: true }, find: () => [],
+        storage: { id: "W7N45-storage", store: makeStore(0, 30000) },
+        terminal: { id: "W7N45-terminal", cooldown: 0, store: makeStore(3424, 30000), send: () => OK },
+    };
+    const oldRooms = Game.rooms, oldMarket = Game.market, oldOps = Memory.terminalOps;
+    Game.rooms = Object.assign({}, oldRooms, { W7N45: room });
+    Game.market = { incomingTransactions: [] };
+    Memory.terminalOps = {
+        nextId: 1,
+        operations: {
+            feeSell: {
+                id: "feeSell", kind: "sell", sourceRoom: "W7N45", targetRoom: null, resourceType: "O",
+                amount: 1000, remaining: 1000, loadedAmount: 1000, feeLoadedAmount: 3424, state: "loading",
+                createdTick: Game.time, updatedTick: Game.time,
+            },
+            energyReceipt: {
+                id: "energyReceipt", kind: "receipt", sourceRoom: null, targetRoom: "W7N45", resourceType: RESOURCE_ENERGY,
+                amount: 5000, remaining: 5000, receivedAmount: 0, state: "waiting", createdTick: Game.time, updatedTick: Game.time,
+            },
+        },
+        seenIncoming: {}, events: [], terminalBalance: {},
+    };
+    terminalOps.tick();
+    const receipts = Object.values(Memory.terminalOps.operations).filter((op) => op.kind === "receipt");
+    assert(receipts.length === 1, "0098 a SELL's fee-staged energy is not folded into an unrelated receipt as surplus");
+    const energyReceipt = Memory.terminalOps.operations.energyReceipt;
+    assert(energyReceipt.amount === 5000, "0098 a SELL's fee-staged energy does not balloon an unrelated receipt's amount");
+    assert(energyReceipt.state === "waiting" && !energyReceipt.haulerName && !energyReceipt.error,
+        "0098 a receipt does not withdraw energy a SELL already staged in the terminal for its own market fee");
+    Game.rooms = oldRooms; Game.market = oldMarket; Memory.terminalOps = oldOps;
+}
+// Game.market.deal() only REGISTERS an intent - the engine executes it after
+// the script returns, so within the tick that called deal() nothing about the
+// trade is observable: not Game.market.credits, not the order's
+// remainingAmount, not the terminal's own store. Root cause of the real bug
+// (2026-09-24, produção, "nenhuma ordem foi efetivada"): executeDeal() settled
+// the operation the instant deal() returned OK - zeroing loadedAmount /
+// feeLoadedAmount and marking it "completed" - which dropped the operation's
+// claim over cargo still physically sitting in the terminal. scanTerminalBalances(),
+// which runs at the END of that same tick(), then saw that cargo and the fee
+// energy as unclaimed surplus, minted receipts for both and dispatched haulers
+// to withdraw them right back to storage. Those withdraw intents land in the
+// same end-of-tick batch as the deal, emptying the terminal out from under the
+// pending trade: deal() returned OK and nothing happened - no transaction in
+// the history, credits frozen, remainingAmount untouched - while the hauler
+// shuttled the same stock in and out of the terminal forever. The operation
+// must hold every claim through a "settling" tick and only then settle,
+// against the terminal's real store.
+{
+    const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
+    const savedResources = RESOURCES_ALL;
+    RESOURCES_ALL = [RESOURCE_ENERGY, "O"];
+    const run = (engineExecutesDeal) => {
+        const held = { [RESOURCE_ENERGY]: 400, O: 1000 };
+        const mkStore = (contents, capacity) => Object.assign({
+            getFreeCapacity: () => capacity - Object.keys(contents).reduce((sum, key) => sum + contents[key], 0),
+            getUsedCapacity: () => Object.keys(contents).reduce((sum, key) => sum + contents[key], 0),
+            getCapacity: () => capacity,
+        }, contents);
+        const terminalStore = mkStore(held, 300000);
+        const room = {
+            name: "W9N9", controller: { my: true }, find: () => [],
+            storage: { id: "W9N9-storage", store: mkStore({ [RESOURCE_ENERGY]: 20000 }, 300000) },
+            terminal: { id: "W9N9-terminal", cooldown: 0, store: terminalStore },
+        };
+        const oldRooms = Game.rooms, oldMarket = Game.market, oldOps = Memory.terminalOps, oldTime = Game.time;
+        Game.rooms = Object.assign({}, oldRooms, { W9N9: room });
+        Game.market = {
+            credits: 100000, incomingTransactions: [], orders: {}, calcTransactionCost: () => 400,
+            getAllOrders: () => [{ id: "buy-real", roomName: "W1N1", price: 50, remainingAmount: 100000 }],
+            deal: () => OK,
+        };
+        Memory.terminalOps = { nextId: 1, operations: { s1: {
+            id: "s1", kind: "sell", sourceRoom: "W9N9", targetRoom: null, resourceType: "O",
+            amount: 1000, remaining: 1000, loadedAmount: 1000, feeLoadedAmount: 400,
+            limit: 45, energyFairPrice: 1, transactionCost: 0,
+            state: "atTerminal", createdTick: Game.time, updatedTick: Game.time,
+        } }, seenIncoming: {}, events: [], terminalBalance: {} };
+        terminalOps.tick();
+        const afterDeal = Object.assign({}, Memory.terminalOps.operations.s1);
+        afterDeal.receipts = Object.keys(Memory.terminalOps.operations).filter((key) => Memory.terminalOps.operations[key].kind === "receipt").length;
+        // the engine now processes the end-of-tick intents, then a tick passes
+        if (engineExecutesDeal) { terminalStore.O -= 1000; terminalStore[RESOURCE_ENERGY] -= 400; }
+        Game.time += 1;
+        terminalOps.tick();
+        const afterSettle = Object.assign({}, Memory.terminalOps.operations.s1);
+        afterSettle.receipts = Object.keys(Memory.terminalOps.operations).filter((key) => Memory.terminalOps.operations[key].kind === "receipt").length;
+        Game.rooms = oldRooms; Game.market = oldMarket; Memory.terminalOps = oldOps; Game.time = oldTime;
+        return { afterDeal, afterSettle };
+    };
+
+    const good = run(true);
+    assert(good.afterDeal.state === "settling" && good.afterDeal.remaining === 1000 && !good.afterDeal.dealtAmount,
+        "0098 a deal() that returned OK parks the operation in 'settling' instead of settling in the same tick");
+    assert(good.afterDeal.loadedAmount === 1000 && good.afterDeal.feeLoadedAmount === 400,
+        "0098 a settling operation keeps its claim over the staged cargo and the staged fee energy");
+    assert(good.afterDeal.receipts === 0,
+        "0098 the tick that calls deal() mints no receipt for the cargo still physically in the terminal");
+    assert(good.afterSettle.state === "completed" && good.afterSettle.dealtAmount === 1000 && good.afterSettle.remaining === 0,
+        "0098 a trade the terminal's store confirms settles on the following tick");
+    assert(good.afterSettle.loadedAmount === 0 && good.afterSettle.feeLoadedAmount === 0 && good.afterSettle.transactionCost === 400,
+        "0098 settling a confirmed trade releases the cargo/fee claims and books the transaction cost");
+    assert(good.afterSettle.receipts === 0,
+        "0098 a confirmed trade leaves nothing behind for scanTerminalBalances() to sweep");
+
+    const silent = run(false);
+    assert(silent.afterSettle.state === "atTerminal" && silent.afterSettle.remaining === 1000 && !silent.afterSettle.dealtAmount,
+        "0098 a deal() that returned OK but moved nothing in the terminal never books a sale");
+    assert(silent.afterSettle.loadedAmount === 1000 && silent.afterSettle.feeLoadedAmount === 400,
+        "0098 an unobserved trade keeps the staged cargo and fee claimed so no receipt can sweep them");
+    assert(Array.isArray(silent.afterSettle.deadOrderIds) && silent.afterSettle.deadOrderIds.indexOf("buy-real") >= 0,
+        "0098 an order whose deal produced no observable trade is blacklisted via deadOrderIds");
+    assert(silent.afterSettle.receipts === 0,
+        "0098 an unobserved trade mints no receipt either - the operation still owns the stock");
+
+    RESOURCES_ALL = savedResources;
 }
