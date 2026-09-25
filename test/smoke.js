@@ -990,11 +990,53 @@ assert(combat.takeCover(Game.creeps.Def1) === false,
 Game.creeps.Harv1.pos.getRangeTo = () => 8;
 assert(combat.takeCover(Game.creeps.Harv1) === false,
     "unarmed creep out of range keeps working");
+// exactly at safeRange() (5): both sides can close 1 tile the same tick,
+// landing next tick at range 3 (RANGED_ATTACK reach) - must retreat, not
+// keep advancing (regression guard for the >= -> > fix).
+Game.creeps.Harv1.pos.getRangeTo = () => 5;
+assert(combat.takeCover(Game.creeps.Harv1) === true,
+    "unarmed creep still retreats right at safeRange() - the closing-gap race");
+Game.creeps.Harv1.pos.getRangeTo = () => 6;
+assert(combat.takeCover(Game.creeps.Harv1) === false,
+    "unarmed creep one tile past safeRange() keeps working");
 Game.creeps.Harv1.pos.getRangeTo = () => 3;
 // no defenseActive -> never takes cover
 global.Memory.rooms.W1N1.defenseActive = false;
 assert(combat.takeCover(Game.creeps.Harv1) === false,
     "no takeCover when the room is not under attack");
+global.Memory.rooms.W1N1.defenseActive = true;
+
+// --- isDangerous / excludeDangerZone: a pickup/delivery target must never
+// be picked while it sits in the attack zone in the first place, not just
+// reacted to after the fact (ROADMAP 0107 follow-up, user request) --------
+const farPos = new RoomPosition(2, 2, "W1N1"); // range 19 from hostile (21,21)
+assert(combat.isDangerous(farPos, room) === false,
+    "a position far from every threat is not dangerous");
+const nearPos = new RoomPosition(24, 24, "W1N1"); // range 3 - inside safeRange, not on a rampart
+assert(combat.isDangerous(nearPos, room) === true,
+    "a position within safeRange() of a threat is dangerous");
+
+// own rampart, but far enough (range 4) that the melee hostile isn't
+// adjacent to it - shielded despite being inside safeRange()
+const rampartPos = new RoomPosition(25, 25, "W1N1");
+rampartPos.lookFor = () => [{ structureType: STRUCTURE_RAMPART, my: true }];
+assert(combat.isDangerous(rampartPos, room) === false,
+    "own rampart shields from a threat that isn't melee-adjacent");
+
+const safeCandidate = { pos: farPos };
+const dangerousCandidate = { pos: nearPos };
+const filtered = combat.excludeDangerZone([safeCandidate, dangerousCandidate], room);
+assert(
+    filtered.length === 1 && filtered[0] === safeCandidate,
+    "excludeDangerZone drops a candidate inside the attack zone and keeps the safe one"
+);
+
+global.Memory.rooms.W1N1.defenseActive = false;
+const bothCandidates = [safeCandidate, dangerousCandidate];
+assert(
+    combat.excludeDangerZone(bothCandidates, room) === bothCandidates,
+    "excludeDangerZone is a no-op (same array) when the room isn't under attack"
+);
 global.Memory.rooms.W1N1.defenseActive = true;
 
 // --- planner stall guard: a stamp that never fits must not loop forever ---
@@ -3459,6 +3501,14 @@ delete global.Memory.settings.allies;
     };
     const unarmedUnknown = {
         owner: { username: "SomeRandomPlayer" },
+        body: [{ type: CARRY }, { type: MOVE }],
+    };
+    // A pure-WORK creep has no ATTACK/RANGED_ATTACK yet is still a real
+    // threat inside our own room - it can dismantle ramparts/walls same as
+    // any siege unit (live case, 2026-09-25: a dismantler like this went
+    // completely undetected, so the defender guarding it never engaged).
+    const dismantlerUnknown = {
+        owner: { username: "SomeRandomPlayer" },
         body: [{ type: WORK }, { type: MOVE }],
     };
     const armedAlly = {
@@ -3469,7 +3519,9 @@ delete global.Memory.settings.allies;
     assert(hostiles.isHostile(armedUnknown, ownedRoom) === true,
         "an unknown armed player is hostile in a room I own, whitelist or not");
     assert(hostiles.isHostile(unarmedUnknown, ownedRoom) === false,
-        "an unknown but UNARMED player is not hostile in a room I own");
+        "an unknown, WORK-less and ATTACK-less player is not hostile in a room I own");
+    assert(hostiles.isHostile(dismantlerUnknown, ownedRoom) === true,
+        "an unknown WORK-only (dismantler) creep IS hostile in a room I own, even with no ATTACK/RANGED_ATTACK");
     assert(hostiles.isHostile(armedAlly, ownedRoom) === false,
         "an armed ally is still never hostile, even in a room I own");
     assert(hostiles.isHostile(armedUnknown, foreignRoom) === false,
@@ -10624,6 +10676,36 @@ origLog("\nMemory:", memStr.length, "bytes  |  rooms.W1N1 keys:",
     terminalOps.tick();
     assert(sends === 1 && op.state === "awaitingReceipt", "0098 loaded transfer calls Terminal.send exactly once");
     Game.rooms = oldRooms; Memory.terminalOps = oldOps;
+}
+// ROADMAP 0097 regression: Terminal.send() for RESOURCE_ENERGY needs amount +
+// transactionCost physically staged in the source terminal - the fee is paid
+// by the origin on top of what arrives at the destination (transfer()'s own
+// creation check already assumes this). A transfer that only loaded
+// op.amount, short by its own fee, used to reach "atTerminal" and call
+// send() anyway, which the real API rejects with ERR_NOT_ENOUGH_RESOURCES
+// (-6) - a stuck balancing transfer a user hit in production never
+// completed, forever recovering.
+{
+    const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
+    const makeStore = (energy, capacity) => ({ [RESOURCE_ENERGY]: energy, getFreeCapacity: () => capacity - energy, getUsedCapacity: () => energy, getCapacity: () => capacity });
+    let sends = 0;
+    const sourceTerminalStore = makeStore(1000, 300000);
+    const source = { name: "W7N50", controller: { my: true }, find: () => [], storage: { id: "W7N50-storage", store: makeStore(60000, 100000) }, terminal: { id: "W7N50-terminal", cooldown: 0, store: sourceTerminalStore, send: () => { sends++; return OK; } } };
+    const target = { name: "W7N51", controller: { my: true }, find: () => [], storage: { id: "W7N51-storage", store: makeStore(0, 100000) }, terminal: { id: "W7N51-terminal", cooldown: 0, store: makeStore(0, 300000), send: () => OK } };
+    const oldRooms = Game.rooms, oldOps = Memory.terminalOps, oldMarket = Game.market;
+    Game.rooms = Object.assign({}, oldRooms, { W7N50: source, W7N51: target });
+    Memory.terminalOps = { nextId: 1, operations: {}, seenIncoming: {}, events: [], terminalBalance: {} };
+    Game.market = { calcTransactionCost: () => 200 };
+    const created = terminalOps.transfer("W7N50", "W7N51", RESOURCE_ENERGY, 1000);
+    const op = Memory.terminalOps.operations[created.id];
+    op.loadedAmount = op.amount; op.state = "atTerminal";
+    terminalOps.tick();
+    assert(sends === 0 && op.state === "queued", "0097 a transfer short by its own transactionCost never calls Terminal.send");
+    sourceTerminalStore[RESOURCE_ENERGY] = op.amount + op.transactionCost;
+    op.loadedAmount = op.amount + op.transactionCost; op.state = "atTerminal";
+    terminalOps.tick();
+    assert(sends === 1 && op.state === "awaitingReceipt", "0097 a transfer loaded with amount + transactionCost calls Terminal.send exactly once and succeeds");
+    Game.rooms = oldRooms; Memory.terminalOps = oldOps; Game.market = oldMarket;
 }
 // ROADMAP 0098/0097 regressions for receipt recovery, aggregation and zero need.
 {

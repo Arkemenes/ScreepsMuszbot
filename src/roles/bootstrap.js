@@ -1,5 +1,5 @@
 const { findNearbyFullSource } = require("../utils/energy");
-const { takeCover } = require("../utils/combat");
+const { takeCover, isDangerous } = require("../utils/combat");
 const census = require("../utils/census");
 const { roomNeeds } = require("../rooms/needs");
 const reservations = require("../utils/reservations");
@@ -10,14 +10,18 @@ const resourceTiers = require("../utils/resourceTiers");
 function findSource(creep) {
     if (creep.memory.source) {
         const cached = Game.getObjectById(creep.memory.source);
-        // keep the cached source only while it still has energy to mine
-        if (cached && cached.energy > 0) return cached;
+        // keep the cached source only while it still has energy to mine and
+        // a hostile hasn't since moved in on top of it
+        if (cached && cached.energy > 0 && !isDangerous(cached.pos, creep.room)) {
+            return cached;
+        }
         creep.memory.source = undefined;
     }
 
+    const notDangerous = { filter: (s) => !isDangerous(s.pos, creep.room) };
     const source =
-        creep.pos.findClosestByPath(FIND_SOURCES_ACTIVE) ||
-        creep.pos.findClosestByPath(FIND_SOURCES);
+        creep.pos.findClosestByPath(FIND_SOURCES_ACTIVE, notDangerous) ||
+        creep.pos.findClosestByPath(FIND_SOURCES, notDangerous);
     if (source) creep.memory.source = source.id;
     return source;
 }
@@ -30,7 +34,8 @@ function findSpawnOrExtension(creep) {
         filter: (structure) =>
             (structure.structureType === STRUCTURE_SPAWN ||
                 structure.structureType === STRUCTURE_EXTENSION) &&
-            structure.store.getFreeCapacity(RESOURCE_ENERGY) > 0,
+            structure.store.getFreeCapacity(RESOURCE_ENERGY) > 0 &&
+            !isDangerous(structure.pos, creep.room),
     });
     const selected = priority.pick([{
         target,
@@ -44,6 +49,8 @@ function findSpawnOrExtension(creep) {
 function findEnergyDestination(creep) {
     const target = creep.pos.findClosestByRange(FIND_MY_STRUCTURES, {
         filter: (structure) => {
+            if (isDangerous(structure.pos, creep.room)) return false;
+
             if (structure.structureType === STRUCTURE_LINK) {
                 return (
                     structure.isCollector() &&
@@ -94,7 +101,8 @@ const bootstrap = {
             filter: (structure) =>
                 structure.structureType === STRUCTURE_LINK &&
                 !structure.isCollector() &&
-                structure.store[RESOURCE_ENERGY] > 0,
+                structure.store[RESOURCE_ENERGY] > 0 &&
+                !isDangerous(structure.pos, creep.room),
         });
         if (link) {
             reservations.claim(creep, link.id);
@@ -107,7 +115,11 @@ const bootstrap = {
         // then dropped energy
         const droppedEnergy = creep.pos.findClosestByPath(
             FIND_DROPPED_RESOURCES,
-            { filter: (resource) => resource.resourceType === RESOURCE_ENERGY }
+            {
+                filter: (resource) =>
+                    resource.resourceType === RESOURCE_ENERGY &&
+                    !isDangerous(resource.pos, creep.room),
+            }
         );
         if (droppedEnergy) {
             reservations.claim(creep, droppedEnergy.id);

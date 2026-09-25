@@ -149,41 +149,73 @@ function silenceAttackAlerts(creep) {
     creep.notifyWhenAttacked(false);
 }
 
+// Whether `pos` is exposed to `room`'s current threats - shared by
+// takeCover (the creep's own position) and excludeDangerZone below (a
+// candidate pickup/delivery target's position), so the two never drift
+// apart into two different definitions of "safe" (constitution §5).
+//
+// Safe: far enough that ranged can't connect, or sitting on our own rampart
+// with nothing about to melee it.
+//
+// Strictly greater than safeRange(), not >= - both sides can close 1 tile
+// the same tick (a creep keeps working/approaching its job while the
+// hostile advances toward it), and Screeps resolves that tick's attacks
+// against pre-move positions. A position right AT safeRange() (5) can end
+// the tick at range 3 - exactly RANGED_ATTACK's reach - and eat a hit next
+// tick before takeCover's retreat check ever runs. Requiring one extra tile
+// of headroom caps the worst case at range 4, still outside reach, and
+// matches the flee target in retreatToCover (safeRange()+1).
+function isDangerous(pos, room) {
+    const mem = Memory.rooms[room.name];
+    if (!mem || !mem.defenseActive) return false;
+
+    const dangers = threats(room);
+    if (!dangers.length) return false;
+
+    const nearest = pos.findClosestByRange(dangers);
+    if (!nearest || pos.getRangeTo(nearest) > safeRange()) return false;
+
+    const onOwnRampart = _.some(
+        pos.lookFor(LOOK_STRUCTURES),
+        (s) => s.structureType === STRUCTURE_RAMPART && s.my
+    );
+    if (!onOwnRampart) return true;
+
+    const meleeAdjacent = _.some(
+        dangers,
+        (h) => hasMelee(h) && pos.getRangeTo(h) <= 2
+    );
+    return meleeAdjacent;
+}
+
 // Called at the top of a non-combat role's run(). When the room is under attack
 // and the creep is exposed, it moves the creep to safety (a rampart, or out of
 // enemy range) and returns true so the caller skips its normal job this tick.
 // Returns false when the creep is safe and free to work.
 function takeCover(creep) {
-    const mem = Memory.rooms[creep.room.name];
-    if (!mem || !mem.defenseActive) return false;
     if (isArmed(creep)) return false;
+    if (!isDangerous(creep.pos, creep.room)) return false;
 
-    const dangers = threats(creep.room);
-    if (!dangers.length) return false;
-
-    const nearest = creep.pos.findClosestByRange(dangers);
-    if (!nearest) return false;
-
-    const onOwnRampart = _.some(
-        creep.pos.lookFor(LOOK_STRUCTURES),
-        (s) => s.structureType === STRUCTURE_RAMPART && s.my
-    );
-    const meleeAdjacent = _.some(
-        dangers,
-        (h) => hasMelee(h) && creep.pos.getRangeTo(h) <= 2
-    );
-
-    // Safe: far enough that ranged can't connect, or hunkered on our rampart
-    // with nothing about to melee us.
-    if (
-        creep.pos.getRangeTo(nearest) >= safeRange() ||
-        (onOwnRampart && !meleeAdjacent)
-    ) {
-        return false;
-    }
-
-    retreatToCover(creep, dangers);
+    retreatToCover(creep, threats(creep.room));
     return true;
+}
+
+// Drops any candidate whose position is currently in the attack zone
+// (isDangerous above) - so a job picker never even considers a pickup/
+// delivery target a hostile is standing next to. Without this, a picker
+// only reacts AFTER a creep is already exposed (via takeCover, one tick
+// too late for the tick that closes the gap - see isDangerous' comment),
+// and worse, re-picks the SAME nearest-but-unsafe target the very next
+// tick once takeCover's retreat puts the creep back at a "safe" distance -
+// walking the creep right back into the same spot instead of ever making
+// progress (ROADMAP 0107 follow-up, user request). No-op (same array,
+// nothing filtered) while the room isn't under attack - the common case -
+// so this costs nothing beyond the one Memory read every other check here
+// already pays.
+function excludeDangerZone(candidates, room) {
+    const mem = Memory.rooms[room.name];
+    if (!mem || !mem.defenseActive) return candidates;
+    return _.filter(candidates, (c) => !isDangerous(c.pos, room));
 }
 
 // --- shared combat primitives (ROADMAP 0032) - used by defender.js and
@@ -263,22 +295,41 @@ function ensurePartner(creep, partnerRole) {
     return candidate;
 }
 
-// The closest rampart we own, or null. defenderStriker.js's D3 tank
-// stance: standing on it denies melee approach entirely (a hostile can't
-// occupy/pass our own rampart tile) as long as the tile is actually
-// enclosed by the base's perimeter - not verified in advance (expensive,
-// fragile), just tried; if melee still reaches, the caller notices that
-// same tick (range check fails) and falls back to kiting.
+// The closest (by real path, not straight-line range) rampart we own that
+// isn't already occupied by another of our creeps, or null. defenderStriker.
+// js's D3 tank stance: standing on it denies melee approach entirely (a
+// hostile can't occupy/pass our own rampart tile) as long as the tile is
+// actually enclosed by the base's perimeter - not verified in advance
+// (expensive, fragile), just tried; if melee still reaches, the caller
+// notices that same tick (range check fails) and falls back to kiting.
+//
+// Path-based, not findClosestByRange: in a tightly walled base the
+// geometrically nearest rampart can sit behind our own walls, reachable
+// only via a long detour (or, if PathFinder's maxOps runs out first, not
+// reachable at all from the caller's moveTo - see utils/move.js's
+// `incomplete` handling). Picking by range there hands the caller an
+// unreachable destination it then can't tell apart from a reachable one
+// until the moveTo itself fails.
+//
+// Excludes ramparts already held by another striker: every unit converging
+// on the single range-nearest tile just jams the approach instead of
+// spreading across the perimeter's other rampart tiles.
 function nearestOwnRampart(creep) {
-    const ramparts = roomCache
+    const all = roomCache
         .structuresByType(creep.room, STRUCTURE_RAMPART)
         .filter((r) => r.my);
-    return creep.pos.findClosestByRange(ramparts);
+    const free = _.filter(
+        all,
+        (r) => !_.some(r.pos.lookFor(LOOK_CREEPS), (c) => c.my && c.id !== creep.id)
+    );
+    return creep.pos.findClosestByPath(free.length ? free : all);
 }
 
 module.exports = {
     silenceAttackAlerts,
     takeCover,
+    isDangerous,
+    excludeDangerZone,
     blockingMatrix,
     flee,
     isArmed,

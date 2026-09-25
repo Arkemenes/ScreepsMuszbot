@@ -96,12 +96,22 @@ const defenderStriker = {
             if (!onRampart) {
                 const rampart = combat.nearestOwnRampart(creep);
                 if (rampart) {
-                    creep.moveTo(rampart, { range: 0, reusePath: 5 });
-                    return;
+                    const status = creep.moveTo(rampart, { range: 0, reusePath: 5 });
+                    // OK: under way (or arriving next tick); ERR_TIRED: fatigued,
+                    // resumes on its own - both are fine, stand on this move
+                    // rather than fight it. Anything else (chiefly ERR_NO_PATH -
+                    // nearestOwnRampart() picks by range, not guaranteed
+                    // reachable, especially through a tightly walled base) means
+                    // this rampart isn't happening: fall through to kiting
+                    // instead of silently retrying the same failing move every
+                    // tick while melee closes the gap (live case, 2026-09-25 -
+                    // a defenderStriker never moved at all because this return
+                    // fired unconditionally, even when the moveTo had failed).
+                    if (status === OK || status === ERR_TIRED) return;
                 }
             }
-            // already on rampart and still reached (a gap), or nowhere to
-            // run to - kite like the solo defender
+            // already on rampart and still reached (a gap), rampart
+            // unreachable, or nowhere to run to - kite like the solo defender
             if (!combat.kiteAwayFrom(creep, hostiles)) {
                 const spawn = creep.room.find(FIND_MY_SPAWNS)[0];
                 if (spawn) creep.moveTo(spawn, { reusePath: 5 });
@@ -112,8 +122,10 @@ const defenderStriker = {
         if (!onRampart) {
             const rampart = combat.nearestOwnRampart(creep);
             if (rampart) {
-                creep.moveTo(rampart, { range: 0, reusePath: 5 });
-                return;
+                const status = creep.moveTo(rampart, { range: 0, reusePath: 5 });
+                if (status === OK || status === ERR_TIRED) return;
+                // unreachable - don't sit here doing nothing, fall through to
+                // the normal hold-at-range-and-shoot logic below instead.
             }
         }
 

@@ -36,11 +36,20 @@ function energyPiles(room) {
         if (isStore || isReceivingLink) piles.push(s);
     }
 
-    energyPilesCache[room.name] = piles;
-    return piles;
+    // A pile sitting in the attack zone isn't a valid target for a
+    // non-combat creep (utils/combat.js's excludeDangerZone, ROADMAP 0107
+    // follow-up, user request) - filtered here, once, so both callers
+    // (builder.js, pioneer.js) inherit it for free instead of each
+    // re-checking. No-op outside our own rooms under attack (pioneer's
+    // foreign/spawnless-room case: mem.defenseActive is only ever set for a
+    // room we own, so this never touches pioneer's own separate
+    // hostile-avoidance gate in rooms/pioneering.js).
+    energyPilesCache[room.name] = combat.excludeDangerZone(piles, room);
+    return energyPilesCache[room.name];
 }
 
 const roomCache = require("./roomCache");
+const combat = require("./combat");
 
 function findNearbyFullSource(creep) {
     const freeCapacity = creep.store.getFreeCapacity(RESOURCE_ENERGY);
@@ -49,7 +58,8 @@ function findNearbyFullSource(creep) {
     return creep.pos.findClosestByRange(FIND_SOURCES, {
         filter: (source) =>
             creep.pos.getRangeTo(source) <= 5 &&
-            source.energy >= freeCapacity,
+            source.energy >= freeCapacity &&
+            !combat.isDangerous(source.pos, creep.room),
     });
 }
 
@@ -83,6 +93,7 @@ function receivingLink(room, pos, opts) {
         );
         if (away.length) links = away;
     }
+    links = combat.excludeDangerZone(links, room);
     if (!links.length) return null;
     return pos ? pos.findClosestByRange(links) : links[0];
 }

@@ -37,6 +37,14 @@ function freeCapacity(store, resource) { return !store || typeof store.getFreeCa
 function room(name) { return Game.rooms && Game.rooms[name]; }
 function owned(name) { const value = room(name); return value && value.controller && value.controller.my && value.storage && value.terminal ? value : null; }
 function txCost(value, from, to) { return Game.market && typeof Game.market.calcTransactionCost === "function" ? Game.market.calcTransactionCost(value, from, to) : 0; }
+// StructureTerminal.send() for RESOURCE_ENERGY needs amount + fee physically
+// present in the source terminal - the fee is paid by the origin on top of
+// what arrives at the destination (transfer()'s own creation check above
+// already assumes this, and so does 0097's spec). A "transfer" kind is the
+// only one that pays its own transactionCost this way (sell/buy fund the fee
+// via a separate "fee" job instead), so this only inflates the load target
+// for that kind.
+function transferLoadTarget(op) { return op.amount + (op.kind === "transfer" && op.resourceType === RESOURCE_ENERGY ? (op.transactionCost || 0) : 0); }
 // Single choke point for state changes, so every path that gives up on an
 // operation (credits, market unavailable, createOrder error, ...) is reported
 // here instead of requiring each call site to remember to log it. Silent
@@ -559,9 +567,9 @@ function recover(op, source) {
     } else touch(op, op.kind === "receipt" ? "waiting" : "queued");
 }
 function tickTransfer(op, source, target) {
-    if (op.state === "queued" || (op.state === "waiting" && op.waitingDirection !== "unload")) assign(op, source, "load", source.storage, source.terminal, op.amount - op.loadedAmount);
+    if (op.state === "queued" || (op.state === "waiting" && op.waitingDirection !== "unload")) assign(op, source, "load", source.storage, source.terminal, transferLoadTarget(op) - op.loadedAmount);
     if (op.state === "atTerminal") {
-        if (op.loadedAmount < op.amount) { touch(op, "queued"); return; }
+        if (op.loadedAmount < transferLoadTarget(op)) { touch(op, "queued"); return; }
         if (source.terminal.cooldown) { op.error = "terminal em cooldown"; touch(op, "waiting"); return; }
         if (storeValue(source.terminal.store, op.resourceType) < op.loadedAmount) { op.error = "carga ainda não está no terminal"; return; }
         touch(op, "executing");
@@ -670,7 +678,7 @@ function runHauler(creep) {
         if (status === ERR_NOT_IN_RANGE) creep.moveTo(to, { range: 1, reusePath: 10 });
         else if (status === OK) {
             if (job.direction === "fee") { op.feeJob = false; op.feeLoadedAmount = (op.feeLoadedAmount || 0) + carried; touch(op, "atTerminal"); }
-            else if (job.direction === "load") { op.loadedAmount += carried; touch(op, op.loadedAmount >= op.amount ? "atTerminal" : "queued"); }
+            else if (job.direction === "load") { op.loadedAmount += carried; touch(op, op.loadedAmount >= transferLoadTarget(op) ? "atTerminal" : "queued"); }
             else if (job.direction === "recover") {
                 op.recoveredAmount = (op.recoveredAmount || 0) + carried;
                 op.loadedAmount = 0; op.recoveryAttempts = 0;

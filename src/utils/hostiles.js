@@ -45,13 +45,26 @@ function isTargetEnemy(username) {
     return !!username && targetEnemies().indexOf(username) !== -1;
 }
 
-// Mirrors combat.js's isArmed() definition (ATTACK/RANGED_ATTACK) - inlined
-// rather than imported to avoid a require cycle (combat.js itself requires
-// this module for getHostiles).
-function isArmed(creep) {
+// Deliberately broader than combat.js's isArmed() (ATTACK/RANGED_ATTACK
+// only, never imported here - would need a require cycle, combat.js itself
+// requires this module for getHostiles). That one answers "can this creep
+// fight back", which WORK never does. This one answers "is this creep a
+// threat inside a room we own", and a pure-WORK creep (a dismantler with no
+// ATTACK/RANGED_ATTACK at all) absolutely is one - it can chew through
+// ramparts/walls same as any siege unit. Without WORK here, such a creep
+// never enters getHostiles()/mem.defenseActive, so every combat role gates
+// on `mem.defenseActive ? getHostiles(...) : []` (defender.js,
+// defenderStriker.js, defenderMedic.js) and just stands idle at spawn while
+// it breaches the base - live case (2026-09-25): a defender that never
+// moved since spawning, because the intruder it should've engaged only had
+// WORK parts and this check never flagged it hostile in the first place.
+function isThreatInOwnRoom(creep) {
     return _.some(
         creep.body,
-        (part) => part.type === ATTACK || part.type === RANGED_ATTACK
+        (part) =>
+            part.type === ATTACK ||
+            part.type === RANGED_ATTACK ||
+            part.type === WORK
     );
 }
 
@@ -64,7 +77,7 @@ function isHostile(creep, room) {
     // In a room we own, anyone not on the ally list who can actually hurt us
     // counts as hostile - no whitelist needed, this is our own territory.
     if (room && room.controller && room.controller.my) {
-        return isArmed(creep);
+        return isThreatInOwnRoom(creep);
     }
 
     // targetEnemies also counts as hostile outside our own rooms (ROADMAP

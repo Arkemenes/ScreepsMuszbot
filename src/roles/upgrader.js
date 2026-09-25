@@ -2,7 +2,7 @@ const { findNearbyFullSource, receivingLink } = require("../utils/energy");
 const { scaledBody } = require("../utils/population");
 const census = require("../utils/census");
 const roomCache = require("../utils/roomCache");
-const { takeCover } = require("../utils/combat");
+const { takeCover, isDangerous } = require("../utils/combat");
 const { roomNeeds } = require("../rooms/needs");
 const reservations = require("../utils/reservations");
 const resourceTiers = require("../utils/resourceTiers");
@@ -93,7 +93,8 @@ var roleUpgrader = {
                         s.structureType === STRUCTURE_LINK &&
                         !s.isCollector() &&
                         s.store[RESOURCE_ENERGY] > 0 &&
-                        reservations.available(creep, s) >= 50,
+                        reservations.available(creep, s) >= 50 &&
+                        !isDangerous(s.pos, creep.room),
                 }
             );
             if (link) {
@@ -110,7 +111,8 @@ var roleUpgrader = {
                 filter: (r) =>
                     r.resourceType === RESOURCE_ENERGY &&
                     r.amount >= 50 &&
-                    reservations.available(creep, r) >= 50,
+                    reservations.available(creep, r) >= 50 &&
+                    !isDangerous(r.pos, creep.room),
             });
             if (resource) {
                 reservations.claim(creep, resource.id);
@@ -145,7 +147,8 @@ var roleUpgrader = {
                               (s.structureType == STRUCTURE_STORAGE ||
                                   s.structureType == STRUCTURE_CONTAINER) &&
                               s.store[RESOURCE_ENERGY] >= 50 &&
-                              reservations.available(creep, s) >= 50,
+                              reservations.available(creep, s) >= 50 &&
+                              !isDangerous(s.pos, creep.room),
                       })
                     : null;
 

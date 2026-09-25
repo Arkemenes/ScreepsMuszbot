@@ -3,7 +3,7 @@ const { receivingLink } = require("../utils/energy");
 const { planEntriesAt } = require("../utils/plan");
 const census = require("../utils/census");
 const roomCache = require("../utils/roomCache");
-const { takeCover } = require("../utils/combat");
+const { takeCover, isDangerous, excludeDangerZone } = require("../utils/combat");
 const { roomNeeds } = require("../rooms/needs");
 const reservations = require("../utils/reservations");
 const config = require("../utils/config");
@@ -31,9 +31,12 @@ function derived(room) {
 function sourceContainers(room) {
     const d = derived(room);
     if (!d.sourceContainers) {
-        d.sourceContainers = _.filter(
-            roomCache.structuresByType(room, STRUCTURE_CONTAINER),
-            (c) => c.pos.findInRange(FIND_SOURCES, 1).length > 0
+        d.sourceContainers = excludeDangerZone(
+            _.filter(
+                roomCache.structuresByType(room, STRUCTURE_CONTAINER),
+                (c) => c.pos.findInRange(FIND_SOURCES, 1).length > 0
+            ),
+            room
         );
     }
     return d.sourceContainers;
@@ -114,12 +117,15 @@ function towerDeliverable(s, room) {
 function spawnExtNeedingEnergy(room) {
     const d = derived(room);
     if (!d.spawnExt) {
-        d.spawnExt = _.filter(
-            roomCache.myStructures(room),
-            (s) =>
-                (s.structureType === STRUCTURE_SPAWN ||
-                    s.structureType === STRUCTURE_EXTENSION) &&
-                s.store.getFreeCapacity(RESOURCE_ENERGY) > 0
+        d.spawnExt = excludeDangerZone(
+            _.filter(
+                roomCache.myStructures(room),
+                (s) =>
+                    (s.structureType === STRUCTURE_SPAWN ||
+                        s.structureType === STRUCTURE_EXTENSION) &&
+                    s.store.getFreeCapacity(RESOURCE_ENERGY) > 0
+            ),
+            room
         );
     }
     return d.spawnExt;
@@ -128,8 +134,11 @@ function spawnExtNeedingEnergy(room) {
 function criticalTowers(room) {
     const d = derived(room);
     if (!d.criticalTowers) {
-        d.criticalTowers = _.filter(roomCache.myStructures(room), (s) =>
-            isTowerCritical(s, room)
+        d.criticalTowers = excludeDangerZone(
+            _.filter(roomCache.myStructures(room), (s) =>
+                isTowerCritical(s, room)
+            ),
+            room
         );
     }
     return d.criticalTowers;
@@ -152,13 +161,16 @@ function essentialConsumer(creep) {
 function labFactoryPowerSpawnNeedingEnergy(room) {
     const d = derived(room);
     if (!d.labs) {
-        d.labs = _.filter(
-            roomCache.myStructures(room),
-            (s) =>
-                (s.structureType === STRUCTURE_LAB ||
-                    s.structureType === STRUCTURE_FACTORY ||
-                    s.structureType === STRUCTURE_POWER_SPAWN) &&
-                s.store.getFreeCapacity(RESOURCE_ENERGY) > 0
+        d.labs = excludeDangerZone(
+            _.filter(
+                roomCache.myStructures(room),
+                (s) =>
+                    (s.structureType === STRUCTURE_LAB ||
+                        s.structureType === STRUCTURE_FACTORY ||
+                        s.structureType === STRUCTURE_POWER_SPAWN) &&
+                    s.store.getFreeCapacity(RESOURCE_ENERGY) > 0
+            ),
+            room
         );
     }
     return d.labs;
@@ -170,11 +182,14 @@ function controllerContainerCandidates(room) {
     const d = derived(room);
     if (d.controllerContainers === undefined) {
         d.controllerContainers = room.controller
-            ? room.controller.pos.findInRange(FIND_STRUCTURES, 3, {
-                  filter: (s) =>
-                      s.structureType === STRUCTURE_CONTAINER &&
-                      s.store.getFreeCapacity(RESOURCE_ENERGY) > 0,
-              })
+            ? excludeDangerZone(
+                  room.controller.pos.findInRange(FIND_STRUCTURES, 3, {
+                      filter: (s) =>
+                          s.structureType === STRUCTURE_CONTAINER &&
+                          s.store.getFreeCapacity(RESOURCE_ENERGY) > 0,
+                  }),
+                  room
+              )
             : [];
     }
     return d.controllerContainers;
@@ -200,8 +215,11 @@ function optionalConsumer(creep) {
 function toppableTowers(room) {
     const d = derived(room);
     if (!d.toppableTowers) {
-        d.toppableTowers = _.filter(roomCache.myStructures(room), (s) =>
-            towerDeliverable(s, room)
+        d.toppableTowers = excludeDangerZone(
+            _.filter(roomCache.myStructures(room), (s) =>
+                towerDeliverable(s, room)
+            ),
+            room
         );
     }
     return d.toppableTowers;
@@ -388,7 +406,8 @@ function pickLoad(creep) {
         filter: (r) =>
             r.resourceType === RESOURCE_ENERGY &&
             estimatedDropAmount(creep, r) > bigDropMin &&
-            reservations.available(creep, r) >= 50,
+            reservations.available(creep, r) >= 50 &&
+            !isDangerous(r.pos, creep.room),
     });
     if (bigDrop) return { id: bigDrop.id, act: "pickup", tier: "bigDrop" };
 
@@ -474,7 +493,8 @@ function pickLoad(creep) {
         filter: (r) =>
             r.resourceType === RESOURCE_ENERGY &&
             estimatedDropAmount(creep, r) > minDrop &&
-            reservations.available(creep, r) >= 50,
+            reservations.available(creep, r) >= 50 &&
+            !isDangerous(r.pos, creep.room),
     });
     if (dropped) return { id: dropped.id, act: "pickup" };
 
@@ -529,13 +549,16 @@ function pickLoad(creep) {
 function nonCollectorLinksWithEnergy(room) {
     const d = derived(room);
     if (!d.links) {
-        d.links = _.filter(
-            roomCache.myStructures(room),
-            (s) =>
-                s.structureType === STRUCTURE_LINK &&
-                typeof s.isCollector === "function" &&
-                !s.isCollector() &&
-                s.store[RESOURCE_ENERGY] > 0
+        d.links = excludeDangerZone(
+            _.filter(
+                roomCache.myStructures(room),
+                (s) =>
+                    s.structureType === STRUCTURE_LINK &&
+                    typeof s.isCollector === "function" &&
+                    !s.isCollector() &&
+                    s.store[RESOURCE_ENERGY] > 0
+            ),
+            room
         );
     }
     return d.links;
@@ -626,12 +649,15 @@ function pickDeliver(creep) {
 function fallbackTowers(room) {
     const d = derived(room);
     if (!d.fallbackTowers) {
-        d.fallbackTowers = _.filter(
-            roomCache.myStructures(room),
-            (s) =>
-                s.structureType === STRUCTURE_TOWER &&
-                !isSourceDefenseTower(s) &&
-                s.store.getFreeCapacity(RESOURCE_ENERGY) > 0
+        d.fallbackTowers = excludeDangerZone(
+            _.filter(
+                roomCache.myStructures(room),
+                (s) =>
+                    s.structureType === STRUCTURE_TOWER &&
+                    !isSourceDefenseTower(s) &&
+                    s.store.getFreeCapacity(RESOURCE_ENERGY) > 0
+            ),
+            room
         );
     }
     return d.fallbackTowers;
@@ -859,7 +885,16 @@ function spawnsAndExtensionsFull(room) {
 // vanish for good before a hauler gets around to it.
 function battlefieldLootJob(room) {
     const minLoot = config.get("hauler.minLootLoad", 50);
-    const piles = roomCache.tombstones(room).concat(roomCache.ruins(room));
+    // ROADMAP 0107 follow-up (user request): this is exactly the scenario
+    // that motivated excludeDangerZone - a dead invader's own tombstone
+    // sitting right where the fight happened, with a second, still-live
+    // invader guarding the spot. Filtered before .find() so a pile still
+    // being fought over loses out to the next-best one (or none) instead of
+    // sending a hauler straight into it.
+    const piles = excludeDangerZone(
+        roomCache.tombstones(room).concat(roomCache.ruins(room)),
+        room
+    );
     const pile = piles.find((p) =>
         Object.keys(p.store).some((k) => p.store[k] > minLoot)
     );
@@ -926,14 +961,28 @@ function runLootJob(creep) {
 // run() checks it separately via assignLootJob/runLootJob, at the same
 // priority spot pickMineralJob() used to give it (first, ahead of every
 // job below).
+// A mineral/lab/factory/power errand whose source or destination sits in
+// the attack zone is worse than useless (same reasoning as
+// excludeDangerZone above, which doesn't fit here since each of these
+// picks a single fixed structure rather than the closest of a list) -
+// rejected once, centrally, since every job-picker below returns the same
+// {from, to} shape.
+function safeMineralJob(job, room) {
+    if (!job) return null;
+    if (isDangerous(job.from.pos, room) || isDangerous(job.to.pos, room)) {
+        return null;
+    }
+    return job;
+}
+
 function pickMineralJob(room) {
     return (
-        mineralContainerJob(room) ||
-        labOutputJob(room) ||
-        labReagentJob(room) ||
-        factoryOutputJob(room) ||
-        factoryComponentJob(room) ||
-        powerFeedJob(room) ||
+        safeMineralJob(mineralContainerJob(room), room) ||
+        safeMineralJob(labOutputJob(room), room) ||
+        safeMineralJob(labReagentJob(room), room) ||
+        safeMineralJob(factoryOutputJob(room), room) ||
+        safeMineralJob(factoryComponentJob(room), room) ||
+        safeMineralJob(powerFeedJob(room), room) ||
         null
     );
 }
@@ -945,6 +994,7 @@ function pickPressuredJob(room) {
     if (pressured.kind === "mineralContainer") job = mineralContainerJob(room);
     else if (pressured.kind === "labOutput") job = labOutputJob(room);
     else if (pressured.kind === "factoryOutput") job = factoryOutputJob(room);
+    job = safeMineralJob(job, room);
     return job && job.from.id === pressured.sourceId ? job : null;
 }
 
