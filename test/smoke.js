@@ -10879,6 +10879,65 @@ origLog("\nMemory:", memStr.length, "bytes  |  rooms.W1N1 keys:",
     market.snapshot = oldSnapshot;
     Game.rooms = oldRooms; Game.market = oldMarket; Memory.terminalOps = oldOps;
 }
+// ROADMAP 0098 a marketOnly SELL that falls back to self-listing must not bind
+// to a stale, unrelated order just because op.listedTick happens to still be
+// undefined at that point. bindCreatedOrders() used to compare
+// `order.created < op.listedTick`, and `n < undefined` is always false in JS,
+// so an op that reached "listing" via executeDeal()'s no-candidate branch
+// (before listResidual() ever ran) would silently bind to the very first
+// matching order in Game.market.orders - including an old, already
+// fully-filled one from a completely different operation. syncManagedOrders()
+// then fell back to op.remaining (op.listedAmount was never set, since no real
+// createOrder() had happened yet) as the baseline, computed a fake "filled" of
+// the whole requested amount against that dead order's remainingAmount:0, and
+// marked the operation "completed" without ever creating an order or trading
+// anything (bug real, usuário reportou em produção, 2026-09-24: terminalSell
+// de 1000 pixel virou "completed"/listedFilled:1000 vinculado a uma ordem
+// antiga de 200 já zerada, sem nenhuma venda real).
+{
+    const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
+    const oldRooms = Game.rooms, oldMarket = Game.market, oldOps = Memory.terminalOps;
+    const oldSnapshot = market.snapshot;
+    market.snapshot = () => ({ tick: Game.time, resources: { pixel: { buyPrice: 50000, sellPrice: 50000, fairPrice: 50000 } } });
+    const room = { name: "W7N23", controller: { my: true } };
+    Game.rooms = Object.assign({}, oldRooms, { W7N23: room });
+    let nextOrderId = 1, createCalls = 0;
+    const orders = { "stale-exhausted": { id: "stale-exhausted", price: 54210, remainingAmount: 0, amount: 200, resourceType: "pixel", type: ORDER_SELL, roomName: "W7N23", created: Game.time - 50000 } };
+    Game.market = {
+        credits: 20000000, incomingTransactions: [],
+        orders,
+        getAllOrders: () => [],
+        createOrder: () => {
+            createCalls++;
+            const id = "fresh-" + (nextOrderId++);
+            orders[id] = { id, price: 63000, remainingAmount: 50, amount: 50, resourceType: "pixel", type: ORDER_SELL, roomName: "W7N23", created: Game.time };
+            return OK;
+        },
+        cancelOrder: () => OK,
+    };
+    Memory.terminalOps = { nextId: 1, operations: {}, seenIncoming: {}, events: [], terminalBalance: {} };
+    const created = terminalOps.sell("W7N23", "pixel", 50, 59800);
+
+    terminalOps.tick(); // queued -> executeDeal finds no candidate -> "listing", listedTick still undefined
+    let op = Memory.terminalOps.operations[created.id];
+    assert(op.state === "listing" && !op.marketOrderId && !op.listedTick,
+        "0098 a marketOnly SELL with no covering candidate goes to listing without touching any pre-existing order yet");
+
+    terminalOps.tick(); // bindCreatedOrders must skip (no listedTick yet); listResidual() then creates the real order
+    op = Memory.terminalOps.operations[created.id];
+    assert(op.marketOrderId !== "stale-exhausted" && op.state !== "completed",
+        "0098 an op with no listedTick is never bound to a pre-existing, unrelated order");
+    assert(createCalls === 1 && op.listedAmount === 50,
+        "0098 listResidual() actually creates a fresh order instead of being skipped by a bad bind");
+
+    terminalOps.tick(); // bindCreatedOrders now finds the fresh order (created >= listedTick) and binds it
+    op = Memory.terminalOps.operations[created.id];
+    assert(op.marketOrderId === "fresh-1" && op.state === "listed" && op.remaining === 50,
+        "0098 the op binds to the order it actually created, not the stale one, and remaining stays untouched");
+
+    market.snapshot = oldSnapshot;
+    Game.rooms = oldRooms; Game.market = oldMarket; Memory.terminalOps = oldOps;
+}
 // ROADMAP 0098 repricing a live order uses changeOrderPrice, not
 // cancelOrder + createOrder. The old path re-paid the full 5% listing fee every
 // repriceInterval and refunded nothing (bug real, usuário reportou em produção

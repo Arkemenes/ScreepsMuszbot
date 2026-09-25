@@ -391,7 +391,21 @@ function bindCreatedOrders() {
     if (!Game.market || !Game.market.orders) return;
     Object.keys(memory().operations).forEach((id) => {
         const op = operation(id);
-        if (!op || op.state !== "listing") return;
+        // op.listedTick is only ever set by listResidual() right after a real
+        // createOrder() call. An op also reaches "listing" via executeDeal()'s
+        // no-candidate branch (reportNoCandidate -> touch(op, "listing")),
+        // *before* listResidual ever runs - listedTick is still undefined
+        // there. `order.created < undefined` is always false in JS, so the
+        // age check below used to silently pass for every op in that state,
+        // binding it to the first pre-existing order that happened to match
+        // room/resource/type - including an unrelated, already fully-filled
+        // one of ours from a completely different, older operation. That let
+        // syncManagedOrders() (see its own comment) declare the operation
+        // "completed" without ever creating an order or trading anything
+        // (bug real, usuário reportou em produção, 2026-09-24: terminalSell
+        // de 1000 pixel virou "completed" com listedFilled:1000 vinculado a
+        // uma ordem antiga de 200 já zerada, sem nenhuma venda real).
+        if (!op || op.state !== "listing" || !op.listedTick) return;
         Object.keys(Game.market.orders).some((orderId) => {
             const order = Game.market.orders[orderId];
             if (!order || order.roomName !== op.sourceRoom || order.resourceType !== op.resourceType || order.type !== (op.kind === "buy" ? ORDER_BUY : ORDER_SELL) || order.created < op.listedTick) return false;
@@ -402,11 +416,21 @@ function bindCreatedOrders() {
 function syncManagedOrders() {
     if (!Game.market || !Game.market.orders) return;
     Object.keys(memory().operations).map(operation).forEach((op) => {
-        if (!active(op) || !op.marketOrderId) return;
+        // op.listedAmount is only set by listResidual() right after it
+        // actually creates the order being tracked here - it is the real
+        // size of *that* order, needed as the baseline for how much of it
+        // has been filled. Falling back to op.remaining when it is missing
+        // (the old behaviour) assumed the bound order was the full
+        // remaining amount, which is only safe if bindCreatedOrders() bound
+        // us to an order we genuinely just created. Defense in depth for
+        // that invariant (bug real, ver comentário em bindCreatedOrders):
+        // without a real listedAmount there is no trustworthy baseline, so
+        // skip instead of risking a phantom full-completion.
+        if (!active(op) || !op.marketOrderId || typeof op.listedAmount !== "number") return;
         const order = Game.market.orders[op.marketOrderId];
         if (!order) return;
         const remainingOnMarket = order.remainingAmount === undefined ? order.amount : order.remainingAmount;
-        const filled = Math.max(0, (op.listedAmount || op.remaining) - remainingOnMarket - (op.listedFilled || 0));
+        const filled = Math.max(0, op.listedAmount - remainingOnMarket - (op.listedFilled || 0));
         if (filled <= 0) return;
         op.listedFilled = (op.listedFilled || 0) + filled;
         op.remaining = Math.max(0, op.remaining - filled);
