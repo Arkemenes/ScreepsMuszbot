@@ -1,6 +1,5 @@
 const { receivingLink, energyPiles } = require("../utils/energy");
 const { scaledBody } = require("../utils/population");
-const { isPlanned } = require("../utils/plan");
 const census = require("../utils/census");
 const roomCache = require("../utils/roomCache");
 const { takeCover } = require("../utils/combat");
@@ -77,10 +76,18 @@ global.clearBuildPriority = function () {
 };
 
 // Per-tick, per-room cache: every builder in a room was independently
-// re-running isPlanned/worthRepairing/tier over the WHOLE structures list
+// re-running worthRepairing/tier over the WHOLE structures list
 // every tick - the filtered result is identical for all of them, only the
 // findInRange range-check afterwards actually depends on the creep's own
 // position, so that's the only part left per-creep below.
+//
+// Deliberately NOT gated on utils/plan's isPlanned: a rampart that just
+// finished construction and hasn't decayed a single tick can already fall
+// outside the current plan (mincut/replan moved on) - and since nothing
+// dismantles an unplanned structure either, that gate used to leave it
+// permanently unrepaired at critical HP until it decayed and vanished
+// (user-reported, 2026-09). A structure that physically exists and is
+// dying is worth repairing regardless of whether the plan still wants it.
 let criticalTick = -1;
 let criticalCache = {};
 function criticalRepairCandidates(room) {
@@ -93,7 +100,6 @@ function criticalRepairCandidates(room) {
             roomCache.structures(room),
             (s) =>
                 s.structureType !== STRUCTURE_CONTROLLER &&
-                isPlanned(s) &&
                 traffic.worthRepairing(s) &&
                 rampartRepair.tier(s) === "critical"
         );
@@ -142,9 +148,11 @@ function opportunisticWork(creep) {
 }
 
 // Per-tick, per-room cache: every builder recomputed this same
-// filter+sort (isPlanned/worthRepairing/builderMayRepair, then
-// rampartRepair.priority) from scratch, and neither depends on which
-// builder is asking - only room state.
+// filter+sort (worthRepairing/builderMayRepair, then rampartRepair.priority)
+// from scratch, and neither depends on which builder is asking - only room
+// state. Not gated on isPlanned either, same reasoning as
+// criticalRepairCandidates above - a structure that exists is worth
+// repairing whether or not the plan still reserves that tile for it.
 let repairTick = -1;
 let repairCache = {};
 function builderRepairTargets(room) {
@@ -158,7 +166,6 @@ function builderRepairTargets(room) {
             (s) =>
                 s.structureType != STRUCTURE_CONTROLLER &&
                 s.hits < s.hitsMax &&
-                isPlanned(s) &&
                 traffic.worthRepairing(s) &&
                 rampartRepair.builderMayRepair(s, room)
         );

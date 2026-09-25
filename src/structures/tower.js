@@ -1,5 +1,4 @@
 const { getHostiles, isHostile } = require("../utils/hostiles");
-const { isPlanned } = require("../utils/plan");
 const traffic = require("../utils/traffic");
 const rampartRepair = require("../utils/rampartRepair");
 const energyLedger = require("../utils/energyLedger");
@@ -127,6 +126,13 @@ function findHealingTarget(tower) {
 // that split - any trivial normal-structure damage permanently starving a
 // critical rampart - but a single unified list is the cleaner fix the
 // tier system was always meant to enable).
+// Not gated on utils/plan's isPlanned - a structure that physically exists
+// and is dying is worth repairing whether or not the current plan still
+// reserves that tile for it (same reasoning as roles/builder.js's repair
+// candidate pools - a rampart can fall out of the plan, e.g. a replan
+// moving the mincut, and since nothing dismantles an unplanned structure
+// either, gating repair on it used to leave a critical-tier rampart
+// permanently unrepaired until it decayed and vanished).
 function computeRepairCandidates(room) {
     if (Object.prototype.hasOwnProperty.call(repairLists, room.name)) {
         return repairLists[room.name];
@@ -135,7 +141,6 @@ function computeRepairCandidates(room) {
     const damagedStructures = room.find(FIND_STRUCTURES, {
         filter: (structure) =>
             structure.hits < structure.hitsMax &&
-            isPlanned(structure) &&
             traffic.worthRepairing(structure),
     });
 
