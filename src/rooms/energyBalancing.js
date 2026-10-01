@@ -25,17 +25,18 @@ function activeTransfer(targetName) {
     return terminalOps.activeForRoom(targetName).find((op) => op.kind === "transfer" && op.targetRoom === targetName && op.automatic);
 }
 function allActiveTransfers(roomName) {
-    return terminalOps.activeForRoom(roomName).filter((op) => op.kind === "transfer");
+    return terminalOps.activeForRoom(roomName).filter((op) => op.kind === "transfer" && op.resourceType === RESOURCE_ENERGY);
 }
 function pending(targetName) {
     return terminalOps.activeForRoom(targetName).find((op) => op.kind === "transfer" && op.targetRoom === targetName);
 }
-function maxSend(source, target) {
-    let low = 0, high = Math.min(source.excess, config.get("logistics.balanceMaxAmount", 50000));
+function maxSend(source, target, cap) {
+    const budget = Math.min(source.excess, cap === undefined ? Infinity : cap);
+    let low = 0, high = Math.min(budget, config.get("logistics.balanceMaxAmount", 50000));
     while (low < high) {
         const mid = Math.ceil((low + high + 1) / 2);
         const cost = terminalOps.txCost(mid, source.room.name, target.room.name);
-        if (mid + cost <= source.excess) low = mid; else high = mid - 1;
+        if (mid + cost <= budget) low = mid; else high = mid - 1;
     }
     return low;
 }
@@ -85,43 +86,69 @@ function cancelIfIneligible(target, entries) {
     observe(target.room.name, { reason: "cancel-failed", source: op.sourceRoom, requestedAmount: op.amount, sentAmount: op.sentAmount || 0, state: op.state, lastError: cancelled.error });
     return false;
 }
+// Non-critical rooms are pulled toward the empire-wide energy ratio. A room
+// further than balanceGapRatio below it is a target, one further above it is a
+// source. Each run plans every disjoint source->target pair at once, because
+// terminalOps allows only one energy transfer per room at a time.
 function run() {
     if (!config.get("logistics.balanceEnabled", true) || !Array.isArray(Game.myRooms)) return;
     const mem = state();
+    // Gate on the cheap interval first: building every room's snapshot and
+    // economy state each tick was the whole cost of this subsystem (~1.2 CPU).
+    const sinceRun = mem.lastRun ? Game.time - mem.lastRun : Infinity;
+    if (mem.lastCheck && Game.time - mem.lastCheck < config.get("logistics.balanceCriticalInterval", 20)) return;
+    mem.lastCheck = Game.time;
     const entries = Game.myRooms.map(snapshot).filter(Boolean);
     clearStalePending(entries);
     const critical = entries.filter((entry) => entry.state === "critical");
-    const due = !mem.lastRun || Game.time - mem.lastRun >= config.get("logistics.balanceInterval", 1000);
-    if (!critical.length && !due) return;
+    const due = sinceRun >= config.get("logistics.balanceInterval", 1000);
+    if (!due && !critical.length) return;
     mem.lastRun = Game.time;
-    for (const target of entries) {
-        const existing = pending(target.room.name);
+    const band = config.get("logistics.balanceGapRatio", 0.005);
+    const totalCapacity = entries.reduce((sum, entry) => sum + entry.capacity, 0);
+    const meanRatio = totalCapacity ? entries.reduce((sum, entry) => sum + entry.energy, 0) / totalCapacity : 0;
+    entries.forEach((entry) => { entry.deficit = Math.max(0, Math.ceil(meanRatio * entry.capacity - entry.energy)); entry.surplus = Math.max(0, Math.floor(entry.energy - meanRatio * entry.capacity)); });
+    // A target takes one inbound transfer and never also sends; a source may
+    // feed several targets, so its surplus is spent down as transfers are planned.
+    const receiving = {}, sending = {};
+    entries.forEach((entry) => {
+        allActiveTransfers(entry.room.name).forEach((op) => { if (op.targetRoom === entry.room.name) receiving[entry.room.name] = true; else sending[entry.room.name] = true; });
+    });
+    const targets = entries.slice().sort((a, b) => (b.state === "critical") - (a.state === "critical") || b.deficit - a.deficit);
+    for (const target of targets) {
+        const name = target.room.name;
+        const existing = pending(name);
         if (existing) {
             if (target.state !== "critical") cancelIfIneligible(target, entries);
-            else observe(target.room.name, { reason: "pending", source: existing.sourceRoom, requestedAmount: existing.amount, sentAmount: existing.sentAmount || 0, state: existing.state, lastError: existing.error || null });
+            else observe(name, { reason: "pending", source: existing.sourceRoom, requestedAmount: existing.amount, sentAmount: existing.sentAmount || 0, state: existing.state, lastError: existing.error || null });
             continue;
         }
         if (target.state !== "critical" && target.state !== "stable" && target.state !== "abundant") continue;
-        const sources = entries.filter((source) => source.room.name !== target.room.name && source.state !== "critical" && source.excess > 0 &&
-            (target.state === "critical" || source.ratio - target.ratio >= config.get("logistics.balanceGapRatio", 0.2)))
+        const isCritical = target.state === "critical";
+        if (!isCritical && meanRatio - target.ratio < band) continue;
+        if (receiving[name] || sending[name]) { observe(name, { reason: "target-terminal-locked", source: null, requestedAmount: 0, sentAmount: 0, state: "blocked", lastError: null }); continue; }
+        const sources = entries.filter((source) => source.room.name !== name && !receiving[source.room.name] && source.state !== "critical" && source.excess > 0 &&
+            (isCritical || (source.ratio - meanRatio >= band && source.surplus > 0)))
             .sort((a, b) => b.excess - a.excess || distance(a, target) - distance(b, target) || a.room.name.localeCompare(b.room.name));
         const source = sources[0];
-        if (!source) { observe(target.room.name, { reason: "no-eligible-source", source: null, requestedAmount: 0, sentAmount: 0, state: "none", lastError: null }); continue; }
-        if (allActiveTransfers(source.room.name).some((op) => op.sourceRoom === source.room.name)) {
-            observe(target.room.name, { reason: "source-terminal-locked", source: source.room.name, requestedAmount: 0, sentAmount: 0, state: "blocked", lastError: null });
+        if (!source) {
+            const lockedSource = entries.some((other) => other.room.name !== name && receiving[other.room.name] && other.state !== "critical" && other.excess > 0 && (isCritical || other.ratio - meanRatio >= band));
+            observe(name, { reason: lockedSource ? "source-terminal-locked" : "no-eligible-source", source: null, requestedAmount: 0, sentAmount: 0, state: lockedSource ? "blocked" : "none", lastError: null });
             continue;
         }
-        const ratioNeed = Math.max(0, Math.ceil(target.capacity * config.get("logistics.balanceGapRatio", 0.2) - target.energy));
-        const desired = target.state === "critical" ? criticalNeed(target) : Math.max(criticalNeed(target), ratioNeed);
-        const value = Math.min(maxSend(source, target), desired);
-        if (value <= 0) { observe(target.room.name, { reason: "no-preservable-volume", source: source.room.name, requestedAmount: 0, sentAmount: 0, state: "blocked", lastError: null }); continue; }
-        const created = terminalOps.transfer(source.room.name, target.room.name, RESOURCE_ENERGY, value, { automatic: true, reason: target.state });
+        const desired = isCritical ? criticalNeed(target) : Math.max(criticalNeed(target), target.deficit);
+        const value = Math.min(maxSend(source, target, isCritical ? undefined : source.surplus), desired);
+        if (value <= 0) { observe(name, { reason: "no-preservable-volume", source: source.room.name, requestedAmount: 0, sentAmount: 0, state: "blocked", lastError: null }); continue; }
+        const created = terminalOps.transfer(source.room.name, name, RESOURCE_ENERGY, value, { automatic: true, reason: target.state });
         if (created.ok) {
-            mem.pending[target.room.name] = created.id;
+            mem.pending[name] = created.id;
+            receiving[name] = true; sending[source.room.name] = true;
+            const spent = value + terminalOps.txCost(value, source.room.name, name);
+            source.excess = Math.max(0, source.excess - spent);
+            source.surplus = Math.max(0, source.surplus - spent);
             const op = terminalOps.operation(created.id);
-            observe(target.room.name, { reason: target.state, source: source.room.name, requestedAmount: value, sentAmount: 0, state: op.state, lastError: null });
-        } else observe(target.room.name, { reason: "transfer-rejected", source: source.room.name, requestedAmount: value, sentAmount: 0, state: "rejected", lastError: created.error });
-        return;
+            observe(name, { reason: target.state, source: source.room.name, requestedAmount: value, sentAmount: 0, state: op.state, lastError: null });
+        } else observe(name, { reason: "transfer-rejected", source: source.room.name, requestedAmount: value, sentAmount: 0, state: "rejected", lastError: created.error });
     }
 }
 function stats(roomName) {

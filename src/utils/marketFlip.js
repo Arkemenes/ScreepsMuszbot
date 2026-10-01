@@ -66,16 +66,15 @@ function energyAskPrice(grouped) {
 // (pixel/accessKey/cpuUnlock) only need an owned controller, physical
 // resources need storage+terminal too (same requirement terminalOps.buy()/
 // sell() itself enforces).
-function pickRoom(marketOnly, busyRooms) {
-    const names = Object.keys(Game.rooms || {}).sort();
-    for (const name of names) {
-        if (busyRooms && busyRooms[name]) continue;
+function eligibleRooms(marketOnly, busyRooms) {
+    return Object.keys(Game.rooms || {}).sort().filter((name) => {
+        if (busyRooms && busyRooms[name]) return false;
         const room = Game.rooms[name];
-        if (!room || !room.controller || !room.controller.my) continue;
-        if (marketOnly || (room.storage && room.terminal)) return room;
-    }
-    return null;
+        if (!room || !room.controller || !room.controller.my) return false;
+        return marketOnly || (room.storage && room.terminal);
+    }).map((name) => Game.rooms[name]);
 }
+function pickRoom(marketOnly, busyRooms) { return eligibleRooms(marketOnly, busyRooms)[0] || null; }
 // No fairPrice data at all is treated as a violation - the guardrail's job
 // is to refuse trading against a resourceType nobody has any read on yet.
 // Pedido do usuário, 2026-09-29: não exige mais confidence:"ready" (só o
@@ -127,14 +126,18 @@ function busyRooms(mem) {
 }
 function openFlip(candidate, quantity, expectedNetProfit) {
     const mem = memory();
-    const room = pickRoom(candidate.marketOnly, busyRooms(mem));
-    if (!room) return false; // toda sala elegível já está ocupada com outro flip
+    // Try each eligible room: one whose terminal is tied up by another
+    // operation on the same resource must not block the flip everywhere.
+    let room = null, response = null;
+    for (const candidateRoom of eligibleRooms(candidate.marketOnly, busyRooms(mem))) {
+        const attempt = terminalOps.buy(candidateRoom.name, candidate.resourceType, quantity, candidate.buyPrice, false, true);
+        if (attempt.ok) { room = candidateRoom; response = attempt; break; }
+    }
+    if (!room) return false;
     // createListing:false - explícito, pedido do usuário, 2026-09-29: um
     // flip é só instantâneo, nunca deixa uma ordem pública parada esperando.
     // skipFeeCap:true - o flip já avalia a taxa de entrega como parte do
     // próprio netProfit/minProfitRatio (pedido do usuário, 2026-09-30).
-    const response = terminalOps.buy(room.name, candidate.resourceType, quantity, candidate.buyPrice, false, true);
-    if (!response.ok) return false;
     const reserved = quantity * candidate.buyPrice;
     mem.committedCredits += reserved;
     mem.active[candidate.resourceType] = {

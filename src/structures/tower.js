@@ -6,6 +6,10 @@ let cacheTick;
 let hostileTargets = {};
 let repairLists = {};
 let claimedRepairTargets = {};
+let healingTargets = {};
+// Heap: damaged-structure ids per room, rescanned every REPAIR_SCAN_TICKS.
+const repairScan = {};
+const REPAIR_SCAN_TICKS = 5;
 
 const hostilePartPriority = {
     [HEAL]: 0,
@@ -44,6 +48,7 @@ function resetCache() {
         hostileTargets = {};
         repairLists = {};
         claimedRepairTargets = {};
+        healingTargets = {};
     }
 }
 
@@ -105,14 +110,18 @@ function countNearbyHostiles(tower) {
 }
 
 function findHealingTarget(tower) {
-    const injuredCreeps = tower.room.find(FIND_MY_CREEPS, {
-        filter: (creep) => creep.hits < creep.hitsMax,
-    });
-
-    return _.sortBy(
-        injuredCreeps,
-        (creep) => creep.hits / Math.max(creep.hitsMax, 1)
-    )[0];
+    resetCache();
+    const name = tower.room.name;
+    if (!Object.prototype.hasOwnProperty.call(healingTargets, name)) {
+        const injuredCreeps = tower.room.find(FIND_MY_CREEPS, {
+            filter: (creep) => creep.hits < creep.hitsMax,
+        });
+        healingTargets[name] = _.sortBy(
+            injuredCreeps,
+            (creep) => creep.hits / Math.max(creep.hitsMax, 1)
+        )[0];
+    }
+    return healingTargets[name];
 }
 
 // The expensive part (the one room.find/tick, constitution §1) - computed
@@ -138,11 +147,24 @@ function computeRepairCandidates(room) {
         return repairLists[room.name];
     }
 
-    const damagedStructures = room.find(FIND_STRUCTURES, {
-        filter: (structure) =>
-            structure.hits < structure.hitsMax &&
-            traffic.worthRepairing(structure),
-    });
+    // The full structure scan only runs every REPAIR_SCAN_TICKS; in between
+    // the remembered ids are re-resolved and re-filtered for current hits.
+    let scan = repairScan[room.name];
+    if (!scan || Game.time - scan.tick >= REPAIR_SCAN_TICKS) {
+        scan = repairScan[room.name] = {
+            tick: Game.time,
+            ids: room
+                .find(FIND_STRUCTURES, {
+                    filter: (structure) =>
+                        structure.hits < structure.hitsMax &&
+                        traffic.worthRepairing(structure),
+                })
+                .map((structure) => structure.id),
+        };
+    }
+    const damagedStructures = scan.ids
+        .map((id) => Game.getObjectById(id))
+        .filter((structure) => structure && structure.hits < structure.hitsMax);
 
     repairLists[room.name] = _.sortBy(damagedStructures, rampartRepair.priority);
     return repairLists[room.name];

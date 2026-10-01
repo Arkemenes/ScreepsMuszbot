@@ -10765,6 +10765,61 @@ origLog("\nMemory:", memStr.length, "bytes  |  rooms.W1N1 keys:",
     assert(op.state === "unloading" && op.haulerName === "UnloadHauler2" && hauler.memory.terminalJob.amount === 1500, "0097 unload retrigger uses the remaining amount, not the original total, so it resumes after a partial delivery");
     Game.rooms = oldRooms; Memory.terminalOps = oldOps; Game.creeps = oldCreeps;
 }
+// ROADMAP 0097 décimo bug real (2026-10-01): incomingReceipt() fundia a
+// transação de uma transferência no receipt de OUTRA (terminal-199 do pai 198
+// absorveu os 31388 do terminal-232), então o 232 nunca completava e o
+// energyBalancing.pending ficava travado. Também cobre a reconciliação quando
+// a carga enviada já foi consumida por outro caminho.
+{
+    const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
+    const makeStore = (energy, capacity) => ({ [RESOURCE_ENERGY]: energy, getFreeCapacity: () => capacity - energy, getUsedCapacity: () => energy, getCapacity: () => capacity });
+    const target = { name: "W7N56", controller: { my: true }, find: () => [], storage: { id: "W7N56-storage", store: makeStore(0, 100000) }, terminal: { id: "W7N56-terminal", cooldown: 0, store: makeStore(5000, 300000), send: () => OK } };
+    const oldRooms = Game.rooms, oldOps = Memory.terminalOps, oldCreeps = Game.creeps, oldMarket = Game.market, oldTime = Game.time;
+    const srcRoom = { name: "W7N57", controller: { my: true }, find: () => [], storage: { id: "W7N57-storage", store: makeStore(60000, 100000) }, terminal: { id: "W7N57-terminal", cooldown: 0, store: makeStore(0, 300000), send: () => OK } };
+    Game.rooms = Object.assign({}, oldRooms, { W7N56: target, W7N57: srcRoom });
+    Game.creeps = {};
+    Memory.terminalOps = { nextId: 10, operations: {}, seenIncoming: {}, events: [], terminalBalance: {} };
+    const base = { kind: "transfer", sourceRoom: "W7N57", targetRoom: "W7N56", resourceType: RESOURCE_ENERGY, remaining: 0, loadedAmount: 0, transactionCost: 0, createdTick: Game.time, updatedTick: Game.time };
+    Memory.terminalOps.operations["terminal-old"] = Object.assign({}, base, { id: "terminal-old", kind: "receipt", sourceRoom: null, amount: 1000, receivedAmount: 0, sentAmount: 0, parentId: "terminal-parent-a", state: "waiting" });
+    Memory.terminalOps.operations["terminal-parent-b"] = Object.assign({}, base, { id: "terminal-parent-b", amount: 3000, sentAmount: 3000, receivedAmount: 0, targetTerminalBaseline: 2000, sentTick: Game.time - 500, state: "awaitingReceipt" });
+    Game.market = { incomingTransactions: [{ transactionId: "tx-b", to: "W7N56", resourceType: RESOURCE_ENERGY, amount: 3000 }] };
+    terminalOps.tick();
+    const old = Memory.terminalOps.operations["terminal-old"];
+    const created = Object.values(Memory.terminalOps.operations).filter((o) => o.kind === "receipt" && o.id !== "terminal-old");
+    assert(old.amount === 1000, "0097 incoming transaction of another parent is NOT merged into an unrelated receipt (got amount " + old.amount + ")");
+    assert(created.length === 1 && created[0].parentId === "terminal-parent-b" && created[0].amount === 3000, "0097 the other parent gets its own receipt (got " + JSON.stringify(created.map((o) => o.parentId + ":" + o.amount)) + ")");
+
+    // Sent cargo already drained by someone else: transfer closes instead of waiting forever.
+    Memory.terminalOps.operations = {};
+    target.terminal.store = makeStore(0, 300000);
+    Memory.terminalOps.operations["terminal-gone"] = Object.assign({}, base, { id: "terminal-gone", amount: 3000, sentAmount: 3000, receivedAmount: 0, targetTerminalBaseline: 2000, sentTick: Game.time - 500, state: "waiting", waitingDirection: "unload", error: "withdraw retornou -4" });
+    terminalOps.tick();
+    Game.time += 5;
+    terminalOps.tick();
+    assert(Memory.terminalOps.operations["terminal-gone"].state === "completed", "0097 a sent transfer whose cargo is gone from the target terminal completes (got " + Memory.terminalOps.operations["terminal-gone"].state + ")");
+
+    // Receipt with nothing left in the terminal closes after receiptEmptyTicks.
+    Memory.terminalOps.operations = {};
+    Memory.terminalOps.operations["terminal-empty"] = Object.assign({}, base, { id: "terminal-empty", kind: "receipt", sourceRoom: null, amount: 1000, receivedAmount: 0, sentAmount: 0, state: "waiting" });
+    target.terminal.store = makeStore(0, 300000);
+    terminalOps.tick();
+    Game.time += 400;
+    terminalOps.tick();
+    assert(Memory.terminalOps.operations["terminal-empty"].state === "completed", "0097 an empty-terminal receipt completes after the grace window (got " + Memory.terminalOps.operations["terminal-empty"].state + ")");
+
+    // Stock reserved by a market SELL (fee energy) is not "gone": the receipt keeps waiting.
+    Memory.terminalOps.operations = {};
+    Memory.terminalOps.operations["terminal-fee-receipt"] = Object.assign({}, base, { id: "terminal-fee-receipt", kind: "receipt", sourceRoom: null, amount: 1000, receivedAmount: 0, sentAmount: 0, state: "waiting" });
+    Memory.terminalOps.operations["terminal-fee-sell"] = Object.assign({}, base, { id: "terminal-fee-sell", kind: "sell", sourceRoom: "W7N56", targetRoom: null, resourceType: "O", amount: 100, remaining: 100, feeLoadedAmount: 800, state: "queued" });
+    target.terminal.store = makeStore(800, 300000);
+    Game.time = oldTime;
+    terminalOps.tick();
+    Game.time += 400;
+    terminalOps.tick();
+    assert(Memory.terminalOps.operations["terminal-fee-receipt"].state !== "completed", "0097 a receipt is never closed as empty while a SELL's fee energy sits in the terminal (got " + Memory.terminalOps.operations["terminal-fee-receipt"].state + ")");
+    Game.time = oldTime;
+    Game.rooms = oldRooms; Memory.terminalOps = oldOps; Game.creeps = oldCreeps; Game.market = oldMarket;
+}
 // ROADMAP 0097 same bug, second symptom: recover() always assumed a dead
 // hauler was working the source-side load leg, even when waitingDirection
 // was "unload" (already sent). It searched the wrong room for dropped
@@ -10851,7 +10906,17 @@ origLog("\nMemory:", memStr.length, "bytes  |  rooms.W1N1 keys:",
     Game.rooms = Object.assign({}, oldRooms, { W7N12: source, W7N13: stable }); Game.myRooms = [source, stable];
     Memory.terminalOps = { nextId: 1, operations: {}, seenIncoming: {}, events: [], terminalBalance: {} }; Memory.energyBalancing = { lastRun: 0, pending: {}, observations: {} };
     energyBalancing.run();
-    assert(Object.keys(Memory.terminalOps.operations).length === 0, "0097 does not send the maximum when normal target need is zero");
+    const sent = Object.values(Memory.terminalOps.operations);
+    assert(sent.length === 1 && sent[0].amount > 0 && sent[0].amount <= 3000, "0097 sends only the target's deficit to the empire mean, not the maximum (got " + JSON.stringify(sent.map((o) => o.amount)) + ")");
+    // One rich source feeds two poor targets in the same run, sized against each other.
+    const mk = (name, energy) => ({ name, controller: { my: true }, find: () => [], storage: { id: name + "-storage", store: makeStore(energy, 30000) }, terminal: { id: name + "-terminal", cooldown: 0, store: makeStore(0, 30000), send: () => OK } });
+    const q1 = mk("W7N21", 29000), q2 = mk("W7N22", 2000), q3 = mk("W7N23", 3000);
+    Game.rooms = Object.assign({}, oldRooms, { W7N21: q1, W7N22: q2, W7N23: q3 }); Game.myRooms = [q1, q2, q3];
+    Memory.terminalOps = { nextId: 1, operations: {}, seenIncoming: {}, events: [], terminalBalance: {} }; Memory.energyBalancing = { lastRun: 0, pending: {}, observations: {} };
+    energyBalancing.run();
+    const planned = Object.values(Memory.terminalOps.operations).filter((o) => o.kind === "transfer");
+    assert(planned.length === 2 && planned.every((o) => o.sourceRoom === "W7N21") && planned[0].targetRoom !== planned[1].targetRoom, "0097 one source feeds two targets concurrently (got " + JSON.stringify(planned.map((o) => o.sourceRoom + ">" + o.targetRoom + ":" + o.amount)) + ")");
+    assert(planned.reduce((sum, o) => sum + o.amount + (o.transactionCost || 0), 0) <= 29000, "0097 concurrent transfers never overspend the source (got " + planned.reduce((sum, o) => sum + o.amount + (o.transactionCost || 0), 0) + ")");
     Game.rooms = oldRooms; Game.market = oldMarket; Game.creeps = oldCreeps; Game.getObjectById = oldGetObject; Game.myRooms = oldMyRooms; Memory.terminalOps = oldOps; Memory.energyBalancing = oldBalancing;
 }
 // 0098 receipt aggregation keeps the BUY parent and old terminal records do
@@ -12089,4 +12154,19 @@ function resetMarketFlipState() {
         "0110 AC15: a buy that already dealt something (dealtAmount > 0) is not cut short by maxBuyWaitTicks, even past 15 ticks");
     terminalOps.cancel = oldCancel;
     Game.rooms = oldRooms; Game.market = oldMarket; Memory.settings = oldSettings; Game.time = oldTime;
+}
+// BUY/SELL of different resources coexist in one room; the same resource still conflicts.
+{
+    const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
+    const makeStore = (energy, capacity) => ({ [RESOURCE_ENERGY]: energy, getFreeCapacity: () => capacity - energy, getUsedCapacity: () => energy, getCapacity: () => capacity });
+    const room = { name: "W7N58", controller: { my: true }, find: () => [], storage: { id: "W7N58-storage", store: Object.assign(makeStore(50000, 1000000), { Z: 5000, O: 5000 }) }, terminal: { id: "W7N58-terminal", cooldown: 0, store: makeStore(0, 300000), send: () => OK } };
+    const oldRooms = Game.rooms, oldOps = Memory.terminalOps;
+    Game.rooms = Object.assign({}, oldRooms, { W7N58: room });
+    Memory.terminalOps = { nextId: 1, operations: {}, seenIncoming: {}, events: [], terminalBalance: {} };
+    const base = { sourceRoom: "W7N58", targetRoom: null, amount: 100, remaining: 100, loadedAmount: 0, sentAmount: 0, receivedAmount: 0, createdTick: Game.time, updatedTick: Game.time };
+    Memory.terminalOps.operations["t-buy-power"] = Object.assign({}, base, { id: "t-buy-power", kind: "buy", resourceType: "power", state: "atTerminal" });
+    Memory.terminalOps.operations["t-sell-o"] = Object.assign({}, base, { id: "t-sell-o", kind: "sell", resourceType: "O", state: "listed" });
+    assert(!terminalOps.lockConflict("buy", "W7N58", null, "Z"), "a standing BUY of power and SELL of O do not block a BUY of Z in the same room");
+    assert(terminalOps.lockConflict("buy", "W7N58", null, "O"), "the same resource (O) is still locked by its own SELL");
+    Game.rooms = oldRooms; Memory.terminalOps = oldOps;
 }

@@ -91,13 +91,48 @@ global.profile = function (ticks) {
 };
 
 // Run `fn`, but never let one subsystem's exception abort the whole tick.
+// Heap-only CPU meter per subsystem (label prefix before ":"), read with
+// cpuTop(). Independent of screeps-profiler, so it also covers subsystems
+// that are not registered there.
+const cpuMeter = { since: 0, ticks: 0, total: 0, lastTick: -1, keys: {} };
+function meterKey(label) {
+    const i = label.indexOf(":");
+    return i < 0 ? label : label.slice(0, i);
+}
 function guard(label, fn) {
+    const start = Game.cpu.getUsed();
     try {
         fn();
     } catch (e) {
         console.log("[" + label + "] " + (e && e.stack ? e.stack : e));
     }
+    const key = meterKey(label);
+    const slot = cpuMeter.keys[key] || (cpuMeter.keys[key] = { cpu: 0, calls: 0, max: 0 });
+    const used = Game.cpu.getUsed() - start;
+    slot.cpu += used;
+    slot.calls++;
+    if (used > slot.max) slot.max = used;
 }
+function meterEndTick() {
+    if (cpuMeter.lastTick === Game.time) return;
+    cpuMeter.lastTick = Game.time;
+    cpuMeter.ticks++;
+    cpuMeter.total += Game.cpu.getUsed();
+}
+// Console: cpuTop(n=15) prints the heaviest guard()ed subsystems since the
+// last cpuTop(0)/reset; "unguarded" is whatever the guards do not cover
+// (Memory parse, structure/creep loops outside guard, profiler overhead).
+global.cpuTop = function (n) {
+    const ticks = Math.max(1, cpuMeter.ticks);
+    const rows = Object.keys(cpuMeter.keys).map((k) => ({ k, s: cpuMeter.keys[k] }));
+    const guarded = rows.reduce((sum, r) => sum + r.s.cpu, 0);
+    rows.sort((a, b) => b.s.cpu - a.s.cpu);
+    console.log("[cpuTop] " + cpuMeter.ticks + " ticks, avg " + (cpuMeter.total / ticks).toFixed(2) + "/tick, guarded " + (guarded / ticks).toFixed(2) + ", unguarded " + ((cpuMeter.total - guarded) / ticks).toFixed(2));
+    rows.slice(0, n > 0 ? n : 15).forEach((r) => console.log("  " + r.k + ": " + (r.s.cpu / ticks).toFixed(3) + "/tick, " + (r.s.calls / ticks).toFixed(1) + " calls/tick, max " + r.s.max.toFixed(2)));
+    const tp = utils.terminalOps.perf;
+    Object.keys(tp).forEach((k) => console.log("  terminalOps." + k + ": " + (tp[k] / ticks).toFixed(3) + "/tick"));
+    if (n === 0) { Object.keys(tp).forEach((k) => delete tp[k]); cpuMeter.ticks = 0; cpuMeter.total = 0; cpuMeter.keys = {}; }
+};
 
 module.exports.loop = function () {
     maybeEnableProfiler();
@@ -208,6 +243,7 @@ module.exports.loop = function () {
             });
             guard("market", () => utils.market.scan());
             guard("stats", () => utils.stats());
+            meterEndTick();
         });
     });
 };

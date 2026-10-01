@@ -668,7 +668,20 @@ function fallbackTowers(room) {
 // represented by the collector link; only a tower that the hauler would
 // accept may divert the miner's output away from that link.
 function shouldMinerFeedTower(room, tower) {
-    if (!tower || spawnExtNeedingEnergy(room).length) return false;
+    if (!tower) return false;
+    // Several miners ask about the same tower in one tick; the answer depends
+    // only on tower/room state, which does not change between their calls.
+    if (feedTowerCache.tick !== Game.time) {
+        feedTowerCache.tick = Game.time;
+        feedTowerCache.byTower = {};
+    }
+    if (tower.id in feedTowerCache.byTower) return feedTowerCache.byTower[tower.id];
+    return (feedTowerCache.byTower[tower.id] = computeMinerFeedTower(room, tower));
+}
+const feedTowerCache = { tick: -1, byTower: {} };
+
+function computeMinerFeedTower(room, tower) {
+    if (spawnExtNeedingEnergy(room).length) return false;
 
     const roomMem = Memory.rooms[room.name] || {};
     const criticalRatio = roomMem.defenseActive

@@ -58,12 +58,18 @@ function touch(op, state) {
 // One logical operation owns its source resource and involved terminals until
 // it reaches a final state. This prevents manual and automatic work from
 // racing between two calls to the public API in the same tick.
-function lockConflict(kind, from, to, resourceType) {
-    return Object.keys(memory().operations).map(operation).filter(active).some((op) => {
+function lockConflict(kind, from, to, resourceType, automatic) {
+    return activeIds().map(operation).filter(active).some((op) => {
         const sameFrom = from && (op.sourceRoom === from || op.targetRoom === from);
         const sameTo = to && (op.sourceRoom === to || op.targetRoom === to);
         if (kind === "receipt") return sameTo && op.kind === "receipt" && op.resourceType === resourceType;
         if (op.kind === "receipt") return false;
+        // Automatic balancing plans several transfers at once, sized against
+        // each other: a source may feed many targets, but a target takes one
+        // inbound transfer and a room never sends and receives at once.
+        if (kind === "transfer" && automatic && op.kind === "transfer" && op.automatic && op.resourceType === resourceType) {
+            return op.targetRoom === to || op.targetRoom === from || op.sourceRoom === to;
+        }
         // A marketOnly resource (pixel, cpuUnlock, accessKey) lives in
         // Game.resources, never in a terminal, so it neither competes for the
         // terminal's space/cooldown nor is blocked by something that does: the
@@ -75,7 +81,11 @@ function lockConflict(kind, from, to, resourceType) {
         // matter which room they were issued from.
         if (marketOnlyResource(resourceType) || marketOnlyResource(op.resourceType)) return op.resourceType === resourceType;
         if ((sameFrom || sameTo) && op.resourceType === resourceType) return true;
-        return sameFrom && op.kind === kind;
+        // BUY/SELL of different resources may run side by side in one room (a
+        // standing sell must not block a flip's buy); only the same resource,
+        // handled above, competes for the same stock. Transfers still queue per
+        // source terminal.
+        return sameFrom && op.kind === kind && kind !== "buy" && kind !== "sell";
     });
 }
 function create(kind, from, to, resourceType, value, options) {
@@ -85,7 +95,7 @@ function create(kind, from, to, resourceType, value, options) {
     return id;
 }
 function reservedFrom(roomName, resourceType) {
-    return Object.keys(memory().operations).map(operation).reduce((sum, op) => {
+    return activeIds().map(operation).reduce((sum, op) => {
         if (!active(op) || op.sourceRoom !== roomName || op.resourceType !== resourceType || (op.kind !== "transfer" && op.kind !== "sell")) return sum;
         return sum + Math.max(0, (op.amount || 0) - (op.loadedAmount || 0) - (op.sentAmount || 0));
     }, 0);
@@ -99,7 +109,7 @@ function transfer(from, to, resourceType, value, options) {
     const source = owned(from), target = owned(to);
     if (!source || !target || from === to) return result(false, "origem/destino precisa ser sala própria com storage e terminal");
     if (!validResource(resourceType) || marketOnlyResource(resourceType) || !amount(value)) return result(false, "recurso ou quantidade inválido para transferência física");
-    if (lockConflict("transfer", from, to, resourceType)) return result(false, "já existe uma operação concorrente para este terminal/recurso");
+    if (lockConflict("transfer", from, to, resourceType, !!(options && options.automatic))) return result(false, "já existe uma operação concorrente para este terminal/recurso");
     const cost = txCost(value, from, to);
     const available = Math.max(0, storeValue(source.storage.store, resourceType) - reservedFrom(from, resourceType));
     const needed = value + (resourceType === RESOURCE_ENERGY ? cost : 0);
@@ -143,7 +153,7 @@ function trade(kind, roomName, resourceType, value, limit, createListing, skipFe
 // lucro líquido, com seu próprio limiar (marketFlip.minProfitRatio).
 function buy(roomName, resourceType, value, maxUnitPrice, createListing, skipFeeCap) { return announce("terminalBuy", trade("buy", roomName, resourceType, value, maxUnitPrice, createListing, skipFeeCap)); }
 function sell(roomName, resourceType, value, minUnitPrice, createListing, skipFeeCap) { return announce("terminalSell", trade("sell", roomName, resourceType, value, minUnitPrice, createListing, skipFeeCap)); }
-function activeForRoom(roomName) { return Object.keys(memory().operations).map(operation).filter((op) => active(op) && (op.sourceRoom === roomName || op.targetRoom === roomName)); }
+function activeForRoom(roomName) { return activeIds().map(operation).filter((op) => active(op) && (op.sourceRoom === roomName || op.targetRoom === roomName)); }
 // `room` stays sourceRoom||targetRoom (single field) for the existing
 // per-room stats() below; `from`/`to`/`resourceType` are additive, kept
 // separate so a transfer's two rooms don't collapse into one another and a
@@ -242,6 +252,15 @@ function reportNoCandidate(op) {
         "; melhor encontrada em " + (best.order.roomName || "conta") + " preço " + best.order.price +
         ", custo de entrega " + best.cost + " energia (fair price " + (op.energyFairPrice || 0) + "), efetivo " + best.effective.toFixed(3) +
         " — " + outcome);
+}
+function retryDeal(op, target) {
+    // A waiting operation re-scanned the order book (getAllOrders) every tick;
+    // retry at most every dealRetryTicks until it leaves "waiting".
+    if (op.state === "waiting") {
+        if (op.nextDealTick > Game.time) return;
+        op.nextDealTick = Game.time + config.get("terminalOps.dealRetryTicks", 5);
+    }
+    executeDeal(op, target);
 }
 function executeDeal(op, target) {
     const candidate = candidateOrders(op)[0];
@@ -389,6 +408,10 @@ function stageSaleCargo(op, source) {
 }
 function listResidual(op, target) {
     if (!Game.market || typeof Game.market.createOrder !== "function") { op.error = "mercado indisponível"; touch(op, "waiting"); return; }
+    // Cheap interval check first: competitivePrice() scans the order book, and
+    // a live order inside its reprice window needs nothing from it.
+    const liveOrder = op.marketOrderId && Game.market.orders && Game.market.orders[op.marketOrderId];
+    if (liveOrder && Game.time - (op.repriceTick || op.listedTick || 0) < config.get("terminalOps.repriceInterval", 1000)) { touch(op, "listed"); return; }
     const ceiling = op.kind === "buy" ? op.limit / 1.05 : Infinity;
     const floor = op.kind === "sell" ? op.limit / 0.95 : 0;
     const price = op.kind === "buy" ? Math.min(competitivePrice(op), ceiling) : Math.max(competitivePrice(op), floor);
@@ -436,7 +459,7 @@ function listResidual(op, target) {
 }
 function bindCreatedOrders() {
     if (!Game.market || !Game.market.orders) return;
-    Object.keys(memory().operations).forEach((id) => {
+    activeIds().forEach((id) => {
         const op = operation(id);
         // op.listedTick is only ever set by listResidual() right after a real
         // createOrder() call. An op also reaches "listing" via executeDeal()'s
@@ -462,7 +485,7 @@ function bindCreatedOrders() {
 }
 function syncManagedOrders() {
     if (!Game.market || !Game.market.orders) return;
-    Object.keys(memory().operations).map(operation).forEach((op) => {
+    activeIds().map(operation).forEach((op) => {
         // op.listedAmount is only set by listResidual() right after it
         // actually creates the order being tracked here - it is the real
         // size of *that* order, needed as the baseline for how much of it
@@ -492,14 +515,18 @@ function syncManagedOrders() {
 function incomingReceipt(roomName, resourceType, value, parentId) {
     const target = owned(roomName);
     if (!target || value <= 0) return false;
-    const existing = activeForRoom(roomName).find((op) => op.kind === "receipt" && op.targetRoom === roomName && op.resourceType === resourceType);
+    // Only merge into a receipt that belongs to the same parent transfer.
+    // Merging across parents credited one transfer's cargo to another's
+    // receipt, so the real parent never completed (real bug, 2026-10-01:
+    // terminal-232's 31388 energy was drained by terminal-199, a receipt of
+    // terminal-198, leaving 232 stuck and energyBalancing.pending blocked).
+    const existing = activeForRoom(roomName).find((op) => op.kind === "receipt" && op.targetRoom === roomName && op.resourceType === resourceType && (op.parentId || null) === (parentId || null));
     if (existing) {
         existing.amount += value;
-        if (!existing.parentId && parentId) existing.parentId = parentId;
         existing.updatedTick = Game.time;
         return true;
     }
-    if (lockConflict("receipt", null, roomName, resourceType)) return true;
+    if (!parentId && lockConflict("receipt", null, roomName, resourceType)) return true;
     const id = create("receipt", null, roomName, resourceType, value, { parentId, state: "awaitingReceipt" });
     assign(operation(id), target, "unload", target.terminal, target.storage, value);
     return true;
@@ -507,8 +534,15 @@ function incomingReceipt(roomName, resourceType, value, parentId) {
 function awaitingReceiptFor(roomName, resourceType) {
     return activeForRoom(roomName).find((op) => ((op.targetRoom === roomName) || (op.sourceRoom === roomName && op.kind === "buy")) && op.resourceType === resourceType && ["awaitingReceipt", "unloading", "waiting", "recovering"].indexOf(op.state) >= 0 && op.kind !== "receipt");
 }
+const incomingSignature = { ops: null, value: null, tick: -Infinity };
 function scanIncoming() {
-    const transactions = Game.market && Array.isArray(Game.market.incomingTransactions) ? Game.market.incomingTransactions : [];
+    const incoming = Game.market && Game.market.incomingTransactions;
+    const transactions = Array.isArray(incoming) ? incoming : [];
+    // The API lists newest first: same length and same newest id as the last
+    // full scan means nothing new arrived and nothing aged out.
+    const signature = transactions.length + ":" + (transactions[0] && transactions[0].transactionId);
+    if (incomingSignature.ops === memory().operations && incomingSignature.value === signature && Game.time - incomingSignature.tick < 100) return;
+    incomingSignature.ops = memory().operations; incomingSignature.value = signature; incomingSignature.tick = Game.time;
     const stillListed = {};
     transactions.forEach((tx) => {
         if (!tx || !tx.transactionId) return;
@@ -535,7 +569,7 @@ function scanIncoming() {
     // already retains.
     Object.keys(memory().seenIncoming).forEach((id) => { if (!stillListed[id]) delete memory().seenIncoming[id]; });
 }
-function managedTerminalIncrease(roomName, resourceType) {
+function managedTerminalIncrease(roomName, resourceType, roomOps) {
     // loadedAmount and feeLoadedAmount are different currencies: loadedAmount
     // is measured in the operation's own resourceType (only relevant when it
     // matches the resourceType being queried), but feeLoadedAmount is always
@@ -548,18 +582,61 @@ function managedTerminalIncrease(roomName, resourceType) {
     // folded into an unrelated energy receipt's amount, ballooning it, while
     // the receipt's hauler hauled the same fee-staged energy straight back to
     // storage the instant it landed, undoing the SELL's own fee job forever.
-    return activeForRoom(roomName).reduce((sum, op) => {
-        if (op.sourceRoom !== roomName) return sum;
+    return (roomOps || activeForRoom(roomName)).reduce((sum, op) => {
+        if (!active(op) || op.sourceRoom !== roomName) return sum;
         if (op.resourceType === resourceType && (op.kind === "sell" || op.kind === "transfer")) sum += Math.max(0, op.loadedAmount || 0);
         if (resourceType === RESOURCE_ENERGY) sum += Math.max(0, op.feeLoadedAmount || 0);
         return sum;
     }, 0);
+}
+// Consistency check: what the target-side claims (receipts and already-sent
+// transfers) say they still owe must be physically in the terminal, on top of
+// what market/source-side operations have staged there. Market operations are
+// funded first, so they can never lose cargo to a transfer's bookkeeping; a
+// claim the stock cannot cover (drained by another actor) is settled instead of
+// waiting for a timer. Skipped while any hauler or recovery is in flight,
+// because cargo in a creep's hands is legitimately absent from the terminal.
+function reconcileClaims(name, resourceType, terminal) {
+    const ops = activeForRoom(name).filter((op) => op.resourceType === resourceType);
+    const claims = ops.filter((op) => op.targetRoom === name && (op.kind === "receipt" || (op.kind === "transfer" && op.sentAmount > 0)))
+        .sort((a, b) => (a.createdTick || 0) - (b.createdTick || 0));
+    if (!claims.length) return;
+    const busy = claims.some((op) => op.state === "recovering" || op.state === "unloading" || (op.haulerName && Game.creeps && Game.creeps[op.haulerName]) ||
+        (op.kind === "transfer" && Game.time - (op.sentTick || 0) < 3));
+    if (busy) { claims.forEach((op) => { delete op.deficitSinceTick; }); return; }
+    const staged = ops.reduce((sum, op) => {
+        if (op.sourceRoom !== name) return sum;
+        if (op.kind === "sell" || (op.kind === "transfer" && !(op.sentAmount > 0))) sum += Math.max(0, op.loadedAmount || 0);
+        if (resourceType === RESOURCE_ENERGY) sum += Math.max(0, op.feeLoadedAmount || 0);
+        return sum;
+    }, 0);
+    let free = Math.max(0, storeValue(terminal.store, resourceType) - staged);
+    claims.forEach((op) => {
+        const owed = op.kind === "receipt" ? Math.max(0, op.amount - (op.receivedAmount || 0) - (op.recoveredAmount || 0)) : Math.max(0, op.amount - (op.receivedAmount || 0));
+        const covered = Math.min(owed, free);
+        free -= covered;
+        const shortfall = owed - covered;
+        if (shortfall <= 0) { delete op.deficitSinceTick; return; }
+        op.deficitSinceTick = op.deficitSinceTick || Game.time;
+        if (Game.time - op.deficitSinceTick < config.get("terminalOps.deficitConfirmTicks", 3)) return;
+        delete op.deficitSinceTick;
+        op.error = "estoque consumido por outro caminho: " + shortfall + " ausente do terminal";
+        if (op.kind === "receipt") op.recoveredAmount = (op.recoveredAmount || 0) + shortfall;
+        else op.receivedAmount = (op.receivedAmount || 0) + shortfall;
+        if (covered <= 0) { if (op.kind === "receipt") completeReceipt(op); else touch(op, "completed"); }
+    });
 }
 function scanTerminalBalances() {
     const seen = memory().terminalBalance;
     Object.keys(Game.rooms || {}).forEach((name) => {
         const target = owned(name);
         if (!target) return;
+        // An empty terminal has no store keys, yet that is exactly when a claim
+        // must be settled, so claimed resources are reconciled regardless.
+        const roomOps = activeForRoom(name);
+        const claimed = {};
+        roomOps.forEach((op) => { if (op.targetRoom === name && validResource(op.resourceType) && (op.kind === "receipt" || op.sentAmount > 0)) claimed[op.resourceType] = true; });
+        Object.keys(claimed).forEach((resourceType) => reconcileClaims(name, resourceType, target.terminal));
         Object.keys(target.terminal.store || {}).forEach((resourceType) => {
             if (!validResource(resourceType)) return;
             const current = storeValue(target.terminal.store, resourceType), key = name + ":" + resourceType;
@@ -589,13 +666,13 @@ function scanTerminalBalances() {
             // 2026-09-30: terminal-198's unload split against a spuriously
             // -created terminal-199, 1500 + 36590 = 38090 sent, room then
             // starved with no new transfer ever queued).
-            const reserved = activeForRoom(name).filter((op) => op.targetRoom === name && op.kind !== "receipt" && op.resourceType === resourceType && ["awaitingReceipt", "unloading", "waiting", "recovering"].indexOf(op.state) >= 0).reduce((sum, op) => sum + Math.max(0, op.amount - (op.receivedAmount || 0)), 0);
-            const receiptPending = activeForRoom(name).filter((op) => op.kind === "receipt" && op.targetRoom === name && op.resourceType === resourceType).reduce((sum, op) => sum + Math.max(0, op.amount - (op.receivedAmount || 0) - (op.recoveredAmount || 0)), 0);
+            const reserved = roomOps.filter((op) => active(op) && op.targetRoom === name && op.kind !== "receipt" && op.resourceType === resourceType && ["awaitingReceipt", "unloading", "waiting", "recovering"].indexOf(op.state) >= 0).reduce((sum, op) => sum + Math.max(0, op.amount - (op.receivedAmount || 0)), 0);
+            const receiptPending = roomOps.filter((op) => active(op) && op.kind === "receipt" && op.targetRoom === name && op.resourceType === resourceType).reduce((sum, op) => sum + Math.max(0, op.amount - (op.receivedAmount || 0) - (op.recoveredAmount || 0)), 0);
             // A load performed by our own sell/transfer operation is not an
             // incoming transaction. Without this subtraction, every batch
             // loaded for SELL becomes a synthetic receipt and gets hauled back
             // to storage, creating an endless terminal/storage cycle.
-            const managedIncrease = managedTerminalIncrease(name, resourceType);
+            const managedIncrease = managedTerminalIncrease(name, resourceType, roomOps);
             // Surplus is whatever the terminal holds beyond what an active
             // operation has staged or a pending receipt already claims - not
             // merely growth since the last tick. The terminal should only ever
@@ -667,7 +744,7 @@ function tickTransfer(op, source, target) {
         delete op.stallStartedTick;
         touch(op, "executing");
         const status = source.terminal.send(op.resourceType, op.amount, op.targetRoom, "terminal operation " + op.id);
-        if (status === OK) { op.sentAmount = op.amount; op.remaining = 0; op.targetTerminalBaseline = storeValue(target.terminal.store, op.resourceType); record(op, op.amount, 0, op.transactionCost); touch(op, "awaitingReceipt"); }
+        if (status === OK) { op.sentAmount = op.amount; op.sentTick = Game.time; op.remaining = 0; op.targetTerminalBaseline = storeValue(target.terminal.store, op.resourceType); record(op, op.amount, 0, op.transactionCost); touch(op, "awaitingReceipt"); }
         else { op.error = "send retornou " + status; touch(op, "waiting"); }
     }
     // Compare/request the amount still owed, not op.amount (the original
@@ -703,7 +780,9 @@ function tickTransfer(op, source, target) {
             return;
         }
     }
-    if (unloading && target && remainingUnload > 0 && storeValue(target.terminal.store, op.resourceType) - (op.targetTerminalBaseline || 0) >= remainingUnload) assign(op, target, "unload", target.terminal, target.storage, remainingUnload);
+    if (!(unloading && target && remainingUnload > 0)) return;
+    const present = Math.max(0, storeValue(target.terminal.store, op.resourceType) - (op.targetTerminalBaseline || 0));
+    if (present >= remainingUnload) { assign(op, target, "unload", target.terminal, target.storage, remainingUnload); return; }
 }
 function tickReceipt(op, target) {
     if (["awaitingReceipt", "waiting", "unloading"].indexOf(op.state) < 0) return;
@@ -717,8 +796,33 @@ function tickReceipt(op, target) {
     // fee job pulling 856 energy in and out of the terminal in a loop.
     const available = Math.max(0, storeValue(target.terminal.store, op.resourceType) - managedTerminalIncrease(target.name, op.resourceType));
     const remainingAmount = Math.max(0, op.amount - (op.receivedAmount || 0) - (op.recoveredAmount || 0));
+    // Two receipts for the same terminal stock must not race: skip while a
+    // sibling receipt already has a hauler working on it.
+    const sibling = activeForRoom(target.name).some((other) => other !== op && other.kind === "receipt" && other.targetRoom === op.targetRoom && other.resourceType === op.resourceType && other.haulerName && Game.creeps && Game.creeps[other.haulerName] && Game.creeps[other.haulerName].memory.terminalJob);
+    if (sibling) return;
     if (available > 0 && remainingAmount > 0) assign(op, target, "unload", target.terminal, target.storage, Math.min(remainingAmount, available));
-    else if (remainingAmount <= 0) touch(op, "completed");
+    else if (remainingAmount <= 0) completeReceipt(op);
+}
+function completeReceipt(op) {
+    touch(op, "completed");
+    if (op.parentId) { const parent = operation(op.parentId); if (parent && active(parent)) touch(parent, "completed"); }
+}
+// Index of operation ids that may still be active. Walking every stored
+// operation (finished ones stay for operationRetentionTicks) several times a
+// tick was most of terminalOps' CPU. Rebuilt - and finished operations
+// garbage-collected - when the stored set changes (create() bumps nextId),
+// and at least every INDEX_REFRESH_TICKS as a fallback. Consumers still check
+// active(), so an op finishing mid-tick is harmless.
+const INDEX_REFRESH_TICKS = 50;
+const activeIndex = { ops: null, nextId: -1, tick: -Infinity, ids: [] };
+function activeIds() {
+    const mem = memory();
+    if (activeIndex.ops !== mem.operations || activeIndex.nextId !== mem.nextId || Game.time - activeIndex.tick >= INDEX_REFRESH_TICKS || Game.time < activeIndex.tick) {
+        gcOperations();
+        activeIndex.ops = mem.operations; activeIndex.nextId = mem.nextId; activeIndex.tick = Game.time;
+        activeIndex.ids = Object.keys(mem.operations).filter((id) => active(mem.operations[id]));
+    }
+    return activeIndex.ids;
 }
 function gcOperations() {
     const retention = config.get("terminalOps.operationRetentionTicks", 10000);
@@ -727,10 +831,20 @@ function gcOperations() {
         if (op && FINAL_STATES.indexOf(op.state) >= 0 && Game.time - (op.updatedTick || op.createdTick || Game.time) >= retention) delete memory().operations[id];
     });
 }
+const perf = {};
+function phase(name, fn) {
+    const start = Game.cpu.getUsed();
+    fn();
+    perf[name] = (perf[name] || 0) + Game.cpu.getUsed() - start;
+}
 function tick() {
     if (!config.get("terminalOps.enabled", true)) return;
-    memory(); gcOperations(); bindCreatedOrders(); syncManagedOrders(); scanIncoming();
-    Object.keys(memory().operations).forEach((id) => {
+    memory();
+    phase("gc+orders", () => { activeIds(); bindCreatedOrders(); syncManagedOrders(); });
+    phase("incoming", scanIncoming);
+    phase("operations", runOperations);
+}
+function runOperation(id) {
         const op = operation(id); if (!active(op)) return;
         const marketOnly = op.marketOnly || marketOnlyResource(op.resourceType);
         const source = op.sourceRoom && (marketOnly ? room(op.sourceRoom) : owned(op.sourceRoom)), target = op.targetRoom && owned(op.targetRoom);
@@ -743,7 +857,7 @@ function tick() {
         if (!source || (op.kind === "transfer" && !target)) { op.error = "terminal/storage indisponível"; touch(op, "waiting"); return; }
         if (marketOnly) {
             if (op.state === "settling") settleDeal(op, source);
-            else if (op.state === "queued" || op.state === "waiting") executeDeal(op, source);
+            else if (op.state === "queued" || op.state === "waiting") retryDeal(op, source);
             else if (op.state === "listing" || op.state === "listed") listResidual(op, source);
             return;
         }
@@ -774,13 +888,22 @@ function tick() {
             }
         } else if (op.kind === "buy") {
             if (op.state === "settling") settleDeal(op, source);
-            else if (["queued", "waiting"].indexOf(op.state) >= 0) executeDeal(op, source);
+            else if (["queued", "waiting"].indexOf(op.state) >= 0) retryDeal(op, source);
+            else if (op.state === "atTerminal") executeDeal(op, source);
             else if (op.state === "listing" || op.state === "listed") listResidual(op, source);
         }
+}
+function runOperations() {
+    activeIds().slice().forEach((id) => {
+        const head = operation(id);
+        if (!active(head)) return;
+        const key = "op " + head.kind + ":" + head.state, start = Game.cpu.getUsed();
+        runOperation(id);
+        perf[key] = (perf[key] || 0) + Game.cpu.getUsed() - start;
     });
     // Runs after the operations above so managedTerminalIncrease() reflects
     // this tick's staged/reconciled amounts before deciding what's surplus.
-    scanTerminalBalances();
+    phase("balances", scanTerminalBalances);
 }
 function runHauler(creep) {
     const job = creep.memory.terminalJob; if (!job) return false;
@@ -906,4 +1029,4 @@ global.terminalBuy = buy;
 global.terminalSell = sell;
 global.terminalOperations = () => JSON.stringify(Object.keys(memory().operations).map(operation), null, 2);
 global.cancelTerminalOperation = cancel;
-module.exports = { transfer, buy, sell, cancel, tick, runHauler, operation, activeForRoom, txCost, stats, marketTransactionStats, terminalTransferStats };
+module.exports = { perf, lockConflict, transfer, buy, sell, cancel, tick, runHauler, operation, activeForRoom, txCost, stats, marketTransactionStats, terminalTransferStats };

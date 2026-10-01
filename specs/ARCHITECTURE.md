@@ -52,6 +52,32 @@ transactions. Recovery searches use `utils/roomCache.droppedResources()` so
 the one-`room.find`-per-tick rule remains intact. `energyBalancing` exposes its
 decision and operation state through `Memory.stats.rooms.<room>.energyBalancing`.
 
+`rooms/energyBalancing.js` (0097) pulls non-critical rooms toward the
+empire-wide energy ratio: a room more than `logistics.balanceGapRatio` below it
+is a target, more than that above it a source, and the amount is the target's
+deficit capped by the source's surplus. One run plans several transfers at once,
+spending each source's surplus as it goes: a source may feed many targets, a
+target takes one inbound transfer and never also sends (`lockConflict()`'s
+automatic-transfer branch). The old
+`capacity*gap - energy` need was ~0 for any room above ~6500 energy, so
+E1N47 (19.6k) was never served (bug real, 2026-10-01).
+
+terminalOps walks an `activeIds()` index instead of every stored operation
+(finished ones are kept `operationRetentionTicks`): rebuilt, with garbage
+collection, when `nextId` changes or every 50 ticks. `global.cpuTop(n)`
+(main.js) reports CPU per `guard()`ed subsystem plus `terminalOps.perf`
+phases and per kind:state.
+
+`reconcileClaims()` (called from `scanTerminalBalances()`) is the opposite
+check: what target-side claims (receipts and already-sent transfers) still owe
+must be physically in the terminal on top of what SELL/source-side ops staged
+(market ops are funded first). A claim the stock cannot cover for
+`terminalOps.deficitConfirmTicks` (3) is credited as consumed elsewhere and
+closed, so a transfer drained by another actor never blocks
+`energyBalancing.pending` (bug real, 2026-10-01: terminal-232). Skipped while
+a hauler or recovery is in flight. `incomingReceipt()` only merges into a
+receipt with the same `parentId`.
+
 `scanTerminalBalances()` keeps the terminal holding only what pending
 operations actually need — the invariant is absolute surplus (current stock
 minus what active ops/receipts have staged or claimed), not tick-over-tick
