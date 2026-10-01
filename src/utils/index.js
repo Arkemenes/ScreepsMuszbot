@@ -15,6 +15,7 @@ let utils = {
     priority: require("./priority"),
     market: require("./market"),
     terminalOps: require("./terminalOps"),
+    marketFlip: require("./marketFlip"),
     energyBalancing: require("../rooms/energyBalancing"),
 };
 

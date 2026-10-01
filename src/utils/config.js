@@ -14,6 +14,35 @@ const defaults = {
         snapshotWindowTicks: 604800,
         snapshotWeightCap: 0.01,
     },
+    // ROADMAP 0110: arbitragem instantânea (compra + venda no mesmo scan).
+    marketFlip: {
+        // live por padrão - pedido do usuário, 2026-09-29. false volta ao
+        // modo log-only, via Memory.settings.marketFlip.test = true.
+        test: false,
+        scanInterval: 60,
+        // 0.1% (pedido do usuário, 2026-09-30; era 1%).
+        minProfitRatio: 0.001,
+        // preço de compra elegível <= este ratio * market.js's fairPrice -
+        // anti-manipulação, só bloqueia em modo live. Não exige mais
+        // confidence:"ready" (pedido do usuário, 2026-09-29). 2x (pedido do
+        // usuário, 2026-09-30; era 1.05x).
+        guardrailFairPriceRatio: 2,
+        // teto por flip: no máximo esta fração do saldo de créditos
+        // DISPONÍVEL (Game.market.credits - committedCredits) no momento em
+        // que aquele flip específico é lançado - pedido do usuário,
+        // 2026-09-29, como guardrail extra contra sobre-exposição/manipulação.
+        maxCreditRatioPerFlip: 0.05,
+        maxHoldingTicks: 1500,
+        // pedido do usuário, 2026-09-30: se a perna de compra não negociou
+        // NADA ainda (preço do livro saiu do limite antes da execução,
+        // cooldown do terminal etc.), desiste bem mais cedo que
+        // maxHoldingTicks - um flip é pra ser instantâneo, não uma ordem
+        // de espera. 15 cobre confortavelmente um cooldown de terminal
+        // (10 ticks fixos) com folga. Assim que algo é negociado
+        // (dealtAmount > 0), essa checagem para de valer e o flip usa o
+        // orçamento normal de maxHoldingTicks até fechar a venda.
+        maxBuyWaitTicks: 15,
+    },
     defender: {
         maxCount: 3,
         // room.energyCapacityAvailable at/above which a defenderStriker +
@@ -183,7 +212,11 @@ const defaults = {
         // ROADMAP 0097: normal rebalancing and its hard per-transfer cap.
         balanceEnabled: true,
         balanceInterval: 1000,
-        balanceGapRatio: 0.2,
+        // 0.005 of a ~1.3M storage+terminal capacity is ~6500 energy (pedido
+        // do usuário, 2026-09-28: 0.2/260000 nunca disparava o gatilho normal
+        // porque as salas operam na casa de 2-5% da capacidade agregada no
+        // dia a dia, bem abaixo do que 20% de gap exige).
+        balanceGapRatio: 0.005,
         balanceMaxAmount: 50000,
         // structures/link.js's collector: skip a non-collector link that's
         // already at/above this fill ratio, even with free capacity left -
@@ -209,6 +242,20 @@ const defaults = {
         saleBufferCapacityRatio: 0.85,
         statsWindowTicks: 60,
         operationRetentionTicks: 10000,
+        // tickTransfer()'s "atTerminal" check waits for loadedAmount to show up
+        // in the source terminal's own store before calling send() - a stall
+        // guard for whenever that mismatch never resolves (e.g. a bookkeeping
+        // bug crediting loadedAmount the terminal never actually received).
+        transferStallTicks: 1500,
+        // pedido do usuário, 2026-09-30: candidateOrders() rejeita uma ordem
+        // cuja taxa de entrega (convertida a créditos via energyFairPrice)
+        // exceda esta fração do preço bruto da ordem - bug real, um SELL
+        // fechou com preço bruto 38.717 mas efetivo 7.505 (taxa comeu ~81%
+        // do valor) porque nada além do limite de preço bruto barrava o
+        // deal(). Flips (marketFlip.js) passam skipFeeCap:true e ficam de
+        // fora - já avaliam a mesma taxa como parte do próprio lucro
+        // líquido, com seu próprio limiar (marketFlip.minProfitRatio).
+        maxFeeRatio: 0.05,
     },
     hauler: {
         // a source container needs more than this much energy before a

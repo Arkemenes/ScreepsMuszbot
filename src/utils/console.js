@@ -105,10 +105,12 @@ global.help = function () {
             commands: [
                 ["marketPrice(resourceType?)", "mostra o preco justo temporal e melhor compra/venda atuais; sem argumento lista recursos com preco calculado"],
                 ["terminalTransfer(fromRoom, toRoom, resourceType, amount)", "cria uma transferência storage → terminal → destino; valida recurso, salas e energia de taxa antes de enfileirar"],
-                ["terminalBuy(roomName, resourceType, amount, maxUnitPrice)", "compra pelas SELL orders de menor custo líquido dentro do teto; lista o saldo restante quando possível"],
-                ["terminalSell(roomName, resourceType, amount, minUnitPrice)", "vende pelas BUY orders de maior retorno líquido acima do piso; lista o saldo restante quando possível"],
+                ["terminalBuy(roomName, resourceType, amount, maxUnitPrice, createListing=false)", "compra pelas SELL orders de menor custo líquido dentro do teto; sem candidato, só espera/retenta, a menos que createListing:true liste o saldo restante"],
+                ["terminalSell(roomName, resourceType, amount, minUnitPrice, createListing=false)", "vende pelas BUY orders de maior retorno líquido acima do piso; sem candidato, só espera/retenta, a menos que createListing:true liste o saldo restante"],
                 ["terminalOperations()", "lista as operações de terminal persistentes e seus estados"],
                 ["cancelTerminalOperation(id)", "cancela a operação; uma ordem pública gerenciada pelo bot também é cancelada"],
+                ["marketFlipStatus()", "modo atual (test/live), tick do último scan, oportunidades encontradas e flips ativos do arbitrador automático (ROADMAP 0110)"],
+                ["marketFlipStats()", "contadores acumulados do arbitrador automático: flips concluídos, lucro líquido total, cancelamentos por stall guard, bloqueios por guardrail"],
             ],
         },
         {

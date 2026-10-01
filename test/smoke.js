@@ -10707,6 +10707,119 @@ origLog("\nMemory:", memStr.length, "bytes  |  rooms.W1N1 keys:",
     assert(sends === 1 && op.state === "awaitingReceipt", "0097 a transfer loaded with amount + transactionCost calls Terminal.send exactly once and succeeds");
     Game.rooms = oldRooms; Memory.terminalOps = oldOps; Game.market = oldMarket;
 }
+// ROADMAP 0097 sétimo bug real (usuário reportou em produção, 2026-09-28): uma
+// transferência já enviada com sucesso (sentAmount preenchido) foi arrastada
+// de volta para "recovering" pela morte natural, dias depois, do hauler que
+// só tinha feito o load original - runHauler() nunca limpava op.haulerName
+// num leg concluído com sucesso, então tick()'s "meu hauler morreu?" disparava
+// para um creep havia muito liberado para trabalho normal. recover() tentava
+// reaver loadedAmount do terminal de origem, que não tinha mais essa energia
+// (já enviada), e a operação travava para sempre em "atTerminal" sem nunca
+// mais chamar touch(). Corrigido: runHauler() zera op.haulerName em todo leg
+// concluído com sucesso, e tickTransfer() ganhou um stall guard
+// (terminalOps.transferStallTicks) para essa mesma trava silenciosa não
+// depender só disso.
+{
+    const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
+    const makeStore = (energy, capacity) => ({ [RESOURCE_ENERGY]: energy, getFreeCapacity: () => capacity - energy, getUsedCapacity: () => energy, getCapacity: () => capacity });
+    const source = { name: "W7N52", controller: { my: true }, find: () => [], storage: { id: "W7N52-storage", store: makeStore(60000, 100000) }, terminal: { id: "W7N52-terminal", cooldown: 0, store: makeStore(0, 300000), send: () => OK } };
+    const target = { name: "W7N53", controller: { my: true }, find: () => [], storage: { id: "W7N53-storage", store: makeStore(0, 100000) }, terminal: { id: "W7N53-terminal", cooldown: 0, store: makeStore(0, 300000), send: () => OK } };
+    const oldRooms = Game.rooms, oldOps = Memory.terminalOps, oldCreeps = Game.creeps, oldGetObject = Game.getObjectById;
+    Game.rooms = Object.assign({}, oldRooms, { W7N52: source, W7N53: target });
+    Memory.terminalOps = { nextId: 1, operations: {}, seenIncoming: {}, events: [], terminalBalance: {} };
+    const op = { id: "terminal-stale", kind: "transfer", sourceRoom: "W7N52", targetRoom: "W7N53", resourceType: RESOURCE_ENERGY, amount: 1000, remaining: 1000, loadedAmount: 0, sentAmount: 0, receivedAmount: 0, transactionCost: 0, state: "queued", createdTick: Game.time, updatedTick: Game.time, automatic: true };
+    Memory.terminalOps.operations[op.id] = op;
+    const creep = { name: "LoadHauler", memory: { terminalJob: { operationId: op.id, direction: "load", fromId: source.storage.id, toId: source.terminal.id, resourceType: RESOURCE_ENERGY, amount: 1000 } }, store: makeStore(1000, 1000), transfer: () => OK, withdraw: () => OK };
+    Game.creeps = { LoadHauler: creep };
+    Game.getObjectById = (id) => id === source.storage.id ? source.storage : id === source.terminal.id ? source.terminal : null;
+    terminalOps.runHauler(creep);
+    assert(op.state === "atTerminal" && op.haulerName === null, "0097 a finished load leg releases op.haulerName so the creep's later death cannot trigger recover()");
+    source.terminal.store[RESOURCE_ENERGY] = 1000;
+    Game.creeps = {}; // the hauler goes on to die doing unrelated work much later
+    terminalOps.tick();
+    assert(op.state === "awaitingReceipt" && op.sentAmount === 1000, "0097 a stale haulerName from a finished leg does not resurface as a spurious recovery");
+    Game.rooms = oldRooms; Memory.terminalOps = oldOps; Game.creeps = oldCreeps; Game.getObjectById = oldGetObject;
+}
+// ROADMAP 0097 oitavo bug real (usuário reportou em produção, 2026-09-28):
+// tickTransfer()'s unload retrigger compared the target terminal's balance
+// against op.amount (the original total) instead of what was still owed. A
+// hauler's carry capacity is almost always smaller than the whole transfer,
+// so the very first partial delivery permanently dropped the terminal
+// balance below op.amount and the operation never resumed - a real
+// balancing transfer delivered 1500 of 30925 and then froze forever.
+{
+    const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
+    const census = require(path.join(PROJECT, "src/utils/census"));
+    const makeStore = (energy, capacity) => ({ [RESOURCE_ENERGY]: energy, getFreeCapacity: () => capacity - energy, getUsedCapacity: () => energy, getCapacity: () => capacity });
+    const source = { name: "W7N54", controller: { my: true }, find: () => [], storage: { id: "W7N54-storage", store: makeStore(60000, 100000) }, terminal: { id: "W7N54-terminal", cooldown: 0, store: makeStore(0, 300000), send: () => OK } };
+    const target = { name: "W7N55", controller: { my: true }, find: () => [], storage: { id: "W7N55-storage", store: makeStore(0, 100000) }, terminal: { id: "W7N55-terminal", cooldown: 0, store: makeStore(1500, 300000), send: () => OK } };
+    const oldRooms = Game.rooms, oldOps = Memory.terminalOps, oldCreeps = Game.creeps;
+    Game.rooms = Object.assign({}, oldRooms, { W7N54: source, W7N55: target });
+    Memory.terminalOps = { nextId: 1, operations: {}, seenIncoming: {}, events: [], terminalBalance: {} };
+    const op = { id: "terminal-partial", kind: "transfer", sourceRoom: "W7N54", targetRoom: "W7N55", resourceType: RESOURCE_ENERGY, amount: 3000, remaining: 0, loadedAmount: 3000, sentAmount: 3000, receivedAmount: 1500, transactionCost: 0, targetTerminalBaseline: 0, state: "waiting", waitingDirection: "unload", createdTick: Game.time, updatedTick: Game.time, automatic: true };
+    Memory.terminalOps.operations[op.id] = op;
+    const hauler = { name: "UnloadHauler2", room: target, memory: { role: "hauler" }, store: makeStore(0, 1500) };
+    Game.creeps = { UnloadHauler2: hauler };
+    census.build();
+    terminalOps.tick();
+    assert(op.state === "unloading" && op.haulerName === "UnloadHauler2" && hauler.memory.terminalJob.amount === 1500, "0097 unload retrigger uses the remaining amount, not the original total, so it resumes after a partial delivery");
+    Game.rooms = oldRooms; Memory.terminalOps = oldOps; Game.creeps = oldCreeps;
+}
+// ROADMAP 0097 same bug, second symptom: recover() always assumed a dead
+// hauler was working the source-side load leg, even when waitingDirection
+// was "unload" (already sent). It searched the wrong room for dropped
+// cargo and tried to re-pull loadedAmount from a source terminal that no
+// longer held it (already sent), wedging a bogus "recover" job and its
+// lock on the source terminal forever - which then blocked unrelated
+// balancing transfers needing that same terminal as a source.
+{
+    const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
+    const census = require(path.join(PROJECT, "src/utils/census"));
+    const makeStore = (energy, capacity) => ({ [RESOURCE_ENERGY]: energy, getFreeCapacity: () => capacity - energy, getUsedCapacity: () => energy, getCapacity: () => capacity });
+    const source = { name: "W7N56", controller: { my: true }, find: () => [], storage: { id: "W7N56-storage", store: makeStore(60000, 100000) }, terminal: { id: "W7N56-terminal", cooldown: 0, store: makeStore(0, 300000), send: () => OK } };
+    const target = { name: "W7N57", controller: { my: true }, find: () => [], storage: { id: "W7N57-storage", store: makeStore(0, 100000) }, terminal: { id: "W7N57-terminal", cooldown: 0, store: makeStore(3000, 300000), send: () => OK } };
+    const oldRooms = Game.rooms, oldOps = Memory.terminalOps, oldCreeps = Game.creeps;
+    Game.rooms = Object.assign({}, oldRooms, { W7N56: source, W7N57: target });
+    Memory.terminalOps = { nextId: 1, operations: {}, seenIncoming: {}, events: [], terminalBalance: {} };
+    const op = { id: "terminal-deadunload", kind: "transfer", sourceRoom: "W7N56", targetRoom: "W7N57", resourceType: RESOURCE_ENERGY, amount: 3000, remaining: 0, loadedAmount: 3000, sentAmount: 3000, receivedAmount: 0, transactionCost: 0, targetTerminalBaseline: 0, state: "unloading", waitingDirection: "unload", haulerName: "DeadUnloadHauler", createdTick: Game.time, updatedTick: Game.time, automatic: true };
+    Memory.terminalOps.operations[op.id] = op;
+    // A hauler in the (wrong) source room the old code would have used -
+    // must stay untouched by this recovery.
+    const sourceHauler = { name: "SourceIdleHauler", room: source, memory: { role: "hauler" }, store: makeStore(0, 1500) };
+    const targetHauler = { name: "TargetUnloadHauler", room: target, memory: { role: "hauler" }, store: makeStore(0, 1500) };
+    Game.creeps = { SourceIdleHauler: sourceHauler, TargetUnloadHauler: targetHauler };
+    census.build();
+    terminalOps.tick();
+    assert(!sourceHauler.memory.terminalJob, "0097 recovering an already-sent transfer never assigns a job in the source room");
+    assert(op.state === "unloading" && op.haulerName === "TargetUnloadHauler" && targetHauler.memory.terminalJob.direction === "unload", "0097 recovering an already-sent transfer's dead hauler reassigns a fresh unload in the target room, not a bogus source-room recovery");
+    Game.rooms = oldRooms; Memory.terminalOps = oldOps; Game.creeps = oldCreeps;
+}
+// ROADMAP 0098 bug real (usuário reportou em produção, 2026-09-29):
+// scanIncoming() forgot a seen transactionId after terminalOps.statsWindow-
+// unrelated 1000 ticks, but Game.market.incomingTransactions keeps listing
+// transactions for far longer than that - so every incoming trade looked
+// "new" again roughly every 1000 ticks and got re-added to the same
+// receipt's amount forever. Three receipts in production ballooned past a
+// million energy this way and could never reach remainingAmount 0 again.
+{
+    const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
+    const makeStore = (energy, capacity) => ({ [RESOURCE_ENERGY]: energy, getFreeCapacity: () => capacity - energy, getUsedCapacity: () => energy, getCapacity: () => capacity });
+    const room = { name: "W7N58", controller: { my: true }, find: () => [], storage: { id: "W7N58-storage", store: makeStore(0, 30000) }, terminal: { id: "W7N58-terminal", cooldown: 0, store: makeStore(1000, 30000), send: () => OK } };
+    const oldRooms = Game.rooms, oldMarket = Game.market, oldOps = Memory.terminalOps, oldTime = Game.time;
+    Game.rooms = Object.assign({}, oldRooms, { W7N58: room });
+    Memory.terminalOps = { nextId: 1, operations: {}, seenIncoming: {}, events: [], terminalBalance: {} };
+    Game.market = { incomingTransactions: [{ transactionId: "tx-old", to: "W7N58", resourceType: RESOURCE_ENERGY, amount: 1000 }] };
+    terminalOps.tick();
+    const receipt = Object.values(Memory.terminalOps.operations).find((op) => op.kind === "receipt");
+    assert(receipt && receipt.amount === 1000 && Memory.terminalOps.seenIncoming["tx-old"] === Game.time, "0098 a fresh incoming transaction mints a receipt for its amount");
+    Game.time += 1001; // far past the old 1000-tick purge window
+    terminalOps.tick();
+    assert(receipt.amount === 1000, "0098 an already-seen transaction still listed by the API is never re-added, no matter how many ticks pass");
+    Game.market.incomingTransactions = []; // the API finally stopped listing it
+    terminalOps.tick();
+    assert(!Memory.terminalOps.seenIncoming["tx-old"], "0098 seenIncoming forgets an id only once the API itself stops listing it");
+    Game.rooms = oldRooms; Game.market = oldMarket; Memory.terminalOps = oldOps; Game.time = oldTime;
+}
 // ROADMAP 0098/0097 regressions for receipt recovery, aggregation and zero need.
 {
     const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
@@ -10871,7 +10984,7 @@ origLog("\nMemory:", memStr.length, "bytes  |  rooms.W1N1 keys:",
     market.scan();
     logs.length = 0;
     console.log = (...a) => { logs.push(a.join(" ")); };
-    const noFunds = terminalOps.sell("W7N19", "pixel", 50, 49500);
+    const noFunds = terminalOps.sell("W7N19", "pixel", 50, 49500, true);
     terminalOps.tick();
     terminalOps.tick();
     console.log = origLog;
@@ -10911,7 +11024,7 @@ origLog("\nMemory:", memStr.length, "bytes  |  rooms.W1N1 keys:",
  marketHistoryStore.clear(); market.reset();
     Game.time++;
     market.scan();
-    const funded = terminalOps.sell("W7N19", "pixel", 50, 49500);
+    const funded = terminalOps.sell("W7N19", "pixel", 50, 49500, true);
     terminalOps.tick();
     terminalOps.tick();
     const fundedOp = Memory.terminalOps.operations[funded.id];
@@ -10998,7 +11111,7 @@ origLog("\nMemory:", memStr.length, "bytes  |  rooms.W1N1 keys:",
         cancelOrder: () => OK,
     };
     Memory.terminalOps = { nextId: 1, operations: {}, seenIncoming: {}, events: [], terminalBalance: {} };
-    const created = terminalOps.sell("W7N23", "pixel", 50, 59800);
+    const created = terminalOps.sell("W7N23", "pixel", 50, 59800, true);
 
     terminalOps.tick(); // queued -> executeDeal finds no candidate -> "listing", listedTick still undefined
     let op = Memory.terminalOps.operations[created.id];
@@ -11188,22 +11301,69 @@ origLog("\nMemory:", memStr.length, "bytes  |  rooms.W1N1 keys:",
     let dealAmount = 0, dealOrderId = null;
     Game.market = {
         credits: 100000, incomingTransactions: [], orders: {},
-        getAllOrders: () => [{ id: "far-buy", roomName: "E2N39", price: 50, remainingAmount: 1000 }],
-        calcTransactionCost: () => 200,
+        getAllOrders: () => [{ id: "far-buy", roomName: "E2N39", price: 100, remainingAmount: 1000 }],
+        calcTransactionCost: () => 80,
         deal: (id, value) => { dealOrderId = id; dealAmount = value; return OK; },
     };
     Memory.terminalOps = { nextId: 1, operations: {}, seenIncoming: {}, events: [], terminalBalance: {} };
     Memory.terminalOps.operations.rawGate = {
         id: "rawGate", kind: "sell", sourceRoom: "W7N40", resourceType: RESOURCE_OXYGEN, amount: 20, remaining: 20,
+        loadedAmount: 20, limit: 97, energyFairPrice: 1, state: "atTerminal", sentAmount: 0,
+        createdTick: Game.time, updatedTick: Game.time,
+    };
+    // Sanity: raw price 100 clears limit 97, but 80 energy of delivery cost
+    // at fairPrice 1 over a 20-unit deal nets 100 - (80*1/20) = 96 - which
+    // would have missed the old effective-price gate. Fee ratio (4/100 = 4%)
+    // stays under terminalOps.maxFeeRatio's default 5% on purpose - that's
+    // a separate rule, covered by its own tests below.
+    terminalOps.tick();
+    assert(dealOrderId === "far-buy" && dealAmount === 20,
+        "0098 SELL deals against an order whose raw price (100) clears op.limit (97) even though its net effective price (96) would not");
+    Game.rooms = oldRooms; Game.market = oldMarket; Memory.terminalOps = oldOps;
+}
+// terminalOps.maxFeeRatio (pedido do usuário, 2026-09-30): uma ordem cuja
+// taxa de entrega exceda 5% do preço bruto nunca fecha negócio numa
+// operação comum, mesmo clareando o limite de preço bruto - bug real, um
+// SELL fechou com preço bruto 38.717 e efetivo 7.505 (taxa ~81% do valor)
+// porque nada além do limite de preço bruto barrava o deal(). skipFeeCap
+// (usado por marketFlip.js) restaura o comportamento antigo.
+{
+    const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
+    const makeStore = (contents, capacity) => Object.assign({
+        getFreeCapacity: () => capacity - Object.keys(contents).reduce((sum, key) => sum + contents[key], 0),
+        getUsedCapacity: () => Object.keys(contents).reduce((sum, key) => sum + contents[key], 0),
+        getCapacity: () => capacity,
+    }, contents);
+    const room = {
+        name: "W7N42", controller: { my: true }, find: () => [],
+        storage: { id: "W7N42-storage", store: makeStore({ [RESOURCE_ENERGY]: 20000 }, 30000) },
+        terminal: { id: "W7N42-terminal", cooldown: 0, store: makeStore({ [RESOURCE_ENERGY]: 500, [RESOURCE_OXYGEN]: 20 }, 30000) },
+    };
+    const oldRooms = Game.rooms, oldMarket = Game.market, oldOps = Memory.terminalOps;
+    Game.rooms = Object.assign({}, oldRooms, { W7N42: room });
+    let dealCalls = 0;
+    // price 50, delivery cost 200 energy @ fairPrice 1 over 20 units ->
+    // fee 10, ratio 10/50 = 20%, well above the 5% default cap.
+    Game.market = {
+        credits: 100000, incomingTransactions: [], orders: {},
+        getAllOrders: () => [{ id: "expensive-delivery", roomName: "E2N39", price: 50, remainingAmount: 1000 }],
+        calcTransactionCost: () => 200,
+        deal: () => { dealCalls++; return OK; },
+    };
+    Memory.terminalOps = { nextId: 1, operations: {}, seenIncoming: {}, events: [], terminalBalance: {} };
+    Memory.terminalOps.operations.feeCapped = {
+        id: "feeCapped", kind: "sell", sourceRoom: "W7N42", resourceType: RESOURCE_OXYGEN, amount: 20, remaining: 20,
         loadedAmount: 20, limit: 45, energyFairPrice: 1, state: "atTerminal", sentAmount: 0,
         createdTick: Game.time, updatedTick: Game.time,
     };
-    // Sanity: raw price 50 clears limit 45, but 200 energy of delivery cost
-    // at fairPrice 1 over a 20-unit deal nets 50 - (200*1/20) = 40 - which
-    // would have missed the old effective-price gate.
     terminalOps.tick();
-    assert(dealOrderId === "far-buy" && dealAmount === 20,
-        "0098 SELL deals against an order whose raw price (50) clears op.limit (45) even though its net effective price (40) would not");
+    assert(dealCalls === 0 && Memory.terminalOps.operations.feeCapped.state === "waiting",
+        "0098 an order whose delivery fee exceeds maxFeeRatio (20% > 5%) never deals, even though its raw price clears the limit");
+    Memory.terminalOps.operations.feeCapped.state = "atTerminal";
+    Memory.terminalOps.operations.feeCapped.skipFeeCap = true;
+    terminalOps.tick();
+    assert(dealCalls === 1,
+        "0098 skipFeeCap:true (used by marketFlip.js) restores the pre-cap behavior, dealing despite the same high fee ratio");
     Game.rooms = oldRooms; Game.market = oldMarket; Memory.terminalOps = oldOps;
 }
 // managedTerminalIncrease() must recognize a SELL's feeLoadedAmount even
@@ -11422,4 +11582,511 @@ origLog("\nMemory:", memStr.length, "bytes  |  rooms.W1N1 keys:",
     assert(mineralTransfer && mineralTransfer.amount === 400,
         "0079 follow-up: a different resource on the same room pair gets its own entry instead of folding into the energy amount (got " + JSON.stringify(mineralTransfer) + ")");
     Memory.terminalOps = oldOps; Game.rooms = oldRooms; Game.market = oldMarket;
+}
+
+// --- ROADMAP 0110: market flip (instant arbitrage) ----------------------
+function marketFlipModule() {
+    delete require.cache[require.resolve(path.join(PROJECT, "src/utils/marketFlip"))];
+    return require(path.join(PROJECT, "src/utils/marketFlip"));
+}
+function marketFlipRoom(name) {
+    return { name, controller: { my: true }, storage: { id: name + "-storage" }, terminal: { id: name + "-terminal" } };
+}
+function resetMarketFlipState() {
+    Memory.marketFlip = { lastScanTick: null, committedCredits: 0, active: {}, lastOpportunities: [], stats: { completed: 0, netProfit: 0, cancelled: 0, guardrailBlocked: 0 } };
+    Memory.terminalOps = { nextId: 1, operations: {}, seenIncoming: {}, events: [], terminalBalance: {} };
+}
+// AC1: test mode only logs a profitable pair - never calls deal()/buy()/sell().
+{
+    const marketFlip = marketFlipModule();
+    const market = require(path.join(PROJECT, "src/utils/market"));
+    const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
+    const oldRooms = Game.rooms, oldMarket = Game.market, oldSettings = Memory.settings, oldSnapshot = market.snapshot, oldBuy = terminalOps.buy, oldSell = terminalOps.sell;
+    resetMarketFlipState();
+    Game.rooms = { W1N1: marketFlipRoom("W1N1") };
+    Memory.settings = Object.assign({}, oldSettings, { marketFlip: { test: true, scanInterval: 1, minProfitRatio: 0.01, guardrailFairPriceRatio: 1.05, maxCreditRatioPerFlip: 0.05, maxHoldingTicks: 1500 } });
+    let dealCalls = 0, buyCalls = 0, sellCalls = 0;
+    Game.market = {
+        credits: 1000000,
+        calcTransactionCost: () => 0,
+        deal: () => { dealCalls++; return OK; },
+        getAllOrders: () => [
+            { id: "sell-O", resourceType: "O", type: ORDER_SELL, price: 10, remainingAmount: 1000, roomName: "W2N2" },
+            { id: "buy-O", resourceType: "O", type: ORDER_BUY, price: 20, remainingAmount: 1000, roomName: "W2N3" },
+        ],
+    };
+    market.snapshot = () => ({ resources: { O: { fairPrice: 100, confidence: "ready" } } });
+    terminalOps.buy = () => { buyCalls++; return { ok: true, id: "should-not-happen" }; };
+    terminalOps.sell = () => { sellCalls++; return { ok: true, id: "should-not-happen" }; };
+    marketFlip.tick();
+    const opportunity = Memory.marketFlip.lastOpportunities.find((o) => o.resourceType === "O");
+    assert(opportunity && opportunity.quantity > 0 && opportunity.netProfit > 0 && !opportunity.wouldBlockGuardrail,
+        "0110 AC1: test mode logs the profitable pair with quantity/profit (got " + JSON.stringify(opportunity) + ")");
+    assert(dealCalls === 0 && buyCalls === 0 && sellCalls === 0,
+        "0110 AC1: test mode never calls Game.market.deal()/terminalOps.buy()/terminalOps.sell()");
+    Game.rooms = oldRooms; Game.market = oldMarket; Memory.settings = oldSettings; market.snapshot = oldSnapshot; terminalOps.buy = oldBuy; terminalOps.sell = oldSell;
+}
+// AC2/AC10: live mode buys once at scan time, sells only once the buy leg
+// reaches "completed"; a thrown exception inside tick() never escapes main.loop().
+{
+    const marketFlip = marketFlipModule();
+    const market = require(path.join(PROJECT, "src/utils/market"));
+    const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
+    const oldRooms = Game.rooms, oldMarket = Game.market, oldSettings = Memory.settings, oldSnapshot = market.snapshot, oldBuy = terminalOps.buy, oldSell = terminalOps.sell;
+    resetMarketFlipState();
+    Game.rooms = { W1N1: marketFlipRoom("W1N1") };
+    Memory.settings = Object.assign({}, oldSettings, { marketFlip: { test: false, scanInterval: 1, minProfitRatio: 0.01, guardrailFairPriceRatio: 1.05, maxCreditRatioPerFlip: 0.05, maxHoldingTicks: 1500 } });
+    let buyCalls = 0, sellCalls = 0, buyArgs = null;
+    Game.market = {
+        credits: 1000000, calcTransactionCost: () => 0,
+        getAllOrders: () => [
+            { id: "sell-O", resourceType: "O", type: ORDER_SELL, price: 10, remainingAmount: 1000, roomName: "W2N2" },
+            { id: "buy-O", resourceType: "O", type: ORDER_BUY, price: 20, remainingAmount: 1000, roomName: "W2N3" },
+        ],
+    };
+    market.snapshot = () => ({ resources: { O: { fairPrice: 100, confidence: "ready" } } });
+    terminalOps.buy = (room, resourceType, qty, price) => { buyCalls++; buyArgs = { room, resourceType, qty, price }; Memory.terminalOps.operations["buy-1"] = { id: "buy-1", state: "queued" }; return { ok: true, id: "buy-1" }; };
+    terminalOps.sell = () => { sellCalls++; Memory.terminalOps.operations["sell-1"] = { id: "sell-1", state: "queued" }; return { ok: true, id: "sell-1" }; };
+    marketFlip.tick();
+    assert(buyCalls === 1 && buyArgs.resourceType === "O" && Memory.marketFlip.active.O && Memory.marketFlip.active.O.state === "buying",
+        "0110 AC2: live mode opens exactly one buy at scan time (got " + JSON.stringify(buyArgs) + ")");
+    assert(sellCalls === 0, "0110 AC2: sell is not called before the buy leg completes");
+    Memory.terminalOps.operations["buy-1"].state = "completed";
+    Memory.terminalOps.operations["buy-1"].dealtAmount = 1000; // fully dealt, matches buyArgs.qty
+    marketFlip.tick(); // advanceFlips only - scanInterval already elapsed but no new orders needed
+    assert(sellCalls === 1 && buyCalls === 1 && Memory.marketFlip.active.O.state === "selling" && Memory.marketFlip.active.O.sellOpId === "sell-1",
+        "0110 AC2: sell fires exactly once the buy leg reaches completed, buy is not called again");
+    // AC10: guard("marketFlip", ...) isolates a thrown exception.
+    const bot = require(path.join(PROJECT, "src/main"));
+    const originalTick = marketFlip.tick;
+    require(path.join(PROJECT, "src/utils")).marketFlip.tick = () => { throw new Error("boom marketFlip"); };
+    const origLog = console.log; const capturedLogs = [];
+    console.log = (msg) => capturedLogs.push(String(msg));
+    let threw = null;
+    try { bot.loop(); } catch (e) { threw = e; }
+    console.log = origLog;
+    require(path.join(PROJECT, "src/utils")).marketFlip.tick = originalTick;
+    assert(!threw, "0110 AC10: an exception inside marketFlip.tick() does not abort main.loop()");
+    assert(capturedLogs.some((l) => l.indexOf("[marketFlip]") === 0), "0110 AC10: guard(\"marketFlip\", ...) logs the caught exception");
+    Game.rooms = oldRooms; Game.market = oldMarket; Memory.settings = oldSettings; market.snapshot = oldSnapshot; terminalOps.buy = oldBuy; terminalOps.sell = oldSell;
+}
+// AC3: a pair whose net profit ratio misses minProfitRatio is never logged as an opportunity.
+{
+    const marketFlip = marketFlipModule();
+    const market = require(path.join(PROJECT, "src/utils/market"));
+    const oldRooms = Game.rooms, oldMarket = Game.market, oldSettings = Memory.settings, oldSnapshot = market.snapshot;
+    resetMarketFlipState();
+    Game.rooms = { W1N1: marketFlipRoom("W1N1") };
+    Memory.settings = Object.assign({}, oldSettings, { marketFlip: { test: true, scanInterval: 1, minProfitRatio: 0.5, maxCreditRatioPerFlip: 0.05, maxHoldingTicks: 1500 } });
+    Game.market = {
+        credits: 1000000, calcTransactionCost: () => 0,
+        getAllOrders: () => [
+            { id: "sell-O", resourceType: "O", type: ORDER_SELL, price: 10, remainingAmount: 1000, roomName: "W2N2" },
+            { id: "buy-O", resourceType: "O", type: ORDER_BUY, price: 10.5, remainingAmount: 1000, roomName: "W2N3" }, // ratio 0.05, below minProfitRatio 0.5
+        ],
+    };
+    market.snapshot = () => ({ resources: { O: { fairPrice: 100, confidence: "ready" } } });
+    marketFlip.tick();
+    assert(!Memory.marketFlip.lastOpportunities.some((o) => o.resourceType === "O"),
+        "0110 AC3: a pair below minProfitRatio is never logged as an opportunity");
+    Game.rooms = oldRooms; Game.market = oldMarket; Memory.settings = oldSettings; market.snapshot = oldSnapshot;
+}
+// AC4: the energy delivery fee is priced off the SAME scan's live order book,
+// never market.js's cached fairPrice/energyFairPrice snapshot.
+{
+    const marketFlip = marketFlipModule();
+    const market = require(path.join(PROJECT, "src/utils/market"));
+    const oldRooms = Game.rooms, oldMarket = Game.market, oldSettings = Memory.settings, oldSnapshot = market.snapshot;
+    resetMarketFlipState();
+    Game.rooms = { W1N1: marketFlipRoom("W1N1") };
+    Memory.settings = Object.assign({}, oldSettings, { marketFlip: { test: true, scanInterval: 1, minProfitRatio: 0.01, maxCreditRatioPerFlip: 0.05, maxHoldingTicks: 1500 } });
+    Game.market = {
+        credits: 1000000, calcTransactionCost: () => 10, // fixed per leg, so feeUnits = 10 + 10 = 20
+        getAllOrders: () => [
+            { id: "sell-O", resourceType: "O", type: ORDER_SELL, price: 10, remainingAmount: 1000, roomName: "W2N2" },
+            { id: "buy-O", resourceType: "O", type: ORDER_BUY, price: 20, remainingAmount: 1000, roomName: "W2N3" },
+            // live top-of-book ask for energy - the ONLY price marketFlip may use for the fee.
+            { id: "sell-energy", resourceType: RESOURCE_ENERGY, type: ORDER_SELL, price: 100, remainingAmount: 100000, roomName: "W2N4" },
+        ],
+    };
+    // Deliberately divergent from the live book (100) - proves the snapshot's
+    // own energy entry is never consulted for the fee conversion.
+    market.snapshot = () => ({ resources: { O: { fairPrice: 100, confidence: "ready" }, energy: { fairPrice: 1, confidence: "ready" } } });
+    marketFlip.tick();
+    const opportunity = Memory.marketFlip.lastOpportunities.find((o) => o.resourceType === "O");
+    // quantity 1000, gross (20-10)*1000=10000, fee 20 units * live ask 100 = 2000 -> net 8000, ratio 0.8
+    assert(opportunity && opportunity.netProfit === 8000,
+        "0110 AC4: energy fee uses the live book's ask price, not market.js's cached fairPrice (got " + JSON.stringify(opportunity) + ")");
+    Game.rooms = oldRooms; Game.market = oldMarket; Memory.settings = oldSettings; market.snapshot = oldSnapshot;
+}
+// AC5: a pair whose buy price violates the fairPrice guardrail never
+// executes in live mode; test mode still logs it flagged
+// wouldBlockGuardrail:true. confidence:"ready" is no longer required
+// (removed at the user's request, 2026-09-29) - only the ratio against
+// fairPrice matters now.
+{
+    const market = require(path.join(PROJECT, "src/utils/market"));
+    const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
+    const oldRooms = Game.rooms, oldMarket = Game.market, oldSettings = Memory.settings, oldSnapshot = market.snapshot, oldBuy = terminalOps.buy;
+    Game.rooms = { W1N1: marketFlipRoom("W1N1") };
+    const orders = () => [
+        { id: "sell-O", resourceType: "O", type: ORDER_SELL, price: 10, remainingAmount: 1000, roomName: "W2N2" },
+        { id: "buy-O", resourceType: "O", type: ORDER_BUY, price: 20, remainingAmount: 1000, roomName: "W2N3" },
+    ];
+    market.snapshot = () => ({ resources: { O: { fairPrice: 5, confidence: "ready" } } }); // 1.05*5=5.25 < buyPrice 10 -> violates
+    // test mode: still logged, flagged, not executed
+    {
+        const marketFlip = marketFlipModule();
+        resetMarketFlipState();
+        Memory.settings = Object.assign({}, oldSettings, { marketFlip: { test: true, scanInterval: 1, minProfitRatio: 0.01, guardrailFairPriceRatio: 1.05, maxCreditRatioPerFlip: 0.05, maxHoldingTicks: 1500 } });
+        Game.market = { credits: 1000000, calcTransactionCost: () => 0, getAllOrders: orders };
+        marketFlip.tick();
+        const opportunity = Memory.marketFlip.lastOpportunities.find((o) => o.resourceType === "O");
+        assert(opportunity && opportunity.wouldBlockGuardrail === true && opportunity.quantity === 0 && !opportunity.executed,
+            "0110 AC5: test mode logs a guardrail-violating pair flagged wouldBlockGuardrail, not executed (got " + JSON.stringify(opportunity) + ")");
+        assert(Memory.marketFlip.stats.guardrailBlocked >= 1, "0110 AC5: guardrail block is counted in stats");
+    }
+    // live mode: never opens the flip
+    {
+        const marketFlip = marketFlipModule();
+        resetMarketFlipState();
+        let buyCalls = 0;
+        Memory.settings = Object.assign({}, oldSettings, { marketFlip: { test: false, scanInterval: 1, minProfitRatio: 0.01, guardrailFairPriceRatio: 1.05, maxCreditRatioPerFlip: 0.05, maxHoldingTicks: 1500 } });
+        Game.market = { credits: 1000000, calcTransactionCost: () => 0, getAllOrders: orders };
+        terminalOps.buy = () => { buyCalls++; return { ok: true, id: "should-not-happen" }; };
+        marketFlip.tick();
+        assert(buyCalls === 0 && !Memory.marketFlip.active.O, "0110 AC5: live mode never opens a flip that violates the guardrail");
+    }
+    // a fairPrice within ratio but with confidence "warming" (or no
+    // confidence field at all) no longer blocks - only the ratio matters.
+    {
+        const marketFlip = marketFlipModule();
+        resetMarketFlipState();
+        let buyCalls = 0;
+        Memory.settings = Object.assign({}, oldSettings, { marketFlip: { test: false, scanInterval: 1, minProfitRatio: 0.01, guardrailFairPriceRatio: 1.05, maxCreditRatioPerFlip: 0.05, maxHoldingTicks: 1500 } });
+        Game.market = { credits: 1000000, calcTransactionCost: () => 0, getAllOrders: orders };
+        market.snapshot = () => ({ resources: { O: { fairPrice: 100, confidence: "warming" } } }); // 1.05*100=105 >= buyPrice 10, ratio fine
+        terminalOps.buy = () => { buyCalls++; Memory.terminalOps.operations["buy-warm"] = { id: "buy-warm", state: "queued" }; return { ok: true, id: "buy-warm" }; };
+        marketFlip.tick();
+        assert(buyCalls === 1 && Memory.marketFlip.active.O, "0110 AC5 follow-up: confidence:\"warming\" no longer blocks a pair whose price is within the fairPrice ratio");
+    }
+    Game.rooms = oldRooms; Game.market = oldMarket; Memory.settings = oldSettings; market.snapshot = oldSnapshot; terminalOps.buy = oldBuy;
+}
+// AC6: marketOnly (pixel) and a commodity (widgetA, already mocked into
+// COMMODITIES/RESOURCES_ALL near the top of this file) are both evaluated
+// by the same scan and accepted when profitable.
+{
+    const marketFlip = marketFlipModule();
+    const market = require(path.join(PROJECT, "src/utils/market"));
+    const oldRooms = Game.rooms, oldMarket = Game.market, oldSettings = Memory.settings, oldSnapshot = market.snapshot;
+    resetMarketFlipState();
+    Game.rooms = { W1N1: marketFlipRoom("W1N1") };
+    Memory.settings = Object.assign({}, oldSettings, { marketFlip: { test: true, scanInterval: 1, minProfitRatio: 0.01, guardrailFairPriceRatio: 1.05, maxCreditRatioPerFlip: 0.05, maxHoldingTicks: 1500 } });
+    Game.market = {
+        credits: 1000000, calcTransactionCost: () => 0,
+        getAllOrders: () => [
+            { id: "sell-pixel", resourceType: "pixel", type: ORDER_SELL, price: 100, remainingAmount: 10 },
+            { id: "buy-pixel", resourceType: "pixel", type: ORDER_BUY, price: 150, remainingAmount: 10 },
+            { id: "sell-widgetA", resourceType: "widgetA", type: ORDER_SELL, price: 500, remainingAmount: 50, roomName: "W2N2" },
+            { id: "buy-widgetA", resourceType: "widgetA", type: ORDER_BUY, price: 600, remainingAmount: 50, roomName: "W2N3" },
+        ],
+    };
+    market.snapshot = () => ({ resources: { pixel: { fairPrice: 1000, confidence: "ready" }, widgetA: { fairPrice: 1000, confidence: "ready" } } });
+    marketFlip.tick();
+    const pixelOpp = Memory.marketFlip.lastOpportunities.find((o) => o.resourceType === "pixel");
+    const widgetOpp = Memory.marketFlip.lastOpportunities.find((o) => o.resourceType === "widgetA");
+    assert(pixelOpp && pixelOpp.quantity > 0 && !pixelOpp.wouldBlockGuardrail, "0110 AC6: a profitable marketOnly (pixel) pair is accepted (got " + JSON.stringify(pixelOpp) + ")");
+    assert(widgetOpp && widgetOpp.quantity > 0 && !widgetOpp.wouldBlockGuardrail, "0110 AC6: a profitable commodity (widgetA) pair is accepted (got " + JSON.stringify(widgetOpp) + ")");
+    Game.rooms = oldRooms; Game.market = oldMarket; Memory.settings = oldSettings; market.snapshot = oldSnapshot;
+}
+// AC7: exclusivity - a second profitable pair for the same resourceType is
+// ignored while a flip is already active for it.
+{
+    const marketFlip = marketFlipModule();
+    const market = require(path.join(PROJECT, "src/utils/market"));
+    const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
+    const oldRooms = Game.rooms, oldMarket = Game.market, oldSettings = Memory.settings, oldSnapshot = market.snapshot, oldBuy = terminalOps.buy;
+    resetMarketFlipState();
+    Game.rooms = { W1N1: marketFlipRoom("W1N1") };
+    Memory.settings = Object.assign({}, oldSettings, { marketFlip: { test: false, scanInterval: 1, minProfitRatio: 0.01, guardrailFairPriceRatio: 1.05, maxCreditRatioPerFlip: 0.05, maxHoldingTicks: 1500 } });
+    let buyCalls = 0;
+    Game.market = {
+        credits: 1000000, calcTransactionCost: () => 0,
+        getAllOrders: () => [
+            { id: "sell-O", resourceType: "O", type: ORDER_SELL, price: 10, remainingAmount: 1000, roomName: "W2N2" },
+            { id: "buy-O", resourceType: "O", type: ORDER_BUY, price: 20, remainingAmount: 1000, roomName: "W2N3" },
+        ],
+    };
+    market.snapshot = () => ({ resources: { O: { fairPrice: 100, confidence: "ready" } } });
+    terminalOps.buy = () => { buyCalls++; Memory.terminalOps.operations["buy-x"] = { id: "buy-x", state: "queued" }; return { ok: true, id: "buy-x" }; };
+    marketFlip.tick();
+    assert(buyCalls === 1 && Memory.marketFlip.active.O, "0110 AC7 setup: first scan opens the flip");
+    Game.time += 1; // elapse scanInterval so the second scan actually runs
+    marketFlip.tick();
+    const opportunity = Memory.marketFlip.lastOpportunities.find((o) => o.resourceType === "O");
+    assert(buyCalls === 1 && opportunity && opportunity.quantity === 0 && !opportunity.executed,
+        "0110 AC7: a second profitable pair for the same resourceType is ignored while a flip is already active");
+    Game.rooms = oldRooms; Game.market = oldMarket; Memory.settings = oldSettings; market.snapshot = oldSnapshot; terminalOps.buy = oldBuy;
+}
+// AC8: two approved opportunities in the same scan size sequentially - the
+// second flip's 5% cap is computed against what's LEFT after the first,
+// never against the tick's original balance.
+{
+    const marketFlip = marketFlipModule();
+    const market = require(path.join(PROJECT, "src/utils/market"));
+    const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
+    const oldRooms = Game.rooms, oldMarket = Game.market, oldSettings = Memory.settings, oldSnapshot = market.snapshot, oldBuy = terminalOps.buy;
+    resetMarketFlipState();
+    // Two rooms - AC8 is about credit sequencing across candidates in the
+    // same scan, independent of the per-terminal exclusivity (AC14): give
+    // each of the two flips its own terminal so room availability is never
+    // the limiting factor here.
+    Game.rooms = { W1N1: marketFlipRoom("W1N1"), W1N2: marketFlipRoom("W1N2") };
+    Memory.settings = Object.assign({}, oldSettings, { marketFlip: { test: false, scanInterval: 1, minProfitRatio: 0.01, guardrailFairPriceRatio: 1.05, maxCreditRatioPerFlip: 0.05, maxHoldingTicks: 1500 } });
+    let buyCalls = 0, nextId = 1;
+    Game.market = {
+        credits: 1000000, calcTransactionCost: () => 0,
+        getAllOrders: () => [
+            // O: ratio 0.5, ranked first
+            { id: "sell-O", resourceType: "O", type: ORDER_SELL, price: 10, remainingAmount: 100000, roomName: "W2N2" },
+            { id: "buy-O", resourceType: "O", type: ORDER_BUY, price: 15, remainingAmount: 100000, roomName: "W2N3" },
+            // Z: ratio 0.2, ranked second
+            { id: "sell-Z", resourceType: "Z", type: ORDER_SELL, price: 10, remainingAmount: 100000, roomName: "W2N2" },
+            { id: "buy-Z", resourceType: "Z", type: ORDER_BUY, price: 12, remainingAmount: 100000, roomName: "W2N3" },
+        ],
+    };
+    market.snapshot = () => ({ resources: { O: { fairPrice: 100, confidence: "ready" }, Z: { fairPrice: 100, confidence: "ready" } } });
+    terminalOps.buy = () => { const id = "buy-" + (nextId++); buyCalls++; Memory.terminalOps.operations[id] = { id, state: "queued" }; return { ok: true, id }; };
+    marketFlip.tick();
+    const oppO = Memory.marketFlip.lastOpportunities.find((o) => o.resourceType === "O");
+    const oppZ = Memory.marketFlip.lastOpportunities.find((o) => o.resourceType === "Z");
+    // cap1 = 0.05 * 1,000,000 = 50000 credits / buyPrice 10 = 5000 units
+    // cap2 = 0.05 * (1,000,000 - 50000) = 47500 credits / buyPrice 10 = 4750 units
+    assert(oppO && oppO.quantity === 5000, "0110 AC8: the first (most profitable) flip uses 5% of the tick's original balance (got " + JSON.stringify(oppO) + ")");
+    assert(oppZ && oppZ.quantity === 4750, "0110 AC8: the second flip uses 5% of what remained after the first, not the original balance (got " + JSON.stringify(oppZ) + ")");
+    assert(buyCalls === 2 && Memory.marketFlip.committedCredits === 5000 * 10 + 4750 * 10, "0110 AC8: both flips open, committedCredits reflects both reservations");
+    Game.rooms = oldRooms; Game.market = oldMarket; Memory.settings = oldSettings; market.snapshot = oldSnapshot; terminalOps.buy = oldBuy;
+}
+// AC9: a flip stuck past maxHoldingTicks is cancelled - releases the
+// resourceType's exclusivity and its reserved credits.
+{
+    const marketFlip = marketFlipModule();
+    const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
+    const oldRooms = Game.rooms, oldMarket = Game.market, oldSettings = Memory.settings, oldCancel = terminalOps.cancel, oldTime = Game.time;
+    resetMarketFlipState();
+    Game.rooms = { W1N1: marketFlipRoom("W1N1") };
+    Memory.settings = Object.assign({}, oldSettings, { marketFlip: { test: false, scanInterval: 100000, maxHoldingTicks: 100 } });
+    Game.market = { credits: 0, getAllOrders: () => [] };
+    Memory.marketFlip.active.O = { resourceType: "O", state: "selling", buyOpId: "buy-1", sellOpId: "sell-1", quantity: 10, buyPrice: 1, sellPrice: 2, reservedCredits: 10, expectedNetProfit: 5, openedTick: Game.time };
+    Memory.marketFlip.committedCredits = 10;
+    Memory.terminalOps.operations["sell-1"] = { id: "sell-1", state: "queued" }; // never completes
+    let cancelledIds = [];
+    terminalOps.cancel = (id) => { cancelledIds.push(id); Memory.terminalOps.operations[id].state = "cancelled"; return { ok: true, id }; };
+    Game.time += 100;
+    marketFlip.tick();
+    assert(cancelledIds.indexOf("sell-1") >= 0, "0110 AC9: the stuck flip's active leg (sell-1) is cancelled via terminalOps.cancel()");
+    assert(!Memory.marketFlip.active.O, "0110 AC9: the stall-guarded flip is removed, releasing the resourceType's exclusivity");
+    assert(Memory.marketFlip.committedCredits === 0 && Memory.marketFlip.stats.cancelled === 1,
+        "0110 AC9: the stall guard releases the reserved credits and counts the cancellation");
+    Game.rooms = oldRooms; Game.market = oldMarket; Memory.settings = oldSettings; terminalOps.cancel = oldCancel; Game.time = oldTime;
+}
+// AC12: marketFlipStatus()/marketFlipStats() reflect a flip completed with a known profit.
+{
+    const marketFlip = marketFlipModule();
+    const oldRooms = Game.rooms, oldMarket = Game.market, oldSettings = Memory.settings;
+    resetMarketFlipState();
+    Game.rooms = { W1N1: marketFlipRoom("W1N1") };
+    Memory.settings = Object.assign({}, oldSettings, { marketFlip: { test: false, scanInterval: 100000, maxHoldingTicks: 1500 } });
+    Game.market = { credits: 0, getAllOrders: () => [] };
+    Memory.marketFlip.active.O = { resourceType: "O", state: "selling", buyOpId: "buy-1", sellOpId: "sell-1", quantity: 10, buyPrice: 1, sellPrice: 2, reservedCredits: 10, expectedNetProfit: 777, openedTick: Game.time };
+    Memory.marketFlip.committedCredits = 10;
+    Memory.terminalOps.operations["sell-1"] = { id: "sell-1", state: "completed" };
+    marketFlip.tick();
+    assert(Memory.marketFlip.stats.completed === 1 && Memory.marketFlip.stats.netProfit === 777,
+        "0110 AC12 setup: completing the sell leg credits stats.completed/netProfit (got " + JSON.stringify(Memory.marketFlip.stats) + ")");
+    const status = JSON.parse(global.marketFlipStatus());
+    assert(status.mode === "live" && status.active.length === 0,
+        "0110 AC12: marketFlipStatus() reflects live mode and the now-empty active list (got " + JSON.stringify(status) + ")");
+    const stats = JSON.parse(global.marketFlipStats());
+    assert(stats.completed === 1 && stats.netProfit === 777,
+        "0110 AC12: marketFlipStats() reports the completed flip's accumulated net profit (got " + JSON.stringify(stats) + ")");
+    Game.rooms = oldRooms; Game.market = oldMarket; Memory.settings = oldSettings;
+}
+// createListing (pedido do usuário, 2026-09-29): default false means an
+// operation with no covering candidate never creates a public order - it
+// just waits/retries instead. true preserves the original 0098 behavior.
+{
+    const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
+    const oldRooms = Game.rooms, oldMarket = Game.market, oldOps = Memory.terminalOps;
+    const room = { name: "W7N60", controller: { my: true } };
+    Game.rooms = Object.assign({}, oldRooms, { W7N60: room });
+    let createCalls = 0;
+    Game.market = { credits: 1000000, incomingTransactions: [], orders: {}, getAllOrders: () => [], createOrder: () => { createCalls++; return OK; } };
+    Memory.terminalOps = { nextId: 1, operations: {}, seenIncoming: {}, events: [], terminalBalance: {} };
+    const marketOnly = require(path.join(PROJECT, "src/utils/market"));
+    const oldSnapshot = marketOnly.snapshot;
+    marketOnly.snapshot = () => ({ resources: { pixel: { buyPrice: 50000, sellPrice: 50000, fairPrice: 50000 } } });
+    const noListing = terminalOps.sell("W7N60", "pixel", 50, 49500); // createListing omitted -> defaults false
+    terminalOps.tick();
+    terminalOps.tick();
+    const noListingOp = Memory.terminalOps.operations[noListing.id];
+    assert(noListingOp.state === "waiting" && createCalls === 0,
+        "0110 createListing default false: no covering candidate never creates a public order, op just waits (got " + JSON.stringify(noListingOp) + ")");
+    terminalOps.cancel(noListing.id);
+    const withListing = terminalOps.sell("W7N60", "pixel", 50, 49500, true);
+    terminalOps.tick();
+    terminalOps.tick();
+    const withListingOp = Memory.terminalOps.operations[withListing.id];
+    assert(withListingOp.state === "listing" && createCalls === 1,
+        "0110 createListing:true explicitly restores the original 0098 auto-listing fallback (got " + JSON.stringify(withListingOp) + ")");
+    marketOnly.snapshot = oldSnapshot;
+    Game.rooms = oldRooms; Game.market = oldMarket; Memory.terminalOps = oldOps;
+}
+// A partial buy (createListing:false ran out of candidates before dealing
+// the full planned quantity) still tries to sell whatever was actually
+// bought, sized and priced off the real dealt amount - not the original plan.
+{
+    const marketFlip = marketFlipModule();
+    const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
+    const oldRooms = Game.rooms, oldMarket = Game.market, oldSettings = Memory.settings;
+    resetMarketFlipState();
+    Game.rooms = { W1N1: marketFlipRoom("W1N1") };
+    Memory.settings = Object.assign({}, oldSettings, { marketFlip: { test: false, scanInterval: 100000, maxHoldingTicks: 1500 } });
+    Game.market = { credits: 0, getAllOrders: () => [] };
+    // Planned 1000 @ buyPrice 10 (reservedCredits 10000), but the buy leg
+    // only ever dealt 400 before the book ran dry (dealtAmount 400).
+    Memory.marketFlip.active.O = { resourceType: "O", room: "W1N1", state: "buying", buyOpId: "buy-1", sellOpId: null, quantity: 1000, buyPrice: 10, sellPrice: 20, reservedCredits: 10000, expectedNetProfit: 5000, openedTick: Game.time };
+    Memory.marketFlip.committedCredits = 10000;
+    Memory.terminalOps.operations["buy-1"] = { id: "buy-1", state: "completed", dealtAmount: 400 };
+    let sellArgs = null;
+    const oldSell = terminalOps.sell;
+    terminalOps.sell = (room, resourceType, qty, price, createListing) => { sellArgs = { room, resourceType, qty, price, createListing }; Memory.terminalOps.operations["sell-1"] = { id: "sell-1", state: "queued" }; return { ok: true, id: "sell-1" }; };
+    marketFlip.tick();
+    terminalOps.sell = oldSell;
+    assert(sellArgs && sellArgs.room === "W1N1" && sellArgs.qty === 400 && sellArgs.createListing === false,
+        "0110: a partial buy sells exactly what was actually dealt (400) from the SAME room that bought it, not the original plan (1000) or a re-picked room (got " + JSON.stringify(sellArgs) + ")");
+    const entry = Memory.marketFlip.active.O;
+    assert(entry.quantity === 400 && entry.reservedCredits === 4000 && entry.expectedNetProfit === 2000,
+        "0110: the flip's own bookkeeping (quantity/reservedCredits/expectedNetProfit) is rescaled down to the actual dealt ratio (got " + JSON.stringify(entry) + ")");
+    assert(Memory.marketFlip.committedCredits === 4000,
+        "0110: the unused portion of the credit reservation (6000 of the original 10000) is released immediately, not held until the flip fully completes (got " + Memory.marketFlip.committedCredits + ")");
+    Game.rooms = oldRooms; Game.market = oldMarket; Memory.settings = oldSettings;
+}
+// A buy that never dealt anything at all (dealtAmount 0) has nothing to
+// sell - the flip is simply released, not left dangling.
+{
+    const marketFlip = marketFlipModule();
+    const oldRooms = Game.rooms, oldMarket = Game.market, oldSettings = Memory.settings;
+    resetMarketFlipState();
+    Game.rooms = { W1N1: marketFlipRoom("W1N1") };
+    Memory.settings = Object.assign({}, oldSettings, { marketFlip: { test: false, scanInterval: 100000, maxHoldingTicks: 1500 } });
+    Game.market = { credits: 0, getAllOrders: () => [] };
+    Memory.marketFlip.active.O = { resourceType: "O", room: "W1N1", state: "buying", buyOpId: "buy-1", sellOpId: null, quantity: 1000, buyPrice: 10, sellPrice: 20, reservedCredits: 10000, expectedNetProfit: 5000, openedTick: Game.time };
+    Memory.marketFlip.committedCredits = 10000;
+    Memory.terminalOps.operations["buy-1"] = { id: "buy-1", state: "completed", dealtAmount: 0 };
+    marketFlip.tick();
+    assert(!Memory.marketFlip.active.O && Memory.marketFlip.committedCredits === 0 && Memory.marketFlip.stats.cancelled === 1,
+        "0110: a buy that dealt nothing releases the flip instead of trying to sell zero units");
+    Game.rooms = oldRooms; Game.market = oldMarket; Memory.settings = oldSettings;
+}
+// AC14: per-terminal exclusivity (pedido do usuário, 2026-09-30) - two
+// different rooms/terminals can run two different resourceType flips in
+// parallel, but a single room never runs two at once.
+{
+    const marketFlip = marketFlipModule();
+    const market = require(path.join(PROJECT, "src/utils/market"));
+    const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
+    const oldRooms = Game.rooms, oldMarket = Game.market, oldSettings = Memory.settings, oldSnapshot = market.snapshot, oldBuy = terminalOps.buy;
+    resetMarketFlipState();
+    Game.rooms = { W1N1: marketFlipRoom("W1N1"), W1N2: marketFlipRoom("W1N2") };
+    Memory.settings = Object.assign({}, oldSettings, { marketFlip: { test: false, scanInterval: 1, minProfitRatio: 0.01, guardrailFairPriceRatio: 1.05, maxCreditRatioPerFlip: 0.05, maxHoldingTicks: 1500 } });
+    const buyRooms = [];
+    Game.market = {
+        credits: 1000000, calcTransactionCost: () => 0,
+        getAllOrders: () => [
+            { id: "sell-O", resourceType: "O", type: ORDER_SELL, price: 10, remainingAmount: 1000, roomName: "W2N2" },
+            { id: "buy-O", resourceType: "O", type: ORDER_BUY, price: 20, remainingAmount: 1000, roomName: "W2N3" },
+            { id: "sell-Z", resourceType: "Z", type: ORDER_SELL, price: 10, remainingAmount: 1000, roomName: "W2N2" },
+            { id: "buy-Z", resourceType: "Z", type: ORDER_BUY, price: 15, remainingAmount: 1000, roomName: "W2N3" },
+        ],
+    };
+    market.snapshot = () => ({ resources: { O: { fairPrice: 100, confidence: "ready" }, Z: { fairPrice: 100, confidence: "ready" } } });
+    terminalOps.buy = (room) => { buyRooms.push(room); const id = "buy-" + buyRooms.length; Memory.terminalOps.operations[id] = { id, state: "queued" }; return { ok: true, id }; };
+    marketFlip.tick();
+    assert(buyRooms.length === 2 && buyRooms[0] !== buyRooms[1],
+        "0110 AC14: two different resourceTypes flip in parallel, each on its own terminal (got " + JSON.stringify(buyRooms) + ")");
+    assert(Memory.marketFlip.active.O.room && Memory.marketFlip.active.Z.room && Memory.marketFlip.active.O.room !== Memory.marketFlip.active.Z.room,
+        "0110 AC14: each active flip records which room/terminal it's using, and they differ");
+    Game.rooms = oldRooms; Game.market = oldMarket; Memory.settings = oldSettings; market.snapshot = oldSnapshot; terminalOps.buy = oldBuy;
+}
+// AC14: with only ONE eligible terminal, a second profitable (different
+// resourceType) opportunity in the same scan is skipped - not executed -
+// even though it passes every other check, because its only terminal is
+// already busy with the first flip.
+{
+    const marketFlip = marketFlipModule();
+    const market = require(path.join(PROJECT, "src/utils/market"));
+    const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
+    const oldRooms = Game.rooms, oldMarket = Game.market, oldSettings = Memory.settings, oldSnapshot = market.snapshot, oldBuy = terminalOps.buy;
+    resetMarketFlipState();
+    Game.rooms = { W1N1: marketFlipRoom("W1N1") }; // only one terminal available
+    Memory.settings = Object.assign({}, oldSettings, { marketFlip: { test: false, scanInterval: 1, minProfitRatio: 0.01, guardrailFairPriceRatio: 1.05, maxCreditRatioPerFlip: 0.05, maxHoldingTicks: 1500 } });
+    let buyCalls = 0;
+    Game.market = {
+        credits: 1000000, calcTransactionCost: () => 0,
+        getAllOrders: () => [
+            { id: "sell-O", resourceType: "O", type: ORDER_SELL, price: 10, remainingAmount: 1000, roomName: "W2N2" },
+            { id: "buy-O", resourceType: "O", type: ORDER_BUY, price: 20, remainingAmount: 1000, roomName: "W2N3" },
+            { id: "sell-Z", resourceType: "Z", type: ORDER_SELL, price: 10, remainingAmount: 1000, roomName: "W2N2" },
+            { id: "buy-Z", resourceType: "Z", type: ORDER_BUY, price: 15, remainingAmount: 1000, roomName: "W2N3" },
+        ],
+    };
+    market.snapshot = () => ({ resources: { O: { fairPrice: 100, confidence: "ready" }, Z: { fairPrice: 100, confidence: "ready" } } });
+    terminalOps.buy = () => { buyCalls++; const id = "buy-" + buyCalls; Memory.terminalOps.operations[id] = { id, state: "queued" }; return { ok: true, id }; };
+    marketFlip.tick();
+    const oppO = Memory.marketFlip.lastOpportunities.find((o) => o.resourceType === "O");
+    const oppZ = Memory.marketFlip.lastOpportunities.find((o) => o.resourceType === "Z");
+    assert(buyCalls === 1 && Memory.marketFlip.active.O && !Memory.marketFlip.active.Z,
+        "0110 AC14: only the higher-ranked opportunity opens when there's just one terminal available");
+    assert(oppO && oppO.executed && oppZ && !oppZ.executed && oppZ.quantity > 0,
+        "0110 AC14: the second opportunity is sized fine (passes credit/profit filters, quantity > 0) but not executed - blocked purely by terminal availability (got " + JSON.stringify(oppZ) + ")");
+    Game.rooms = oldRooms; Game.market = oldMarket; Memory.settings = oldSettings; market.snapshot = oldSnapshot; terminalOps.buy = oldBuy;
+}
+// AC15 (pedido do usuário, 2026-09-30): a buy leg that never deals anything
+// at all gives up after maxBuyWaitTicks (much sooner than maxHoldingTicks) -
+// a flip is meant to be instant, not a resting order. A buy that DID deal
+// something (dealtAmount > 0) keeps the normal, longer budget instead.
+{
+    const marketFlip = marketFlipModule();
+    const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
+    const oldRooms = Game.rooms, oldMarket = Game.market, oldSettings = Memory.settings, oldCancel = terminalOps.cancel, oldTime = Game.time;
+    resetMarketFlipState();
+    Game.rooms = { W1N1: marketFlipRoom("W1N1") };
+    Memory.settings = Object.assign({}, oldSettings, { marketFlip: { test: false, scanInterval: 100000, maxHoldingTicks: 1500, maxBuyWaitTicks: 15 } });
+    Game.market = { credits: 0, getAllOrders: () => [] };
+    Memory.marketFlip.active.O = { resourceType: "O", room: "W1N1", state: "buying", buyOpId: "buy-1", sellOpId: null, quantity: 1000, buyPrice: 10, sellPrice: 20, reservedCredits: 10000, expectedNetProfit: 5000, openedTick: Game.time };
+    Memory.marketFlip.committedCredits = 10000;
+    Memory.terminalOps.operations["buy-1"] = { id: "buy-1", state: "waiting" }; // no candidate yet, dealtAmount 0
+    let cancelledIds = [];
+    terminalOps.cancel = (id) => { cancelledIds.push(id); Memory.terminalOps.operations[id].state = "cancelled"; return { ok: true, id }; };
+    Game.time += 10;
+    marketFlip.tick();
+    assert(cancelledIds.length === 0 && Memory.marketFlip.active.O,
+        "0110 AC15: a buy that dealt nothing is NOT yet cancelled before maxBuyWaitTicks elapses (10 < 15)");
+    Game.time += 6; // total elapsed 16 >= maxBuyWaitTicks 15
+    marketFlip.tick();
+    assert(cancelledIds.indexOf("buy-1") >= 0 && !Memory.marketFlip.active.O && Memory.marketFlip.stats.cancelled === 1,
+        "0110 AC15: a buy that dealt nothing is cancelled once maxBuyWaitTicks elapses, well before maxHoldingTicks (got " + JSON.stringify(cancelledIds) + ")");
+    // Now the same timing, but the buy DID deal something - must NOT be
+    // cancelled by maxBuyWaitTicks, only by the normal maxHoldingTicks budget.
+    resetMarketFlipState();
+    Memory.marketFlip.active.O = { resourceType: "O", room: "W1N1", state: "buying", buyOpId: "buy-2", sellOpId: null, quantity: 1000, buyPrice: 10, sellPrice: 20, reservedCredits: 10000, expectedNetProfit: 5000, openedTick: Game.time - 16 };
+    Memory.marketFlip.committedCredits = 10000;
+    Memory.terminalOps.operations["buy-2"] = { id: "buy-2", state: "waiting", dealtAmount: 100 }; // partial progress
+    cancelledIds = [];
+    marketFlip.tick();
+    assert(cancelledIds.length === 0 && Memory.marketFlip.active.O,
+        "0110 AC15: a buy that already dealt something (dealtAmount > 0) is not cut short by maxBuyWaitTicks, even past 15 ticks");
+    terminalOps.cancel = oldCancel;
+    Game.rooms = oldRooms; Game.market = oldMarket; Memory.settings = oldSettings; Game.time = oldTime;
 }

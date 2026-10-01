@@ -157,10 +157,36 @@ pronto e deixa a operação observável e cancelável.
 ## Review decisions (2026-09-19)
 
 - APIs públicas: `terminalTransfer(from, to, resource, amount)`,
-  `terminalBuy(room, resource, amount, maxUnitPrice)` e
-  `terminalSell(room, resource, amount, minUnitPrice)`. Compra/venda usam as
+  `terminalBuy(room, resource, amount, maxUnitPrice, createListing, skipFeeCap)` e
+  `terminalSell(room, resource, amount, minUnitPrice, createListing, skipFeeCap)`. Compra/venda usam as
   melhores ordens existentes que respeitam o limite econômico e listam apenas
   o saldo restante.
+  **Revisto em 2026-09-29 (pedido do usuário, para servir o ROADMAP 0110):**
+  novo parâmetro `createListing` (default `false`). Com `false`,
+  `executeDeal()` negocia o que existir no livro — parcial incluso, tick a
+  tick, contra a melhor ordem elegível de cada vez — e, esgotadas as ordens
+  elegíveis, a operação só espera/retenta (`touch(op, "waiting")`) em vez de
+  criar uma ordem pública para o que faltar; nunca falha por isso, só não
+  progride enquanto nenhuma ordem nova aparecer. Com `createListing:true`,
+  preserva o comportamento original desta feature (`listResidual()` cria/
+  reprecifica a ordem pública para o saldo restante). Antes desta revisão o
+  comportamento efetivo sempre era o equivalente a `createListing:true`; quem
+  chama sem informar o parâmetro agora recebe `false`.
+  **Revisto em 2026-09-30 (bug real, usuário reportou em produção):** uma
+  SELL fechou com preço bruto 38.717 mas efetivo 7.505 — a taxa de entrega
+  (custo de `calcTransactionCost`, convertido a créditos via
+  `energyFairPrice`) comeu ~81% do valor, e nada além do `op.limit` (preço
+  bruto) barrava o `deal()`. Novo parâmetro `skipFeeCap` (default `false`) e
+  novo config `terminalOps.maxFeeRatio` (default `0.05`, 5%):
+  `candidateOrders()` agora também rejeita qualquer ordem cuja taxa de
+  entrega (`item.fee`, já calculado por `scoredOrders()`, agora exposto no
+  item) exceda `maxFeeRatio` do preço bruto da ordem — a menos que
+  `skipFeeCap:true`. `marketFlip.js` (ROADMAP 0110) passa `skipFeeCap:true`
+  nas suas duas chamadas: já avalia essa mesma taxa como parte do próprio
+  `netProfit`/`minProfitRatio`, então aplicar o teto de novo aqui seria
+  redundante e mais restritivo que o desenho do flip.
+  `reportNoCandidate()` também passou a distinguir no log se a rejeição foi
+  por preço bruto fora do limite, por taxa acima do teto, ou os dois.
 - O limite sempre é líquido: energia de transação vale `fairPrice(energy)`;
   preço de ordem própria incorpora a taxa de criação de 5%. Compra usa
   `buyPrice`, venda usa `sellPrice`, com um passo competitivo configurável de
