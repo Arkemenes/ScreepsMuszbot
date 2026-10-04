@@ -134,7 +134,7 @@ function retreatToCover(creep, dangers) {
     }
 
     if (!flee(creep, dangers, safeRange() + 1)) {
-        const spawn = creep.room.find(FIND_MY_SPAWNS)[0];
+        const spawn = roomCache.mySpawns(creep.room)[0];
         if (spawn) creep.moveTo(spawn, { reusePath: 5 });
     }
 }

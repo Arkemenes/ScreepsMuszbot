@@ -51,12 +51,12 @@ terminal_transfer_energy = Gauge('screeps_terminal_transfer_energy', 'Transferê
 generic_stat_value = Gauge(
     'screeps_stat_value',
     'Numeric scalar discovered in Memory.stats',
-    ['path', 'room', 'mineral', 'compound', 'category', 'direction'],
+    ['path', 'room', 'mineral', 'compound', 'category', 'direction', 'span'],
 )
 generic_stat_info = Gauge(
     'screeps_stat_info',
     'Text scalar discovered in Memory.stats',
-    ['path', 'room', 'mineral', 'compound', 'category', 'direction', 'value'],
+    ['path', 'room', 'mineral', 'compound', 'category', 'direction', 'span', 'value'],
 )
 
 
@@ -97,6 +97,9 @@ def fetch_stats():
     return decode_data(r.json().get("data"))
 
 
+CPU_METER_GROUPS = ("modules", "roles", "structures", "spans", "fns")
+
+
 def _generic_stats(value, path=(), labels=None):
     """Yield scalar stats while turning known dynamic maps into labels."""
     labels = dict(labels or {})
@@ -121,6 +124,15 @@ def _generic_stats(value, path=(), labels=None):
                 key in ("bought", "sold") and "direction" not in labels
             ):
                 child_labels["direction"] = str(key)
+                child_path = path
+            elif (
+                len(path) == 3 and path[:2] == ("cpu", "meter") and
+                path[2] in CPU_METER_GROUPS and "span" not in labels
+            ):
+                # cpuMeter (ROADMAP 0113): module / role / structure type / span /
+                # function name becomes the `span` label, the field (avg, max, calls,
+                # self, total) stays in the path
+                child_labels["span"] = str(key)
                 child_path = path
             else:
                 child_path = path + (str(key),)
@@ -153,6 +165,7 @@ def update_generic_metrics(stats):
             "compound": labels.get("compound", ""),
             "category": labels.get("category", ""),
             "direction": labels.get("direction", ""),
+            "span": labels.get("span", ""),
         }
         if kind == "value":
             generic_stat_value.labels(**metric_labels).set(value)

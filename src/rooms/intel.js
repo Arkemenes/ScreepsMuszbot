@@ -1,6 +1,14 @@
 const { getHostiles } = require("../utils/hostiles");
-const census = require("../utils/census");
 const roomCache = require("../utils/roomCache");
+const cpuMeter = require("../utils/cpuMeter");
+
+const STALE_COUNTERS = [
+    "numberOfDefenders", "numberOfUpgraders", "numberOfBuilders", "numberOfMiners",
+    "numberOfHaulers", "numberOfScouts", "numberOfRepairers", "numberOfWallRepairers",
+    "numberOfTransporters", "numberOfLogistics", "numberOfClaimers", "numberOfLinks",
+    "numberOfContainers",
+];
+const purgedRooms = {};
 
 function getIntel(room) {
     if (!Memory.rooms) {
@@ -36,31 +44,55 @@ function getIntel(room) {
         mem.hasController = room.controller ? true : false;
     }
 
-    mem.reservation = room.controller ? room.controller.reservation : undefined;
-    mem.my = room.controller ? room.controller.my : undefined;
-    mem.owner =
-        room.controller && room.controller.owner
-            ? room.controller.owner.username
-            : undefined;
-    // RCL of ANY scouted/observed room, not just our own (needs.js already
-    // has its own copy for owned rooms) - rooms/raiding.js (ROADMAP 0032
-    // O4) needs this to judge how dangerous a foreign room could be.
-    mem.controllerLevel = room.controller ? room.controller.level : undefined;
+    cpuMeter.span("intel.controller", () => {
+        const controller = room.controller;
+        mem.reservation = controller ? controller.reservation : undefined;
+        mem.my = controller ? controller.my : undefined;
+        mem.owner =
+            controller && controller.owner
+                ? controller.owner.username
+                : undefined;
+        // RCL of ANY scouted/observed room, not just our own (needs.js already
+        // has its own copy for owned rooms) - rooms/raiding.js (ROADMAP 0032
+        // O4) needs this to judge how dangerous a foreign room could be.
+        mem.controllerLevel = controller ? controller.level : undefined;
+    });
 
-    const hostiles = getHostiles(room);
+    const hostiles = cpuMeter.span("intel.hostiles", () => getHostiles(room));
     mem.enemies = hostiles.length;
     if (room.controller && room.controller.my) {
         mem.defenseActive = hostiles.length > 0;
     }
 
-    const enemyStructures = room.find(FIND_HOSTILE_STRUCTURES, {
-        filter: (s) => s.structureType != STRUCTURE_POWER_BANK,
-    });
-    mem.enemyStructures = enemyStructures.length;
-    // ROADMAP 0032 O2 - console raidRoom() targets this directly.
-    mem.hasInvaderCore = enemyStructures.some(
-        (s) => s.structureType === STRUCTURE_INVADER_CORE
-    );
+    // Hostile structures change rarely (an invader core takes a long time to
+    // appear), so the filtered find runs every 10 ticks, not every tick -
+    // it was ~0.6 CPU/tick across the owned rooms (profile 2026-10-02). Rooms
+    // with enemies present are rescanned every tick.
+    if (
+        mem.enemyScanTick === undefined ||
+        mem.enemies > 0 ||
+        Game.time - mem.enemyScanTick >= 10 ||
+        Game.time < mem.enemyScanTick
+    ) {
+        mem.enemyScanTick = Game.time;
+        cpuMeter.span("intel.enemyScan", () => {
+            const enemyStructures = room.find(FIND_HOSTILE_STRUCTURES, {
+                filter: (s) => s.structureType != STRUCTURE_POWER_BANK,
+            });
+            mem.enemyStructures = enemyStructures.length;
+            // ROADMAP 0032 O2 - console raidRoom() targets this directly.
+            mem.hasInvaderCore = enemyStructures.some(
+                (s) => s.structureType === STRUCTURE_INVADER_CORE
+            );
+            // a room we do not own has no towers of ours: the hostile ones are all there are, so
+            // observing a room needs no full FIND_STRUCTURES just to count them (see below)
+            if (!(room.controller && room.controller.my)) {
+                mem.numberOfTowers = enemyStructures.filter(
+                    (s) => s.structureType === STRUCTURE_TOWER
+                ).length;
+            }
+        });
+    }
 
     mem.lastVisit = Game.time;
 
@@ -68,32 +100,19 @@ function getIntel(room) {
         mem.builds = {};
     }
 
-    // One pass over Game.creeps (via census) instead of ~13 _.sum scans.
-    mem.numberOfDefenders = census.count(room.name, "defender");
-    mem.numberOfUpgraders = census.count(room.name, "upgrader");
-    mem.numberOfBuilders = census.count(room.name, "builder");
-    mem.numberOfMiners = census.count(room.name, "miner");
-    mem.numberOfHaulers = census.count(room.name, "hauler");
-    mem.numberOfScouts = census.total("scout"); // scouts roam - count empire-wide
-    // Roles that do not exist yet - kept at 0 so downstream stats never break.
-    mem.numberOfRepairers = census.count(room.name, "repairer");
-    mem.numberOfWallRepairers = census.count(room.name, "wallRepairer");
-    mem.numberOfTransporters = census.count(room.name, "transporter");
-    mem.numberOfLogistics = census.count(room.name, "logistic");
-    mem.numberOfClaimers = census.count(room.name, "claimer");
+    // The numberOfDefenders/Upgraders/Builders/Miners/Haulers/Scouts/... counters (12
+    // census lookups and as many Memory writes per room per tick) were read by nothing - gone
+    // (2026-10-03 audit). census.count() is what to call for a live number. The stale keys are
+    // dropped once per room after a global reset.
+    if (!purgedRooms[room.name]) {
+        purgedRooms[room.name] = true;
+        STALE_COUNTERS.forEach((key) => { delete mem[key]; });
+    }
 
-    mem.numberOfLinks = roomCache.structuresByType(
-        room,
-        STRUCTURE_LINK
-    ).length;
-    mem.numberOfContainers = roomCache.structuresByType(
-        room,
-        STRUCTURE_CONTAINER
-    ).length;
-    mem.numberOfTowers = roomCache.structuresByType(
-        room,
-        STRUCTURE_TOWER
-    ).length;
+    // read by rooms/raiding.js only, for rooms we do not own (counted by the enemy scan above)
+    if (room.controller && room.controller.my) {
+        mem.numberOfTowers = roomCache.structuresByType(room, STRUCTURE_TOWER).length;
+    }
 }
 
 module.exports = getIntel;

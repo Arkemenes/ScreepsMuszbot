@@ -236,12 +236,15 @@ function planCity(room, opts) {
                     "?L.LL?",
                     " ? ?? ",
                 ],
+                // ROADMAP 0111: labs in labSlots.js order - RCL6 builds the
+                // two reaction inputs + first output, RCL7 the second pair,
+                // RCL8 the tree's upper levels (see utils/labSlots.js).
                 rcl: [
                     " 66 6 ",
-                    "666686",
-                    "66686 ",
-                    " 68676",
-                    "686776",
+                    "677666",
+                    "67666 ",
+                    " 66686",
+                    "686886",
                     " 6 66 ",
                 ],
                 ramparts: [

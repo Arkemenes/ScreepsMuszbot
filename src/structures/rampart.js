@@ -1,39 +1,71 @@
-const { isAlly, getHostiles } = require("../utils/hostiles");
+const { isAlly, isHostile, bodyInfo } = require("../utils/hostiles");
+const roomCache = require("../utils/roomCache");
+const cadence = require("../utils/cadence");
+const cpuMeter = require("../utils/cpuMeter");
+const rampartGates = require("../utils/rampartGates");
 
-// Ally creeps in the room, found once per room per tick.
-let tick = -1;
-let cache = {};
-function alliesIn(room) {
-    if (tick !== Game.time) {
-        tick = Game.time;
-        cache = {};
+// One decision per room per tick (it used to be one per rampart, 82 a tick, each with its own
+// distance checks): the "gate" ramparts - the few an ally crossing the room has to walk over,
+// utils/rampartGates - are public while an ally is in the room and nobody threatening is.
+// Every other rampart stays closed. A threat is a non-ally that is armed or has WORK (the
+// definition of utils/hostiles, Invader included) or CLAIM (it could take the controller):
+// closing is immediate, and a handful of intents (~0.2 CPU each) at most.
+const SWEEP_TICKS = 60;
+const swept = {};
+
+function roomState(room) {
+    let allies = 0;
+    const foreign = roomCache.foreignCreeps(room);
+    for (let i = 0; i < foreign.length; i++) {
+        const creep = foreign[i];
+        const name = creep.owner && creep.owner.username;
+        if (isAlly(name)) {
+            allies++;
+        } else if (isHostile(creep, room) || bodyInfo(creep).parts[CLAIM]) {
+            return { allies, threat: true };
+        }
     }
-    if (!cache[room.name]) {
-        cache[room.name] = room.find(FIND_HOSTILE_CREEPS, {
-            filter: (c) => c.owner && isAlly(c.owner.username),
-        });
-    }
-    return cache[room.name];
+    return { allies, threat: false };
 }
 
 var rampart = {
-    /** @param {StructureRampart} rampart **/
-    run: function (rampart) {
-        const allies = alliesIn(rampart.room);
+    /** @param {Room} room **/
+    runRoom: function (room) {
+        const { allies, threat } = roomState(room);
+        const open = allies > 0 && !threat;
+        const info = rampartGates.ensure(room);
 
-        let open = false;
-        if (allies.length && rampart.pos.findInRange(allies, 1).length) {
-            // don't open the wall if a real hostile is also standing right there
-            const enemies = getHostiles(rampart.room);
-            open =
-                !enemies.length ||
-                rampart.pos.findInRange(enemies, 2).length === 0;
+        const start = Game.cpu.getUsed();
+        let toggled = 0;
+        for (let i = 0; i < info.ids.length; i++) {
+            const gate = Game.getObjectById(info.ids[i]);
+            if (gate && open !== !!gate.isPublic) {
+                gate.setPublic(open);
+                toggled++;
+            }
         }
 
-        if (open !== !!rampart.isPublic) {
-            rampart.setPublic(open);
+        // Anything public that is not a gate (left by the old per-rampart logic, or by a gate that
+        // moved): closed once after a reset, when the gate set changes, and every SWEEP_TICKS.
+        if (info.dirty || cadence.due(swept[room.name], SWEEP_TICKS)) {
+            const isGate = {};
+            info.ids.forEach((id) => { isGate[id] = true; });
+            const ramparts = rampartGates.rampartsOf(room);
+            for (let i = 0; i < ramparts.length; i++) {
+                if (ramparts[i].isPublic && !isGate[ramparts[i].id]) {
+                    ramparts[i].setPublic(false);
+                    toggled++;
+                }
+            }
+            info.dirty = false;
+            swept[room.name] = Game.time;
         }
+        if (toggled) cpuMeter.record("spans", "rampart.toggle", Game.cpu.getUsed() - start);
     },
+};
+
+rampart.resetSweep = function () {
+    Object.keys(swept).forEach((name) => { delete swept[name]; });
 };
 
 module.exports = rampart;

@@ -186,9 +186,16 @@ function isHot(roomName, x, y, threshold) {
 //     or a road the plan doesn't reserve) the old rule still holds: repair
 //     only a tile with recent traffic, and leave a cold, unused road to
 //     decay/disappear instead of burning builder/tower energy on it.
+let roadFloorTick = -1;
+let roadFloor = 0.4;
 function worthRepairing(structure) {
     if (structure.structureType !== STRUCTURE_ROAD) return true;
-    const floor = config.get("traffic.roadRepairFloor", 0.4);
+    // read once a tick: called per road, per candidate list (3x), each tick
+    if (roadFloorTick !== Game.time) {
+        roadFloorTick = Game.time;
+        roadFloor = config.get("traffic.roadRepairFloor", 0.4);
+    }
+    const floor = roadFloor;
     if (structure.hits / structure.hitsMax >= floor) return false;
 
     const planned = planEntriesAt(

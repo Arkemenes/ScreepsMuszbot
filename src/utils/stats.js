@@ -2,6 +2,7 @@
 
 const roomCache = require("./roomCache");
 const config = require("./config");
+const cpuMeter = require("./cpuMeter");
 const energyLedger = require("./energyLedger");
 const resourceTiers = require("./resourceTiers");
 const market = require("./market");
@@ -77,9 +78,31 @@ function minerals(room) {
 }
 
 function exportStats() {
+    // Grafana samples Memory.stats once a minute (60 ticks), so rebuilding the whole
+    // object every tick (~0.9 CPU/tick, 2026-10-03) published numbers nobody read.
+    // Between publishes the last object stays as is, except what a dashboard reads as a
+    // live gauge: cpu.used/bucket/limit follow every tick (held for 60 ticks, the global
+    // reset tick - the costliest one, ~50 CPU of module loading - showed as the CPU
+    // level of the next 3 minutes), and a freshly closed CPU-meter window is hung on it at
+    // once. The first call after a global reset always publishes (marks persistent.lastGlobalReset).
+    const interval = Math.max(1, Number(config.get("stats.publishInterval", 60)) || 60);
+    const last = Memory.stats && Memory.stats.time;
+    if (interval > 1 && globalResetSeen && last !== undefined && Game.time >= last && Game.time - last < interval) {
+        const fresh = cpuMeter.snapshot();
+        if (Memory.stats.cpu) {
+            Memory.stats.cpu.bucket = Game.cpu.bucket;
+            Memory.stats.cpu.limit = Game.cpu.limit;
+            Memory.stats.cpu.used = Game.cpu.getUsed();
+            if (fresh && Memory.stats.cpu.meter !== fresh) Memory.stats.cpu.meter = fresh;
+        }
+        return;
+    }
     // persistent.* has to survive this tick's full Memory.stats.rooms/gcl/cpu
     // wipe below - it's the one section whose whole point is to outlive resets.
     const previousPersistent = (Memory.stats && Memory.stats.persistent) || {};
+    // the CPU meter publishes a window every N ticks; between a global reset and the
+    // first window the last published one is kept instead of leaving a gap in Grafana
+    const previousMeter = Memory.stats && Memory.stats.cpu && Memory.stats.cpu.meter;
 
     // Reset stats object
     Memory.stats = {
@@ -198,6 +221,8 @@ function exportStats() {
     Memory.stats.cpu.bucket = Game.cpu.bucket;
     Memory.stats.cpu.limit = Game.cpu.limit;
     Memory.stats.cpu.used = Game.cpu.getUsed();
+    const meter = cpuMeter.snapshot() || previousMeter;
+    if (meter) Memory.stats.cpu.meter = meter;
 }
 
 module.exports = exportStats;

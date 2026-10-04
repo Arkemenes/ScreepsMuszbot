@@ -9,38 +9,44 @@ const census = require("../utils/census");
 const roomCache = require("../utils/roomCache");
 const { takeCover } = require("../utils/combat");
 const names = require("../utils/names");
+const config = require("../utils/config");
 
 // The mineral, its extractor (mining is impossible without one), and its
 // container (architect.js's job to plant both - this role never builds).
 function mineralSite(room) {
     const mineral = roomCache.minerals(room)[0];
     if (!mineral) return {};
-    const extractor = mineral.pos.findInRange(FIND_STRUCTURES, 0, {
-        filter: (s) => s.structureType === STRUCTURE_EXTRACTOR,
-    })[0];
-    const container = mineral.pos.findInRange(FIND_STRUCTURES, 1, {
-        filter: (s) => s.structureType === STRUCTURE_CONTAINER,
-    })[0];
+    // from the per-tick cached structure lists - pos.findInRange ran a Room.find (+ filter) per call
+    const extractor = roomCache.structuresNear(room, mineral.pos, STRUCTURE_EXTRACTOR, 0)[0];
+    const container = roomCache.structuresNear(room, mineral.pos, STRUCTURE_CONTAINER, 1)[0];
     return { mineral, extractor, container };
 }
 
-// As many WORK as the room can afford right now, capped - a mineral doesn't
-// need the aggressive body scaling roles/miner.js does for a source (no
-// replacement-timing race, regeneration is slow enough that one extra tick
-// of downtime is irrelevant).
-function body(room) {
-    const workCost = BODYPART_COST[WORK];
-    const moveCost = BODYPART_COST[MOVE];
-    const affordable = Math.floor(
-        (room.energyCapacityAvailable - moveCost) / workCost
-    );
-    const n = Math.max(1, Math.min(8, affordable || 1));
-    const b = [MOVE];
-    for (let i = 0; i < n; i++) b.push(WORK);
+// ROADMAP 0114: sized to deplete the deposit in roughly one life (units per
+// creep = live * WORK / harvest cooldown), clamped - a bigger body only mines
+// faster, it doesn't lower the energy per unit (~0.4), and past ~12 WORK a
+// LOW/MODERATE deposit gains nothing (regen is the limit). Never CARRY: the
+// overflow drops into the container underneath. MOVE ~ WORK/5 so it can
+// actually walk to the seat.
+function body(room, amount) {
+    const live = config.get("mineralMiner.lifeBudget", 1400);
+    const minWork = config.get("mineralMiner.minWork", 4);
+    const maxWork = config.get("mineralMiner.maxWork", 12);
+    const cooldown = typeof EXTRACTOR_COOLDOWN !== "undefined" ? EXTRACTOR_COOLDOWN : 5;
+    let work = Math.ceil((cooldown * (amount || 0)) / live);
+    work = Math.max(minWork, Math.min(maxWork, work));
+
+    const cost = (w) => w * BODYPART_COST[WORK] + Math.max(1, Math.ceil(w / 5)) * BODYPART_COST[MOVE];
+    while (work > 1 && cost(work) > room.energyCapacityAvailable) work--;
+
+    const b = [];
+    for (let i = 0; i < Math.max(1, Math.ceil(work / 5)); i++) b.push(MOVE);
+    for (let i = 0; i < work; i++) b.push(WORK);
     return b;
 }
 
 const mineralMiner = {
+    body,
     run(creep) {
         if (takeCover(creep)) return;
 
@@ -50,9 +56,7 @@ const mineralMiner = {
             return;
         }
 
-        const container = mineral.pos.findInRange(FIND_STRUCTURES, 1, {
-            filter: (s) => s.structureType === STRUCTURE_CONTAINER,
-        })[0];
+        const container = roomCache.structuresNear(creep.room, mineral.pos, STRUCTURE_CONTAINER, 1)[0];
         const seat = container ? container.pos : mineral.pos;
 
         if (!creep.pos.isEqualTo(seat)) {
@@ -69,7 +73,10 @@ const mineralMiner = {
     wanted(room) {
         const { mineral, extractor, container } = mineralSite(room);
         if (!mineral || !extractor || !container) return 0;
-        if (mineral.mineralAmount <= 0) return 0;
+        // ROADMAP 0114: below this a fresh creep idles most of its life for a
+        // few units (200 left = 9% busy, 4.5 energy/unit; 2000 = 89%, 0.45).
+        // A creep already on the deposit finishes it - this only gates a spawn.
+        if (mineral.mineralAmount < config.get("mineralMiner.minAmount", 2000)) return 0;
         if (container.store.getFreeCapacity() === 0) return 0;
         return 1;
     },
@@ -85,7 +92,7 @@ const mineralMiner = {
         const { mineral } = mineralSite(room);
         return {
             name: names.generate("mineralMiner"),
-            body: body(room),
+            body: body(room, mineral && mineral.mineralAmount),
             memory: { role: "mineralMiner", target: mineral && mineral.id },
         };
     },

@@ -34,6 +34,7 @@ global.help = function () {
                 ["addAlly(name)", "adiciona um jogador à lista de aliados"],
                 ["removeAlly(name)", "remove um jogador da lista de aliados"],
                 ["listAlly()", "lista os aliados atuais"],
+                ["rampartGates()", "mostra, por sala própria, as ramparts-portão calculadas: as poucas que um aliado atravessando a sala (de uma saída a outra) precisa pisar quando todo caminho passa por rampart; elas abrem enquanto há aliado e nenhum hostil/claimer na sala, as demais ficam sempre fechadas. 0 portões = o aliado passa por fora da muralha"],
             ],
         },
         {
@@ -108,9 +109,15 @@ global.help = function () {
                 ["terminalBuy(roomName, resourceType, amount, maxUnitPrice, createListing=false)", "compra pelas SELL orders de menor custo líquido dentro do teto; sem candidato, só espera/retenta, a menos que createListing:true liste o saldo restante"],
                 ["terminalSell(roomName, resourceType, amount, minUnitPrice, createListing=false)", "vende pelas BUY orders de maior retorno líquido acima do piso; sem candidato, só espera/retenta, a menos que createListing:true liste o saldo restante"],
                 ["terminalOperations()", "lista as operações de terminal persistentes e seus estados"],
+                ["terminalOperation(id)", "mostra uma operação de terminal só (estado, limite, erro e, se não vende, o último motivo em noCandidate: melhor ordem, preço, custo de entrega)"],
                 ["cancelTerminalOperation(id)", "cancela a operação; uma ordem pública gerenciada pelo bot também é cancelada"],
                 ["marketFlipStatus()", "modo atual (test/live), tick do último scan, oportunidades encontradas e flips ativos do arbitrador automático (ROADMAP 0110)"],
                 ["marketFlipStats()", "contadores acumulados do arbitrador automático: flips concluídos, lucro líquido total, cancelamentos por stall guard, bloqueios por guardrail"],
+                ["craftStatus()", "modo (test/live), candidatos de fabricação (factory/lab) com custo, receita, margem e T, motivos de descarte por guardrail e disjuntores (ROADMAP 0111)"],
+                ["craftScan()", "força um scan de fabricação no próximo tick, sem esperar craft.scanInterval (ainda respeita craft.minBucket) (ROADMAP 0111)"],
+                ["craftConfig(all=false)", "mostra os ajustes craft.* sobrescritos em Memory.settings (valor efetivo x padrão); com true mostra todos (ROADMAP 0111)"],
+                ["craftReplan(roomName?)", "refaz, com a estratégia de lab atual (craft.labStrategy), as etapas ainda NÃO iniciadas das cadeias de lab em andamento (cadeias abertas antes da estratégia larga mantêm a fila antiga); a etapa que já roda termina como está e nada fica preso no lugar. Sem argumento, todas as salas (ROADMAP 0116)"],
+                ["craftCancel(roomName)", "aborta a cadeia de fabricação ativa da sala: cancela ordens abertas, libera créditos e flags; os insumos já comprados ficam em estoque (ROADMAP 0111)"],
             ],
         },
         {
@@ -118,7 +125,8 @@ global.help = function () {
             commands: [
                 ["findCreeps(role)", "lista nome e sala de todo creep vivo desse role, no império inteiro"],
                 ["GCStructureMemory()", "limpa Memory.structures de estruturas que não existem mais (rodar de vez em quando, ex.: a cada 10k ticks)"],
-                ["profile(ticks=100)", "liga o profiler (screeps-profiler) por N ticks, imprime o relatório de calls/tempo/média por função sozinho no fim e desliga o profiler de novo - não precisa mexer em Memory.settings.profiler na mão"],
+                ["profile(ticks=100)", "liga o profiler por função por N ticks (L2 do medidor de CPU, ROADMAP 0113); no fim imprime o relatório de calls/tempo/média por função e a tabela do cpuTop da mesma janela, publica o top 15 por tempo próprio em Memory.stats.cpu.meter.fns (Grafana) e DESINSTALA todos os embrulhos - sem custo residual. Não precisa mexer em Memory.settings.profiler na mão"],
+                ["cpuTop(n=15)", "imprime o CPU da janela em andamento por módulo, role, tipo de estrutura e span nomeado (cpuTop(0) imprime e reinicia a janela). Os mesmos números saem em Memory.stats.cpu.meter a cada stats.cpuWindowTicks (60) ticks e vão para o Grafana"],
                 ["moveStats(true/false)", "TEMPORARY (investigação de CPU) - liga/desliga o tally por role de por que utils/move.js repathou (ou não) no último tick"],
                 ["moveStats()", "imprime o tally do último tick fechado"],
                 ["builderStats(true/false)", "TEMPORARY (investigação de CPU) - liga/desliga a medição do CPU próprio de opportunisticWork() por tick"],

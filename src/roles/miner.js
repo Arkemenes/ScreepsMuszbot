@@ -7,13 +7,13 @@ const config = require("../utils/config");
 const names = require("../utils/names");
 const planStore = require("../utils/planStore");
 const hauler = require("./hauler");
+const roomCache = require("../utils/roomCache");
+const cpuMeter = require("../utils/cpuMeter");
 
 // Containers adjacent to the source, and the first one no other miner sits on.
 function findContainerSeat(creep, source) {
     const containers = source
-        ? source.pos.findInRange(FIND_STRUCTURES, 1, {
-              filter: (s) => s.structureType === STRUCTURE_CONTAINER,
-          })
+        ? roomCache.structuresNear(creep.room, source.pos, STRUCTURE_CONTAINER, 1)
         : [];
     const seat = _.find(containers, (container) => {
         const occupant = container.pos.lookFor(LOOK_CREEPS)[0];
@@ -95,30 +95,66 @@ function moveToSeat(creep, target) {
     }
 }
 
+// ROADMAP 0114: efficient frontier of the miner body (grid search in
+// specs/features/0114-consolidated-miner/simulate-grid.js). More WORK = fewer
+// harvest intents per source cycle; CARRY = fewer transfer intents. The room
+// takes the biggest rung its energy capacity pays for - a RCL7 room that
+// doesn't have all its extensions yet just lands on a lower rung. `carry` is
+// the CARRY count used when the miner has something to feed (link / tower).
+const BODY_LADDER = [
+    { work: 15, move: 3, carry: 4 },
+    { work: 12, move: 3, carry: 3 },
+    { work: 10, move: 2, carry: 3 },
+    { work: 8, move: 2, carry: 2 },
+    { work: 6, move: 1, carry: 2 },
+    { work: 5, move: 1, carry: 1 },
+];
+
+function ladderBody(rung, withCarry) {
+    const carry = withCarry ? rung.carry : 0;
+    const body = [];
+    for (let i = 0; i < rung.move; i++) body.push(MOVE);
+    for (let i = 0; i < rung.work; i++) body.push(WORK);
+    for (let i = 0; i < carry; i++) body.push(CARRY);
+    return body;
+}
+
+function bodyCost(body) {
+    return _.sum(body, (p) => BODYPART_COST[p]);
+}
+
+// Biggest ladder body that costs <= budget, or null when even the smallest
+// rung is out of reach.
+function bodyForBudget(budget, withCarry) {
+    const rung = _.find(
+        BODY_LADDER,
+        (r) => bodyCost(ladderBody(r, withCarry)) <= budget
+    );
+    return rung ? ladderBody(rung, withCarry) : null;
+}
+
 // The body a fresh miner would get right now.
 function minerBody(room) {
-    const extensions = room.find(FIND_MY_STRUCTURES, {
-        filter: { structureType: STRUCTURE_EXTENSION },
-    }).length;
+    const extensions = _.filter(
+        roomCache.myStructures(room),
+        (s) => s.structureType === STRUCTURE_EXTENSION
+    ).length;
     const miners = census.creepsByRole(room.name, "miner").length;
 
-    let body = [MOVE, WORK, WORK, WORK, WORK, WORK];
-    if (
-        !isRoomStable(room) ||
-        extensions < 5 ||
-        (miners === 0 && room.energyAvailable < 550)
-    ) {
-        body = [MOVE, WORK, WORK];
-    }
     // A CARRY part lets the miner steer its output into the link / adjacent
     // towers / the container instead of only dropping the overflow.
-    if (
+    const withCarry =
         hasLinkNetwork(room) ||
-        (room.controller && room.controller.level >= 3)
-    ) {
-        body.push(CARRY);
-    }
-    return body;
+        (room.controller && room.controller.level >= 3);
+    const mini = withCarry ? [MOVE, WORK, WORK, CARRY] : [MOVE, WORK, WORK];
+
+    if (!isRoomStable(room) || extensions < 5) return mini;
+
+    // No miner alive: nothing earns the energy a big body waits for, so size
+    // it to what is in the spawn right now (the top-up path of 0112's fallback).
+    const budget =
+        miners === 0 ? room.energyAvailable : room.energyCapacityAvailable;
+    return bodyForBudget(budget, withCarry) || mini;
 }
 
 // Where a miner assigned to this source ends up sitting.
@@ -193,7 +229,7 @@ function replacementLeadTime(room, source) {
     const body = minerBody(room);
     const spawnTicks = body.length * CREEP_SPAWN_TIME;
 
-    const spawn = room.find(FIND_MY_SPAWNS)[0];
+    const spawn = roomCache.mySpawns(room)[0];
     let travelTicks = 150;
     if (spawn) {
         const t = pathTravelTicks(
@@ -264,6 +300,16 @@ function hasDepositTarget(creep, near) {
     return false;
 }
 
+// Energy a miner harvests per tick (WORK parts x HARVEST_POWER), worked out once from its
+// body: the body never changes, but counting it each tick is wasted work.
+function harvestPerTick(creep) {
+    if (typeof creep.memory.hRate !== "number") {
+        const power = typeof HARVEST_POWER !== "undefined" ? HARVEST_POWER : 2;
+        creep.memory.hRate = _.filter(creep.body, (p) => p.type === WORK).length * power;
+    }
+    return creep.memory.hRate;
+}
+
 // Move the miner's output onward. The hauler never tops off a source-defense
 // tower (hauler.js pickDeliver skips it - see isSourceDefenseTower there), so
 // keeping it at its reserve level is this miner's unconditional priority,
@@ -272,7 +318,14 @@ function hasDepositTarget(creep, near) {
 // (buffers full, or spawn/ext already fed) so it doesn't rob creep production
 // for the last few percent. Order: tower to reserve -> collector link ->
 // container -> top the tower off (surplus only).
-function distribute(creep, near) {
+// `drain` (ROADMAP 0117): the source is empty and waiting to regenerate, so the
+// miner is idle - use that window to empty its own store AND the container into
+// the link / tower, without waiting for a full load or a container backlog.
+function distribute(creep, near, drain) {
+    return cpuMeter.span("miner.distribute", () => distributeNow(creep, near, drain));
+}
+
+function distributeNow(creep, near, drain) {
     // no CARRY -> nothing to forward (overflow drops straight into the container)
     if (creep.store.getCapacity(RESOURCE_ENERGY) === 0) return;
 
@@ -305,25 +358,54 @@ function distribute(creep, near) {
         (s) => s.structureType === STRUCTURE_TOWER && s.my
     );
 
+    // Every game action costs ~0.2 CPU whatever the code around it does (profile
+    // 2026-10-02: the role's own logic was ~0.06 per miner, its harvest + withdraw +
+    // transfer every tick ~0.6). So the output goes onward in full loads: only when the
+    // next harvest would no longer fit (or the miner is about to die), and the container
+    // is only drained into the store when it has built up a backlog. Same energy, a
+    // fifth of the actions. miner.batchTransfer = false restores the every-tick loop.
+    const batch = config.get("miner.batchTransfer", true);
+    const free = creep.store.getFreeCapacity(RESOURCE_ENERGY);
+
+    // someone adjacent that takes the energy onward (the container itself does not
+    // count: pulling from it to put it back is pointless). Only asked while draining.
+    const feedTower = drain && hauler.shouldMinerFeedTower(creep.room, tower);
+    const taker = drain ? !!(link || feedTower) : !!(link || tower);
+
     // pull adjacent drops / container overflow into the store so it can be
     // forwarded (only useful when a link or a hungry tower is next to us)
-    if (
-        creep.store.getFreeCapacity(RESOURCE_ENERGY) > 0 &&
-        (link || tower)
-    ) {
-        const dropped = creep.pos.findInRange(FIND_DROPPED_RESOURCES, 1, {
-            filter: (r) => r.resourceType === RESOURCE_ENERGY,
-        })[0];
+    if (free > 0 && taker) {
+        // a pile on the ground decays, so it is always picked up; container energy
+        // only when it is a backlog the haulers are not keeping up with
+        const dropped = _.find(
+            roomCache.droppedResources(creep.room),
+            (r) =>
+                r.resourceType === RESOURCE_ENERGY &&
+                Math.abs(r.pos.x - creep.pos.x) <= 1 &&
+                Math.abs(r.pos.y - creep.pos.y) <= 1
+        );
         if (dropped) {
             creep.pickup(dropped);
-        } else if (container && container.store[RESOURCE_ENERGY] > 0) {
+        } else if (
+            container &&
+            container.store[RESOURCE_ENERGY] > 0 &&
+            (drain || !batch || container.store[RESOURCE_ENERGY] >= config.get("miner.pullBacklog", 500))
+        ) {
             creep.withdraw(container, RESOURCE_ENERGY);
         }
     }
 
     if (creep.store[RESOURCE_ENERGY] === 0) return;
+    if (
+        batch &&
+        !drain &&
+        free >= harvestPerTick(creep) &&
+        !(creep.ticksToLive !== undefined && creep.ticksToLive <= 2)
+    ) {
+        return; // room for another harvest: keep filling
+    }
 
-    if (hauler.shouldMinerFeedTower(creep.room, tower)) {
+    if (drain ? feedTower : hauler.shouldMinerFeedTower(creep.room, tower)) {
         creep.transfer(tower, RESOURCE_ENERGY);
     } else if (link) {
         creep.transfer(link, RESOURCE_ENERGY);
@@ -417,7 +499,9 @@ var miner = {
 
         // don't mine into a full container with nobody else to feed - it
         // would just spill on the ground and decay away for nothing
-        const near = creep.pos.findInRange(FIND_STRUCTURES, 1);
+        // cached room list + coordinate check: the native call scanned every structure
+        // of the room, once per miner per tick (~1800 inRangeTo/tick in the profile)
+        const near = roomCache.structuresInRange(creep.room, creep.pos, 1);
         if (hasDepositTarget(creep, near)) {
             if (creep.harvest(source) === ERR_NOT_IN_RANGE && !seekingSeat) {
                 creep.memory.onContainer = false;
@@ -426,8 +510,10 @@ var miner = {
         }
 
         // --- distribute what we mined -----------------------------------
-        distribute(creep, near);
+        // ROADMAP 0117: nothing left to harvest -> empty the container and the store
+        distribute(creep, near, !!source && source.energy === 0);
     },
+    bodyForBudget: bodyForBudget,
     // rough headcount for the population heuristic; the real per-source timing
     // lives in spawn() below
     wanted: function (room) {
@@ -445,6 +531,20 @@ var miner = {
                 return true;
             }
         }
+    },
+    // ROADMAP 0112: "first" while no source has any WORK left that outlives a
+    // replacement's travel (the economy is dead without it), "rest" for any
+    // further miner. rooms/spawning.js uses it to rank the first miner ahead
+    // of the first hauler and the rest behind it.
+    spawnTier: function (room) {
+        const roomMiners = census.creepsByRole(room.name, "miner");
+        for (const source of room.find(FIND_SOURCES)) {
+            const lead = replacementLeadTime(room, source);
+            if (liveWorkForSource(roomMiners, source.id, lead) > 0) {
+                return "rest";
+            }
+        }
+        return "first";
     },
     // returns an object with the data to spawn a new creep
     spawnData: function (room) {

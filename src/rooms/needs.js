@@ -7,6 +7,7 @@ const roomCache = require("../utils/roomCache");
 const { hasLinkNetwork } = require("../utils/energy");
 const remotes = require("./remotes");
 const config = require("../utils/config");
+const cpuMeter = require("../utils/cpuMeter");
 const observer = require("../utils/observer");
 const pioneering = require("./pioneering");
 const autoscale = require("../utils/autoscale");
@@ -55,12 +56,14 @@ global.setWanted = function (roomName, role, count) {
     if (!Memory.rooms[roomName]) Memory.rooms[roomName] = {};
     if (!Memory.rooms[roomName].wantedOverride) Memory.rooms[roomName].wantedOverride = {};
     Memory.rooms[roomName].wantedOverride[role] = count;
+    invalidate(roomName);
     console.log(`[needs] ${roomName}: ${role} override -> ${count}`);
 };
 
 global.clearWanted = function (roomName, role) {
     const mem = Memory.rooms[roomName];
     if (!mem || !mem.wantedOverride) return;
+    invalidate(roomName);
     if (role) {
         delete mem.wantedOverride[role];
         console.log(`[needs] ${roomName}: override de ${role} removido`);
@@ -90,7 +93,14 @@ global.listWanted = function (roomName) {
 function sourceContainers(room) {
     return _.filter(
         roomCache.structuresByType(room, STRUCTURE_CONTAINER),
-        (c) => c.pos.findInRange(FIND_SOURCES, 1).length > 0
+        (c) => nearSource(room, c)
+    );
+}
+
+// A container within range 1 of an energy source (cached source list, no native find per container).
+function nearSource(room, container) {
+    return roomCache.sources(room).some(
+        (src) => Math.abs(src.pos.x - container.pos.x) <= 1 && Math.abs(src.pos.y - container.pos.y) <= 1
     );
 }
 
@@ -101,13 +111,13 @@ function pickableEnergy(room) {
     if (room.storage && room.storage.store) {
         e += room.storage.store[RESOURCE_ENERGY] || 0;
     }
-    for (const r of room.find(FIND_DROPPED_RESOURCES)) {
+    for (const r of roomCache.droppedResources(room)) {
         if (r.resourceType === RESOURCE_ENERGY) e += r.amount;
     }
-    for (const t of room.find(FIND_TOMBSTONES)) {
+    for (const t of roomCache.tombstones(room)) {
         e += (t.store && t.store[RESOURCE_ENERGY]) || 0;
     }
-    for (const ruin of room.find(FIND_RUINS)) {
+    for (const ruin of roomCache.ruins(room)) {
         e += (ruin.store && ruin.store[RESOURCE_ENERGY]) || 0;
     }
     for (const s of roomCache.structures(room)) {
@@ -132,15 +142,9 @@ function pickableEnergy(room) {
 function mineralOperationActive(room) {
     const mineral = roomCache.minerals(room)[0];
     if (!mineral || mineral.mineralAmount <= 0) return false;
-    const extractor = mineral.pos.findInRange(FIND_STRUCTURES, 0, {
-        filter: (s) => s.structureType === STRUCTURE_EXTRACTOR,
-    })[0];
+    const extractor = roomCache.structuresNear(room, mineral.pos, STRUCTURE_EXTRACTOR, 0)[0];
     if (!extractor) return false;
-    return (
-        mineral.pos.findInRange(FIND_STRUCTURES, 1, {
-            filter: (s) => s.structureType === STRUCTURE_CONTAINER,
-        }).length > 0
-    );
+    return roomCache.structuresNear(room, mineral.pos, STRUCTURE_CONTAINER, 1).length > 0;
 }
 
 function pressuredOutputHaulerFloor(room, currentHaulers) {
@@ -343,7 +347,7 @@ function compute(room) {
     const ctrl = room.controller;
     const rcl = ctrl && ctrl.my ? ctrl.level : 0;
 
-    const sources = room.find(FIND_SOURCES).length;
+    const sources = roomCache.sources(room).length;
     const srcContainers = sourceContainers(room);
     const containers = srcContainers.length;
     const links = hasLinkNetwork(room);
@@ -608,13 +612,31 @@ function compute(room) {
     return wanted;
 }
 
+// The headcount a room wants moves slowly (RCL, structures, stock levels), but compute()
+// costs ~0.3 CPU per room and was redone every tick (profile 2026-10-02: ~1 CPU/tick for
+// 3 rooms). The result is kept needs.cacheTicks ticks (0/1 = every tick, as before). A
+// room under attack is never served from the cache: defenders must follow the threat.
 function roomNeeds(room) {
     if (builtTick !== Game.time) {
         builtTick = Game.time;
         cache = {};
     }
-    if (!cache[room.name]) cache[room.name] = compute(room);
-    return cache[room.name];
+    if (cache[room.name]) return cache[room.name];
+    const ttl = Number(config.get("needs.cacheTicks", 5)) || 1;
+    const mem = Memory.rooms && Memory.rooms[room.name];
+    const hit = heapNeeds[room.name];
+    if (hit && ttl > 1 && Game.time >= hit.tick && Game.time - hit.tick < ttl && !(mem && mem.defenseActive)) {
+        return (cache[room.name] = hit.value);
+    }
+    const value = cpuMeter.span("needs.compute", () => compute(room));
+    heapNeeds[room.name] = { tick: Game.time, value };
+    return (cache[room.name] = value);
+}
+const heapNeeds = {};
+// Console overrides take effect at once, not after the cache window.
+function invalidate(roomName) {
+    delete heapNeeds[roomName];
+    delete cache[roomName];
 }
 
-module.exports = { roomNeeds, pressuredOutputHaulerFloor };
+module.exports = { roomNeeds, pressuredOutputHaulerFloor, invalidate };

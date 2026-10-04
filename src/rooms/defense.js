@@ -26,11 +26,12 @@
 const config = require("../utils/config");
 const combat = require("../utils/combat");
 const roomCache = require("../utils/roomCache");
+const { bodyInfo } = require("../utils/hostiles");
 
 // A hostile creep's own attack reach: RANGED_ATTACK connects at 3, ATTACK
 // (or anything armed without ranged) only at 1.
 function attackReach(hostile) {
-    return _.some(hostile.body, (p) => p.type === RANGED_ATTACK)
+    return bodyInfo(hostile).parts[RANGED_ATTACK]
         ? combat.KITE_RANGE
         : 1;
 }

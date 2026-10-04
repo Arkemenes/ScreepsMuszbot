@@ -2,6 +2,8 @@ const { receivingLink, energyPiles } = require("../utils/energy");
 const { scaledBody } = require("../utils/population");
 const census = require("../utils/census");
 const roomCache = require("../utils/roomCache");
+const damaged = require("../utils/damagedStructures");
+const cpuMeter = require("../utils/cpuMeter");
 const { takeCover } = require("../utils/combat");
 const { roomNeeds } = require("../rooms/needs");
 const reservations = require("../utils/reservations");
@@ -88,23 +90,11 @@ global.clearBuildPriority = function () {
 // permanently unrepaired at critical HP until it decayed and vanished
 // (user-reported, 2026-09). A structure that physically exists and is
 // dying is worth repairing regardless of whether the plan still wants it.
-let criticalTick = -1;
-let criticalCache = {};
+// The critical list is the leading run of the shared per-room damaged list
+// (utils/damagedStructures: scanned every 5 ticks, sorted once a tick, shared with the
+// tower) - it used to be a filter + tier() over every structure of the room, every tick.
 function criticalRepairCandidates(room) {
-    if (criticalTick !== Game.time) {
-        criticalTick = Game.time;
-        criticalCache = {};
-    }
-    if (!criticalCache[room.name]) {
-        criticalCache[room.name] = _.filter(
-            roomCache.structures(room),
-            (s) =>
-                s.structureType !== STRUCTURE_CONTROLLER &&
-                traffic.worthRepairing(s) &&
-                rampartRepair.tier(s) === "critical"
-        );
-    }
-    return criticalCache[room.name];
+    return damaged.critical(room);
 }
 
 // While carrying energy, do a repair on anything critical within work range
@@ -117,12 +107,30 @@ function criticalRepairCandidates(room) {
 // walking for everything else. When the creep is in range of its actual
 // target the state machine's own build/repair runs afterwards and takes
 // over.
+// Same result as creep.pos.findInRange(list, range) for a list of objects, but with a
+// plain coordinate check: the native call runs RoomPosition.inRangeTo once per
+// candidate, and a room's "critical" list is long (profile 2026-10-02: ~1500
+// inRangeTo calls per tick, ~1.2 CPU, all from this function).
+function inRangeOf(creep, list, range) {
+    const pos = creep.pos;
+    const out = [];
+    for (let i = 0; i < list.length; i++) {
+        const p = list[i].pos;
+        if (p.roomName === pos.roomName && Math.abs(p.x - pos.x) <= range && Math.abs(p.y - pos.y) <= range) out.push(list[i]);
+    }
+    return out;
+}
+
 function opportunisticWork(creep) {
+    return cpuMeter.span("builder.opportunistic", () => opportunisticWorkNow(creep));
+}
+
+function opportunisticWorkNow(creep) {
     if (creep.store[RESOURCE_ENERGY] === 0) return;
 
     // when several are in range, take the one closest to full / finished
     const hurt = _.sortBy(
-        creep.pos.findInRange(criticalRepairCandidates(creep.room), 3),
+        inRangeOf(creep, criticalRepairCandidates(creep.room), 3),
         (s) => -(s.hits / s.hitsMax)
     )[0];
     if (hurt) {
@@ -135,7 +143,7 @@ function opportunisticWork(creep) {
 
     if (resourceTiers.getEconomySnapshot(creep.room).state !== "critical") {
         const site = _.sortBy(
-            creep.pos.findInRange(roomCache.constructionSites(creep.room), 3),
+            inRangeOf(creep, roomCache.constructionSites(creep.room), 3),
             (s) => -(s.progress / s.progressTotal)
         )[0];
         if (site) {
@@ -153,25 +161,17 @@ function opportunisticWork(creep) {
 // state. Not gated on isPlanned either, same reasoning as
 // criticalRepairCandidates above - a structure that exists is worth
 // repairing whether or not the plan still reserves that tile for it.
-let repairTick = -1;
-let repairCache = {};
 function builderRepairTargets(room) {
-    if (repairTick !== Game.time) {
-        repairTick = Game.time;
-        repairCache = {};
-    }
-    if (!repairCache[room.name]) {
-        const filtered = _.filter(
-            roomCache.structures(room),
-            (s) =>
-                s.structureType != STRUCTURE_CONTROLLER &&
-                s.hits < s.hitsMax &&
-                traffic.worthRepairing(s) &&
-                rampartRepair.builderMayRepair(s, room)
-        );
-        repairCache[room.name] = _.sortBy(filtered, rampartRepair.priority);
-    }
-    return repairCache[room.name];
+    return cpuMeter.span("builder.repairList", () => {
+        // same order as the tower's list, minus what this room's storage gates keep a builder
+        // from repairing (sorting first and filtering after keeps the order)
+        const list = damaged.sorted(room);
+        const out = [];
+        for (let i = 0; i < list.length; i++) {
+            if (rampartRepair.builderMayRepair(list[i], room)) out.push(list[i]);
+        }
+        return out;
+    });
 }
 
 // --- TEMPORARY diagnostic (CPU investigation, 2026-09) - gated behind
@@ -261,9 +261,9 @@ var builder = {
             const eligiblePiles = linkSafe
                 ? piles
                 : _.filter(piles, (p) => p.structureType !== STRUCTURE_LINK);
-            const pile = creep.pos.findClosestByPath(
+            const pile = cpuMeter.span("builder.pickPile", () => creep.pos.findClosestByPath(
                 reservations.usable(creep, eligiblePiles)
-            );
+            ));
             if (pile) {
                 reservations.claim(creep, pile.id);
                 creep.pushState("GetEnergy", pile.id);

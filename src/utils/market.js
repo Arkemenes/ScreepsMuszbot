@@ -1,4 +1,6 @@
 const config = require("./config");
+const orderBook = require("./orderBook");
+const cadence = require("./cadence");
 const marketHistory = require("./marketHistoryStore");
 
 let lastCurrentScanTick = null;
@@ -30,7 +32,13 @@ function resourceTypes() {
     return types;
 }
 
+// The grouping of the book is kept for the array it was built from: market.scan and
+// marketFlip.scan run on the same tick over the same shared book (utils/orderBook), and each
+// regrouped thousands of orders. Callers only read the groups.
+let groupedFor = null;
+let groupedResult = null;
 function groupOrders(orders) {
+    if (orders === groupedFor && groupedResult) return groupedResult;
     const grouped = {};
     if (!Array.isArray(orders)) return grouped;
     for (const order of orders) {
@@ -38,6 +46,8 @@ function groupOrders(orders) {
         if (!grouped[order.resourceType]) grouped[order.resourceType] = [];
         grouped[order.resourceType].push(order);
     }
+    groupedFor = orders;
+    groupedResult = grouped;
     return grouped;
 }
 
@@ -54,20 +64,25 @@ function orderAmount(order) {
 }
 
 function bestOrderLevel(orders, expectedType, descending) {
-    const eligible = (Array.isArray(orders) ? orders : [])
-        .filter((order) => orderType(order, expectedType))
-        .filter((order) => numberOrZero(order.price) > 0 && orderAmount(order) > 0)
-        .sort((left, right) => descending
-            ? right.price - left.price
-            : left.price - right.price);
-    if (!eligible.length) return { price: null, volume: 0 };
-    const price = eligible[0].price;
-    return {
-        price,
-        volume: eligible
-            .filter((order) => order.price === price)
-            .reduce((sum, order) => sum + orderAmount(order), 0),
-    };
+    // one pass: the best price and the volume sitting exactly on it (the book of energy
+    // holds thousands of orders - this used to filter twice and sort them all)
+    const list = Array.isArray(orders) ? orders : [];
+    let price = null;
+    let volume = 0;
+    for (let i = 0; i < list.length; i++) {
+        const order = list[i];
+        if (!orderType(order, expectedType)) continue;
+        if (!(numberOrZero(order.price) > 0)) continue;
+        const amount = orderAmount(order);
+        if (!(amount > 0)) continue;
+        if (price === null || (descending ? order.price > price : order.price < price)) {
+            price = order.price;
+            volume = amount;
+        } else if (order.price === price) {
+            volume += amount;
+        }
+    }
+    return { price, volume };
 }
 
 function weightedMedian(samples) {
@@ -104,18 +119,38 @@ function pointwiseFairPrice(snapshots) {
         })));
 }
 
-function temporalResource(resourceType, now) {
-    const snapshots = temporalSnapshots[resourceType] || [];
+// The three medians of a resource depend only on its hourly samples (and the weight cap),
+// which change once per market.snapshotInterval - not on every 120-tick scan. Kept per resource
+// for the samples' identity (array, length, last tick) and dropped when they change.
+let medianCache = {};
+function medians(resourceType, snapshots) {
+    const cap = config.get("market.snapshotWeightCap", 0.01);
+    const last = snapshots.length ? snapshots[snapshots.length - 1].tick : null;
+    const hit = medianCache[resourceType];
+    if (hit && hit.source === snapshots && hit.length === snapshots.length && hit.last === last && hit.cap === cap) {
+        return hit;
+    }
     const buySamples = snapshots.filter((sample) => sample.buyPrice !== null)
         .map((sample) => ({ price: sample.buyPrice, volume: sample.buyVolume }));
     const sellSamples = snapshots.filter((sample) => sample.sellPrice !== null)
         .map((sample) => ({ price: sample.sellPrice, volume: sample.sellVolume }));
-    const buyPrice = weightedMedian(buySamples);
-    const sellPrice = weightedMedian(sellSamples);
+    return (medianCache[resourceType] = {
+        source: snapshots, length: snapshots.length, last, cap,
+        buyPrice: weightedMedian(buySamples),
+        sellPrice: weightedMedian(sellSamples),
+        fairPrice: pointwiseFairPrice(snapshots),
+    });
+}
+
+function temporalResource(resourceType, now) {
+    const snapshots = temporalSnapshots[resourceType] || [];
+    const cached = medians(resourceType, snapshots);
+    const buyPrice = cached.buyPrice;
+    const sellPrice = cached.sellPrice;
     return {
         buyPrice,
         sellPrice,
-        fairPrice: pointwiseFairPrice(snapshots),
+        fairPrice: cached.fairPrice,
         sampleCount: snapshots.length,
         windowCoverageTicks: snapshots.length
             ? now - snapshots[0].tick
@@ -242,15 +277,11 @@ function scan() {
         }
         marketHistoryLoaded = true;
     }
-    const currentInterval = Math.max(1, Number(config.get("market.currentInterval", 100)) || 100);
-    if (lastSnapshot && lastCurrentScanTick !== null && Game.time - lastCurrentScanTick < currentInterval) {
+    const currentInterval = Math.max(1, Number(config.get("market.currentInterval", 120)) || 120);
+    if (lastSnapshot && !cadence.due(lastCurrentScanTick, currentInterval)) {
         return lastSnapshot;
     }
-    const market = typeof Game !== "undefined" && Game.market;
-    let orders = [];
-    if (market && typeof market.getAllOrders === "function") {
-        try { orders = market.getAllOrders() || []; } catch (error) { orders = []; }
-    }
+    const orders = orderBook.all();
     const groupedOrders = groupOrders(orders);
     const resources = {};
     const snapshotInterval = Math.max(1, Number(config.get("market.snapshotInterval", 3600)) || 3600);
@@ -296,6 +327,12 @@ function snapshot() {
     return lastSnapshot;
 }
 
+// ROADMAP 0111: raw hourly samples (heap-resident) for marketPricing's own
+// statistics - same data the medians above come from, never copied.
+function samples(resourceType) {
+    return temporalSnapshots[resourceType] || [];
+}
+
 function reset() {
     lastCurrentScanTick = null;
     lastSnapshotTick = null;
@@ -303,6 +340,9 @@ function reset() {
     for (const resourceType in temporalSnapshots) delete temporalSnapshots[resourceType];
     marketHistoryLoaded = false;
     marketHistory.resetCache();
+    medianCache = {};
+    groupedFor = null;
+    groupedResult = null;
 }
 
 function marketPrice(resourceType) {
@@ -332,6 +372,7 @@ global.marketPrice = marketPrice;
 module.exports = {
     scan,
     snapshot,
+    samples,
     reset,
     groupOrders,
     weightedMedian,

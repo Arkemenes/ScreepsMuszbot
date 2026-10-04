@@ -1,12 +1,15 @@
-// ROADMAP 0110: instant-arbitrage scanner. Finds a buy-order/sell-order pair
+// ROADMAP 0110/0111: instant-arbitrage scanner. Finds a buy-order/sell-order pair
 // for the same resourceType whose net profit (after the energy delivery fee,
 // priced off the SAME scan's order book, never market.js's cached
 // fairPrice) clears marketFlip.minProfitRatio, then either just logs it
 // (marketFlip.test, default true) or opens it via terminalOps.buy()/sell()
 // - never touches terminalOps.js itself.
 const config = require("./config");
+const orderBook = require("./orderBook");
+const cadence = require("./cadence");
 const marketPrices = require("./market");
 const terminalOps = require("./terminalOps");
+const marketPricing = require("./marketPricing");
 
 const FINAL_STATES = ["completed", "failed", "cancelled"];
 let lastScanTick = null;
@@ -47,10 +50,15 @@ function orderAmount(order) {
 // the same price into one virtual level - so each leg is already scoped to
 // exactly one orderId/price with no book-walking needed.
 function bestOrder(orders, type, descending) {
-    const eligible = (Array.isArray(orders) ? orders : [])
-        .filter((order) => order && (order.type === type || order.orderType === type) && order.price > 0 && orderAmount(order) > 0)
-        .sort((a, b) => (descending ? b.price - a.price : a.price - b.price));
-    return eligible[0] || null;
+    // best price in one pass (first one wins a tie, like the stable sort it replaces)
+    const list = Array.isArray(orders) ? orders : [];
+    let best = null;
+    for (let i = 0; i < list.length; i++) {
+        const order = list[i];
+        if (!(order && (order.type === type || order.orderType === type) && order.price > 0 && orderAmount(order) > 0)) continue;
+        if (best === null || (descending ? order.price > best.price : order.price < best.price)) best = order;
+    }
+    return best;
 }
 function txCost(value, from, to) {
     return Game.market && typeof Game.market.calcTransactionCost === "function" ? Game.market.calcTransactionCost(value, from, to) : 0;
@@ -75,15 +83,31 @@ function eligibleRooms(marketOnly, busyRooms) {
     }).map((name) => Game.rooms[name]);
 }
 function pickRoom(marketOnly, busyRooms) { return eligibleRooms(marketOnly, busyRooms)[0] || null; }
-// No fairPrice data at all is treated as a violation - the guardrail's job
-// is to refuse trading against a resourceType nobody has any read on yet.
-// Pedido do usuário, 2026-09-29: não exige mais confidence:"ready" (só o
-// ratio contra fairPrice, mesmo com a janela temporal ainda "warming").
-function guardrailBlocks(resourceType, buyPrice) {
-    const snapshot = marketPrices.snapshot();
-    const data = snapshot && snapshot.resources && snapshot.resources[resourceType];
-    if (!data || typeof data.fairPrice !== "number") return true;
-    return buyPrice > data.fairPrice * config.get("marketFlip.guardrailFairPriceRatio", 1.05);
+// ROADMAP 0111: guardrail now comes from marketPricing's own 7-day history
+// (replaces the old fairPrice * 1.05 ratio, user request 2026-10-01).
+// - buy leg: an ask at/below the 7d median passes with NO guardrail (buying
+//   cheap is never a risk); only a dearer ask must clear the liquidity checks.
+// - sell leg: the bid we sell into must not be an outlier (manipulated order)
+//   and must clear liquidity - the bid may be gone by the time the flip ends.
+// No history at all blocks: nobody has any read on that resourceType yet.
+// askOrder = the standing sell order we buy from, bidOrder = the standing buy
+// order we sell into.
+function guardrailReason(resourceType, askOrder, bidOrder, quantity) {
+    const buy = marketPricing.buyLeg(resourceType, askOrder.price, quantity);
+    if (!buy.ok) return "buy-" + buy.reason;
+    const outlier = marketPricing.outlier(resourceType, bidOrder.price, "bid");
+    if (outlier.blocked) return "sell-" + outlier.reason;
+    const sell = marketPricing.liquidity(resourceType, quantity, "sell");
+    if (!sell.ok) return "sell-" + sell.reason;
+    return null;
+}
+// Time-risk term of marketPricing's margin for a short flip (T = horizonTicks):
+// z * sigma * sqrt(T/3600). The craft floor is not added - minProfitRatio is
+// the flip's own floor (user setting, 0.1%).
+function timeMargin(resourceType) {
+    const stats = marketPricing.stats(resourceType);
+    const sigma = stats.bid.sigmaRel; // the buy is instant and fixed; only the bid we sell into still moves
+    return marketPricing.requiredMargin(sigma, config.get("marketFlip.horizonTicks", 60)) - config.get("craft.floor", 0.01);
 }
 function evaluateResourceType(resourceType, grouped, energyPrice) {
     const sellType = typeof ORDER_SELL !== "undefined" ? ORDER_SELL : "sell";
@@ -108,7 +132,8 @@ function evaluateResourceType(resourceType, grouped, energyPrice) {
     return {
         resourceType, buyPrice, sellPrice, quantity, marketOnly, cost,
         netProfit, netProfitRatio: cost > 0 ? netProfit / cost : 0,
-        wouldBlockGuardrail: guardrailBlocks(resourceType, buyPrice),
+        guardrailReason: guardrailReason(resourceType, sellOrder, buyOrder, quantity),
+        timeMargin: timeMargin(resourceType),
     };
 }
 // Which rooms already have an active flip - a single terminal never runs
@@ -150,15 +175,12 @@ function openFlip(candidate, quantity, expectedNetProfit) {
 }
 function scan() {
     const interval = Math.max(1, Number(config.get("marketFlip.scanInterval", 60)) || 60);
-    if (lastScanTick !== null && Game.time - lastScanTick < interval) return;
+    if (!cadence.due(lastScanTick, interval)) return;
     lastScanTick = Game.time;
     const mem = memory();
     mem.lastScanTick = Game.time;
-    const market = typeof Game !== "undefined" && Game.market;
-    let orders = [];
-    if (market && typeof market.getAllOrders === "function") {
-        try { orders = market.getAllOrders() || []; } catch (error) { orders = []; }
-    }
+    const orders = orderBook.all();
+    const market = typeof Game !== "undefined" && Game.market; // credits below
     // Only resourceTypes actually present in the book can ever form a pair -
     // this already covers "every resourceType, including commodities and
     // marketOnly" without walking the full RESOURCES_ALL list every scan.
@@ -169,7 +191,7 @@ function scan() {
     const testMode = config.get("marketFlip.test", true);
     const candidates = Object.keys(grouped)
         .map((resourceType) => evaluateResourceType(resourceType, grouped, energyPrice))
-        .filter((candidate) => candidate && candidate.netProfitRatio >= minProfitRatio)
+        .filter((candidate) => candidate && candidate.netProfitRatio >= Math.max(minProfitRatio, candidate.timeMargin))
         .sort((a, b) => b.netProfitRatio - a.netProfitRatio);
     const opportunities = [];
     let availableCredits = market && typeof market.credits === "number" ? market.credits - mem.committedCredits : 0;
@@ -177,11 +199,11 @@ function scan() {
         const opportunity = {
             resourceType: candidate.resourceType, buyPrice: candidate.buyPrice, sellPrice: candidate.sellPrice,
             quantity: 0, netProfit: 0, netProfitRatio: candidate.netProfitRatio,
-            wouldBlockGuardrail: candidate.wouldBlockGuardrail, executed: false,
+            wouldBlockGuardrail: !!candidate.guardrailReason, guardrailReason: candidate.guardrailReason, executed: false,
         };
         opportunities.push(opportunity);
-        if (candidate.wouldBlockGuardrail) mem.stats.guardrailBlocked++;
-        if (mem.active[candidate.resourceType] || candidate.wouldBlockGuardrail) return;
+        if (candidate.guardrailReason) mem.stats.guardrailBlocked++;
+        if (mem.active[candidate.resourceType] || candidate.guardrailReason) return;
         // Ranked most-to-least profitable, each candidate's cap is taken
         // against whatever's LEFT after the previous candidates in this same
         // scan reserved theirs - never against the tick's original balance.
@@ -258,6 +280,7 @@ function advanceFlips() {
             }
             entry.sellOpId = response.id;
             entry.state = "selling";
+            entry.sellStartTick = Game.time; // ROADMAP 0111: craftPlanner locks the material only briefly from here
             return;
         }
         const sellOp = terminalOps.operation(entry.sellOpId);
@@ -276,4 +299,9 @@ global.marketFlipStatus = () => JSON.stringify({
     active: Object.keys(memory().active).map((resourceType) => memory().active[resourceType]),
 }, null, 2);
 global.marketFlipStats = () => JSON.stringify(memory().stats, null, 2);
-module.exports = { tick };
+// ROADMAP 0111: craft shares the flip's single committedCredits budget so
+// neither can blow through the other's share of the balance.
+function committed() { return memory().committedCredits; }
+function commit(credits) { memory().committedCredits += credits; }
+function release(credits) { const mem = memory(); mem.committedCredits = Math.max(0, mem.committedCredits - credits); }
+module.exports = { tick, committed, commit, release };

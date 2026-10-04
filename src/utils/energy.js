@@ -15,25 +15,26 @@ function energyPiles(room) {
 
     const piles = [];
 
-    for (const r of room.find(FIND_DROPPED_RESOURCES)) {
+    for (const r of roomCache.droppedResources(room)) {
         if (r.resourceType === RESOURCE_ENERGY && r.amount >= 50) piles.push(r);
     }
-    for (const t of room.find(FIND_TOMBSTONES)) {
+    for (const t of roomCache.tombstones(room)) {
         if (t.store[RESOURCE_ENERGY] >= 50) piles.push(t);
     }
-    for (const ruin of room.find(FIND_RUINS)) {
+    for (const ruin of roomCache.ruins(room)) {
         if (ruin.store[RESOURCE_ENERGY] >= 50) piles.push(ruin);
     }
-    for (const s of roomCache.structures(room)) {
-        if (!s.store || s.store[RESOURCE_ENERGY] < 50) continue;
-        const isStore =
-            s.structureType === STRUCTURE_STORAGE ||
-            s.structureType === STRUCTURE_CONTAINER;
+    // Only storage, containers and receiving links can be a pile: walk those cached
+    // per-type lists instead of reading .store on every structure of the room.
+    const holders = roomCache.structuresByType(room, STRUCTURE_STORAGE)
+        .concat(roomCache.structuresByType(room, STRUCTURE_CONTAINER));
+    for (const s of holders) {
+        if (s.store && s.store[RESOURCE_ENERGY] >= 50) piles.push(s);
+    }
+    for (const s of roomCache.structuresByType(room, STRUCTURE_LINK)) {
         // never drain a collector link - only the miner feeds it, and it feeds
         // the base link network
-        const isReceivingLink =
-            s.structureType === STRUCTURE_LINK && !s.isCollector();
-        if (isStore || isReceivingLink) piles.push(s);
+        if (s.store && s.store[RESOURCE_ENERGY] >= 50 && !s.isCollector()) piles.push(s);
     }
 
     // A pile sitting in the attack zone isn't a valid target for a

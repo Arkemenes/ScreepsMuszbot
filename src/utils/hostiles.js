@@ -1,3 +1,5 @@
+const roomCache = require("./roomCache");
+
 const defaultHostilePlayers = ["Warrobot10"];
 const systemHostiles = ["Invader", "Source Keeper"];
 const defaultAllies = [
@@ -8,10 +10,49 @@ const defaultAllies = [
     "Dustinc555",
     "Ricardo306",
     "TimelessTacticianEon",
+    "SunDanceKid",
+    "LancerenoK"
 ];
 
 let cacheTick;
 let hostileCache = {};
+
+// creep.body is a getter that builds a fresh array of part objects on EVERY read - a hostile
+// parked in a room was re-read by getHostiles' filter, each tower (3 sites) and the defenders,
+// every tick (intel.hostiles alone was 2 CPU/tick with one around, 2026-10-03). The parts of a
+// creep never change, only boosts can appear, so the summary {parts: count by type, boosted}
+// is kept in the heap per creep id and re-read every BODY_REFRESH ticks.
+const BODY_REFRESH = 25;
+let bodyCache = {};
+let bodyGcTick = 0;
+function bodyInfo(creep) {
+    const id = creep.id;
+    const hit = id !== undefined ? bodyCache[id] : undefined;
+    if (hit && Game.time - hit.tick < BODY_REFRESH && Game.time >= hit.tick) return hit;
+    const parts = {};
+    let boosted = false;
+    const body = creep.body;
+    for (let i = 0; i < body.length; i++) {
+        parts[body[i].type] = (parts[body[i].type] || 0) + 1;
+        if (body[i].boost) boosted = true;
+    }
+    const info = { tick: Game.time, parts, boosted };
+    if (id !== undefined) {
+        if (Game.time - bodyGcTick >= 200 || Game.time < bodyGcTick) {
+            bodyGcTick = Game.time;
+            Object.keys(bodyCache).forEach((key) => {
+                if (Game.time - bodyCache[key].tick >= 200) delete bodyCache[key];
+            });
+        }
+        bodyCache[id] = info;
+    }
+    return info;
+}
+// Tests build creeps with reused ids within one tick.
+function resetBodyCache() {
+    bodyCache = {};
+}
+
 
 // Allies default to the list above; Memory.settings.allies overrides it (an
 // empty array means "no allies").
@@ -59,13 +100,8 @@ function isTargetEnemy(username) {
 // moved since spawning, because the intruder it should've engaged only had
 // WORK parts and this check never flagged it hostile in the first place.
 function isThreatInOwnRoom(creep) {
-    return _.some(
-        creep.body,
-        (part) =>
-            part.type === ATTACK ||
-            part.type === RANGED_ATTACK ||
-            part.type === WORK
-    );
+    const parts = bodyInfo(creep).parts;
+    return !!(parts[ATTACK] || parts[RANGED_ATTACK] || parts[WORK]);
 }
 
 // `room` is optional for backward compatibility, but always pass it when
@@ -102,9 +138,10 @@ function getHostiles(room) {
     }
 
     if (!hostileCache[room.name]) {
-        hostileCache[room.name] = room.find(FIND_HOSTILE_CREEPS, {
-            filter: (creep) => isHostile(creep, room),
-        });
+        hostileCache[room.name] = _.filter(
+            roomCache.foreignCreeps(room),
+            (creep) => isHostile(creep, room)
+        );
     }
 
     return hostileCache[room.name];
@@ -149,4 +186,4 @@ global.removeTargetEnemy = function (name) {
     console.log("[targetEnemies] " + JSON.stringify(Memory.settings.targetEnemies));
 };
 
-module.exports = { getHostiles, isHostile, isAlly, allies, targetEnemies, isTargetEnemy };
+module.exports = { getHostiles, isHostile, isAlly, allies, targetEnemies, isTargetEnemy, bodyInfo, resetBodyCache };

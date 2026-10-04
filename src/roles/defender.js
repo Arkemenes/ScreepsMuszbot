@@ -3,6 +3,7 @@ const census = require("../utils/census");
 const combat = require("../utils/combat");
 const { roomNeeds } = require("../rooms/needs");
 const names = require("../utils/names");
+const roomCache = require("../utils/roomCache");
 
 // Solo generalist kiter (ranged + self-heal). Fallback for a room whose
 // energyCapacityAvailable can't yet afford a real defenderStriker +
@@ -54,7 +55,7 @@ const defender = {
                 return;
             }
             if (creep.hits < creep.hitsMax) creep.heal(creep);
-            const spawn = creep.room.find(FIND_MY_SPAWNS)[0];
+            const spawn = roomCache.mySpawns(creep.room)[0];
             if (spawn && creep.pos.getRangeTo(spawn) > 5) {
                 creep.moveTo(spawn, { reusePath: 20 });
             }
@@ -73,7 +74,7 @@ const defender = {
         if (meleeClosing) {
             // back off around obstacles; if cornered, retreat to the spawn
             if (!combat.kiteAwayFrom(creep, hostiles)) {
-                const spawn = creep.room.find(FIND_MY_SPAWNS)[0];
+                const spawn = roomCache.mySpawns(creep.room)[0];
                 if (spawn) creep.moveTo(spawn, { reusePath: 5 });
             }
             return;

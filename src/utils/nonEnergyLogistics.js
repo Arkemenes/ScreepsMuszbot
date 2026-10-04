@@ -1,16 +1,15 @@
 const census = require("./census");
 const config = require("./config");
 const roomCache = require("./roomCache");
+const labReactions = require("./labReactions");
 
 let cacheTick = -1;
 let pressureCache = {};
-let ownerByRoom = {};
 
 function ensureTick() {
     if (cacheTick === Game.time) return;
     cacheTick = Game.time;
     pressureCache = {};
-    ownerByRoom = {};
 }
 
 function usedCapacity(store) {
@@ -34,9 +33,7 @@ function capacity(store, resourceType) {
 function mineralOutput(room) {
     const mineral = roomCache.minerals(room)[0];
     if (!mineral) return null;
-    const container = mineral.pos.findInRange(FIND_STRUCTURES, 1, {
-        filter: (structure) => structure.structureType === STRUCTURE_CONTAINER,
-    })[0];
+    const container = roomCache.structuresNear(room, mineral.pos, STRUCTURE_CONTAINER, 1)[0];
     const resourceType = mineral.mineralType;
     const amount =
         container && container.store && resourceType
@@ -53,21 +50,22 @@ function mineralOutput(room) {
 }
 
 function labOutput(room) {
-    const mem = Memory.rooms[room.name];
-    const reaction = mem && mem.labReaction;
-    if (!reaction) return null;
-    const lab = Game.getObjectById(reaction.output);
-    const resourceType = reaction.product;
-    const amount =
-        lab && lab.store && resourceType ? lab.store[resourceType] || 0 : 0;
-    const cap = lab ? capacity(lab.store, resourceType) : 0;
-    if (!lab || !amount || !cap) return null;
-    return {
-        kind: "labOutput",
-        resourceType,
-        sourceId: lab.id,
-        ratio: amount / cap,
-    };
+    // ROADMAP 0111: a wide reaction has several output labs; ROADMAP 0115: a room may run
+    // several reactions - report the fullest output lab of all of them
+    let best = null;
+    labReactions.list(room.name).forEach((reaction) => {
+        const resourceType = reaction.product;
+        labReactions.outputsOf(reaction).forEach((id) => {
+            const lab = Game.getObjectById(id);
+            const amount = (lab && lab.store && resourceType && lab.store[resourceType]) || 0;
+            const cap = lab ? capacity(lab.store, resourceType) : 0;
+            if (!lab || !amount || !cap) return;
+            if (!best || amount / cap > best.ratio) {
+                best = { kind: "labOutput", resourceType, sourceId: lab.id, ratio: amount / cap };
+            }
+        });
+    });
+    return best;
 }
 
 function factoryOutput(room) {
@@ -111,34 +109,40 @@ function creepKey(creep) {
     return creep.name || creep.id;
 }
 
-function owner(room) {
-    ensureTick();
-    if (!Object.prototype.hasOwnProperty.call(ownerByRoom, room.name)) {
-        const active = census
-            .creepsByRole(room.name, "hauler")
-            .filter((creep) => creep.memory.mineralJob)
-            .sort((left, right) => creepKey(left).localeCompare(creepKey(right)));
-        ownerByRoom[room.name] = active.length ? creepKey(active[0]) : null;
-    }
-    return ownerByRoom[room.name];
+// ROADMAP 0111 (user request, 2026-10-02): there is no longer ONE hauler per
+// room allowed to do non-energy work. That exclusivity let a never-empty
+// mineral container (always "the" job) keep the single owner busy while a craft
+// chain's inputs waited in storage, and it also capped how many chains one room
+// could feed at once. Jobs are deduplicated where it matters instead (one
+// reagent/component per destination, see hauler.js feedTaken), and the two
+// tiers that compete with energy ask keepsEnergyHauler() below.
+// mineralHauler.maxConcurrent > 0 restores a hard cap if one is ever wanted.
+function busyHaulers(room, exceptKey) {
+    return census
+        .creepsByRole(room.name, "hauler")
+        .filter((creep) => (creep.memory.mineralJob || creep.memory.lootJob) && creepKey(creep) !== exceptKey);
 }
 
 function claim(creep) {
-    const current = owner(creep.room);
-    const key = creepKey(creep);
-    if (current && current !== key) return false;
-    ownerByRoom[creep.room.name] = key;
+    const cap = config.get("mineralHauler.maxConcurrent", 0);
+    return !(cap > 0) || busyHaulers(creep.room, creepKey(creep)).length < cap;
+}
+
+// Kept so every call site stays as it was: nothing to release any more.
+function release() {}
+
+// With no exclusive owner every hauler is "the owner" of its own job.
+function isOwner() {
     return true;
 }
 
-function release(creep) {
-    if (owner(creep.room) === creepKey(creep)) {
-        ownerByRoom[creep.room.name] = null;
-    }
-}
-
-function isOwner(creep) {
-    return owner(creep.room) === creepKey(creep);
+// True while at least one hauler of the room is NOT on non-energy work. The
+// null-energy path may use every hauler (there is nothing to carry anyway); the
+// pressured and chain tiers outrank energy that is available, so they must
+// always leave one hauler on it.
+function keepsEnergyHauler(room) {
+    const haulers = census.creepsByRole(room.name, "hauler").length;
+    return busyHaulers(room).length < haulers - 1;
 }
 
 module.exports = {
@@ -147,4 +151,5 @@ module.exports = {
     claim,
     release,
     isOwner,
+    keepsEnergyHauler,
 };

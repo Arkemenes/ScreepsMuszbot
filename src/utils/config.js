@@ -9,7 +9,9 @@
 
 const defaults = {
     market: {
-        currentInterval: 100,
+        // base 60 (Grafana's sampling): the same grid as marketFlip.scanInterval, so both read
+        // the order book on the same tick (utils/orderBook shares the fetch)
+        currentInterval: 120,
         snapshotInterval: 3600,
         snapshotWindowTicks: 604800,
         snapshotWeightCap: 0.01,
@@ -22,11 +24,8 @@ const defaults = {
         scanInterval: 60,
         // 0.1% (pedido do usuário, 2026-09-30; era 1%).
         minProfitRatio: 0.001,
-        // preço de compra elegível <= este ratio * market.js's fairPrice -
-        // anti-manipulação, só bloqueia em modo live. Não exige mais
-        // confidence:"ready" (pedido do usuário, 2026-09-29). 2x (pedido do
-        // usuário, 2026-09-30; era 1.05x).
-        guardrailFairPriceRatio: 2,
+        // guardrail de preço: ver marketPricing.js (ROADMAP 0111) - substitui o
+        // antigo ratio contra fairPrice (guardrailFairPriceRatio, removido).
         // teto por flip: no máximo esta fração do saldo de créditos
         // DISPONÍVEL (Game.market.credits - committedCredits) no momento em
         // que aquele flip específico é lançado - pedido do usuário,
@@ -42,6 +41,141 @@ const defaults = {
         // (dealtAmount > 0), essa checagem para de valer e o flip usa o
         // orçamento normal de maxHoldingTicks até fechar a venda.
         maxBuyWaitTicks: 15,
+        // ROADMAP 0111: o flip compartilha marketPricing com o craft -
+        // outlier só na perna de venda, margem de tempo com T curto.
+        outlierSigma: 3,
+        // T estimado de um flip (compra + venda), em ticks - cobre cooldown
+        // de terminal e uma viagem de hauler.
+        horizonTicks: 60,
+    },
+    // ROADMAP 0111: fabricação lucrativa (factory + lab), preço conservador.
+    craft: {
+        // chains advance on a grid of N ticks (utils/cadence): their states last hundreds of ticks
+        tickInterval: 10,
+        // test por padrão: só loga candidatos/descartes, nunca compra nem
+        // produz. false liga a execução (Memory.settings.craft.test = false).
+        test: true,
+        scanInterval: 300,
+        // nível de confiança unilateral -> z (0.95 = 1.645). A margem exigida
+        // é floor + z * sigmaRel * sqrt(T / 3600).
+        confidence: 0.95,
+        floor: 0.01,
+        // liquidez (histórico próprio de 7d, 1 amostra/h)
+        minSamples: 48,
+        minPresence: 0.9,
+        depthLots: 2,
+        // só valem na perna de VENDA do produto (os insumos são comprados de uma
+        // vez, a custo fixo, e a receita já usa o bid): spread 2.0 (era 1.3) e
+        // volatilidade 30% (era 15%) - pedido do usuário, 2026-10-02
+        maxSpread: 2,
+        maxSigma: 0.3,
+        // capital em andamento (committedCredits é único entre flip e craft)
+        maxCommittedRatio: 0.25,
+        maxChainRatio: 0.05,
+        // tempo (1 tick ~ 1 s): retenção de produto/insumo antes do fallback
+        retentionTicks: 259200,
+        suspendTicks: 86400,
+        // disjuntores: execuções negativas seguidas por produto / janela global
+        productLosses: 3,
+        globalRuns: 10,
+        // níveis de commodity habilitados (>= 1 exige operador, ver gate)
+        maxLevel: 1,
+        // logística estimada em ticks por drenagem/carga/estacionamento
+        logisticsTicksPerMove: 50,
+        // teto de ticks por estado da cadeia antes de abortar (stall guard)
+        stallTicks: 3000,
+        maxDepth: 6,
+        // energia gasta para entregar/receber cada unidade negociada (taxa de
+        // terminal) - estimativa, calibrada pelo ledger
+        deliveryEnergyPerUnit: 0.3,
+        // não escaneia com o bucket de CPU abaixo disto. 500 (pedido do usuário,
+        // 2026-10-02; era 3000): gerar um pixel zera o bucket, e com 3000 o
+        // planner ficava parado por muito tempo depois de cada um.
+        minBucket: 500,
+        // teto de unidades por lote (cada lab guarda 3000)
+        maxLotUnits: 3000,
+        // --- execução (fase 6): travas de segurança, conservadoras de propósito
+        // cadeias simultâneas no total (todas as salas) - sobe só depois de
+        // o ledger mostrar lucro real
+        // 0 = sem teto global (pedido do usuário, 2026-10-02): o paralelismo é
+        // limitado pelas estruturas (uma cadeia por tipo - factory, lab - por
+        // sala) e pelo capital (maxCommittedRatio, maxCashAbsolute). > 0 volta a
+        // impor um teto de cadeias no total.
+        maxActive: 0,
+        // teto absoluto de créditos gastos em compras por cadeia, além do % do saldo
+        // 1000000 (pedido do usuário, 2026-10-02; era 500000)
+        maxCashAbsolute: 1000000,
+        // folga mínima sobre o ask conservador no limite de preço das compras
+        buySlack: 0.02,
+        // O limite de cada compra sobe até onde a cadeia ainda passa na margem
+        // (receita / (1 + margem) - custo = folga da cadeia), dividido entre os
+        // insumos comprados, usando só esta fração da folga e nunca passando de
+        // maxBuyPremium acima do ask. Antes era só ask + 2%, e uma cadeia ainda
+        // lucrativa ficava parada esperando um insumo 30% mais caro.
+        buyHeadroomUse: 0.5,
+        // O planner dimensiona o lote para gastar no máximo teto / (1 + este valor):
+        // sem essa folga o lote consumia o teto inteiro e o limite de compra não
+        // tinha como subir sem estourá-lo (a cadeia de 979 mil sob um teto de 1M
+        // ficava com ~2 mil de folga). 0.15 = 15% do teto reservado para o preço subir.
+        priceDriftReserve: 0.15,
+        maxBuyPremium: 0.5,
+        // compra que não negociou NADA em tantos ticks aborta a cadeia (libera os
+        // créditos reservados) em vez de esperar o stall guard
+        buyIdleAbortTicks: 900,
+        // execuções guardadas por produto no ledger
+        ledgerKeep: 20,
+        // material de um flip ativo fica fora do estoque da cadeia por estes
+        // ticks (contados da compra, ou de quando começou a tentar vender);
+        // depois disso é estoque comum - um flip que não vendeu é estoque
+        flipLockTicks: 100,
+        // lucro absoluto mínimo de uma cadeia: sem isso, encolher o lote por
+        // liquidez geraria cadeias minúsculas que ocupam a única vaga ativa
+        minProfit: 5000,
+        // tentativas de encolher o lote (cada uma divide por 2)
+        sizePasses: 12,
+        // compra preenchida só em parte (o livro acabou antes): a cadeia segue,
+        // reduzida ao que chegou, se pelo menos esta fração do pedido veio;
+        // abaixo disso aborta
+        minPartialRatio: 0.3,
+        // compra que já negociou algo e ficou parada (o livro acabou, ordem em
+        // "waiting") este tanto de ticks sem novo negócio é cancelada e tratada
+        // como parcial, em vez de segurar a cadeia até o stall guard (3000)
+        buyPatienceTicks: 300,
+        // A última etapa de lab de uma cadeia roda em vários labs de saída ao mesmo
+        // tempo (todo lab que alcança os dois de entrada; só o lab que chama
+        // runReaction entra em cooldown). false volta a um lab de saída só.
+        wideLabs: true,
+        // vende o produto final conforme sai (do storage/terminal), sem esperar o
+        // lote inteiro: mesmas regras da venda final (instantânea, nunca abaixo do
+        // piso de break-even, só abre ordem com o bid já no piso). Lote mínimo de
+        // cada venda parcial = esta fração do alvo da etapa.
+        partialSales: true,
+        // piso de venda = custo real da operação (compras, energia, estoque próprio,
+        // energia da própria venda) x (1 + esta margem): nunca se vende sem lucro.
+        // Mantenha <= a margem mínima que o planner aceita (craft.floor + risco), senão
+        // uma cadeia aprovada já nasce abaixo do próprio piso e fica segurando.
+        minSaleMargin: 0.01,
+        // ticks de espera antes de tentar de novo uma venda que o terminalOps recusou
+        sellRetryTicks: 25,
+        // pior caso de energia por unidade enviada numa venda (o terminal cobra no
+        // máximo 1 por unidade, qualquer que seja a distância do comprador)
+        saleEnergyPerUnit: 1,
+        minPartialSellRatio: 0.1,
+        // ROADMAP 0115: independent steps of a lab chain (same height of the reaction tree,
+        // e.g. OH and LH of XLH2O) run at the same time in separate labs; the wave plan is
+        // taken when it costs at most this many more lab moves than the sequential one
+        parallelLabs: true,
+        parallelExtraMoves: 4,
+        // ROADMAP 0116: how a multi-step lab chain uses the labs. "waves" = intermediates stay
+        // in place on one lab each (0115); "wide" = every step on all the labs that reach the
+        // centre pair, one after the other through storage; "auto" = the planner takes the
+        // faster by estimate, and "wide" only when it is wideMinGain (20%) faster
+        labStrategy: "auto",
+        wideMinGain: 0.2,
+        // log automático no console (candidatos, etapas, vendas, abortos)
+        log: true,
+        // a cada quantos scans repete o resumo de descartes
+        logDiscardEvery: 12,
     },
     defender: {
         maxCount: 3,
@@ -211,7 +345,7 @@ const defaults = {
         terminalReserveRatio: 0.1,
         // ROADMAP 0097: normal rebalancing and its hard per-transfer cap.
         balanceEnabled: true,
-        balanceInterval: 1000,
+        balanceInterval: 1200,
         // 0.005 of a ~1.3M storage+terminal capacity is ~6500 energy (pedido
         // do usuário, 2026-09-28: 0.2/260000 nunca disparava o gatilho normal
         // porque as salas operam na casa de 2-5% da capacidade agregada no
@@ -225,6 +359,8 @@ const defaults = {
         linkReceiveFillRatio: 0.95,
     },
     terminalOps: {
+        // operations' state machines run every N ticks (a terminal cooldown is 10)
+        tickInterval: 5,
         // ROADMAP 0098: a SELL stages its goods in the terminal in batches of
         // at most `buffer = min(saleBufferAmount, capacity * saleBufferCapacityRatio)`.
         // Raised to 85% of the terminal (2026-09-24): the old 10000/0.1 pair
@@ -237,7 +373,7 @@ const defaults = {
         enabled: true,
         recoveryTicks: 10000,
         marketPriceStep: 0.001,
-        repriceInterval: 1000,
+        repriceInterval: 1200,
         saleBufferAmount: 300000,
         saleBufferCapacityRatio: 0.85,
         statsWindowTicks: 60,
@@ -258,6 +394,9 @@ const defaults = {
         maxFeeRatio: 0.05,
     },
     hauler: {
+        // a load pick is kept this many ticks while its target still holds 50+ energy
+        // (roles/hauler.js pickLoad: no path search every tick on the way there)
+        repickTicks: 5,
         // a source container needs more than this much energy before a
         // hauler bothers with the trip
         minContainerLoad: 1000,
@@ -304,6 +443,11 @@ const defaults = {
         // tower topped up to (unconditional priority - see roles/miner.js)
         towerReserve: 0.5,
         towerReserveUnderAttack: 0.9,
+        // ROADMAP 0113: forward the harvest to the link/tower in full loads instead of
+        // every tick (each action costs ~0.2 CPU); false = the old every-tick loop
+        batchTransfer: true,
+        // container energy at which the miner also drains it into its store for the link
+        pullBacklog: 500,
     },
     combat: {
         // tiles a non-combat creep wants to stay from any armed hostile
@@ -553,6 +697,30 @@ const defaults = {
         // where Pixel doesn't matter
         enabled: true,
         bucketThreshold: 10000,
+        // generatePixel() zeroes the bucket, and with a bucket at 0 any tick over the
+        // limit is terminated ("CPU bucket is empty"). So a pixel is only made while the
+        // published CPU average (cpuMeter window) leaves this much room under the limit
+        // to refill it; with no window published yet (after a global reset) it waits.
+        headroomGate: true,
+        minHeadroom: 3,
+    },
+    needs: {
+        // rooms/needs.js keeps a room's computed headcount this many ticks (1 = every tick);
+        // never used while the room is under attack
+        cacheTicks: 10,
+    },
+    cpu: {
+        // below this bucket the optional modules (market scan, marketFlip) pause so the
+        // bucket can refill; craftPlanner has its own craft.minBucket gate
+        shedBucket: 2000,
+    },
+    mineralMiner: {
+        // ROADMAP 0114: minimum deposit amount to spawn a mineralMiner, and the
+        // WORK clamp / life budget of its body (never CARRY)
+        minAmount: 2000,
+        minWork: 4,
+        maxWork: 12,
+        lifeBudget: 1400,
     },
     mineralHauler: {
         // roles/hauler.js (ROADMAP 0051/0095): minimum reagent stock to
@@ -575,7 +743,26 @@ const defaults = {
         // room.find, but still real work on a big base) - throttled to once
         // per this many ticks instead of every tick, same value cached in
         // between (utils/stats.js's own heap-resident barrierHitsCache).
-        barrierHitsInterval: 50,
+        barrierHitsInterval: 60,
+        // Memory.stats is rebuilt every N ticks (Grafana samples it once a minute)
+        publishInterval: 60,
+        // ROADMAP 0113: the CPU meter folds its accumulators into the published
+        // snapshot (Memory.stats.cpu.meter) every N ticks, as per-tick averages
+        cpuWindowTicks: 60,
+        // how many functions profile(N) publishes (heaviest by self time)
+        cpuTopFunctions: 15,
+    },
+    rampartGates: {
+        // cost of walking over a rampart when looking for the route an ally needs through the
+        // walls (high: cross as few as possible)
+        rampartCost: 20,
+        maxOps: 4000,
+    },
+    profile: {
+        // profile(N) closes its window early below this bucket: wrapping every engine
+        // call costs several times the normal CPU and one session drained 8500 -> 900
+        // (2026-10-03)
+        minBucket: 100,
     },
 };
 
@@ -588,8 +775,12 @@ function walk(node, segments) {
     return cur;
 }
 
+// path -> its segments, split once (heap): get() runs thousands of times a tick and
+// used to split the same few dozen strings on every call.
+const segmentCache = {};
+
 function get(path, fallback) {
-    const segments = path.split(".");
+    const segments = segmentCache[path] || (segmentCache[path] = path.split("."));
     const override = walk(Memory.settings, segments);
     if (override !== undefined) return override;
     const def = walk(defaults, segments);

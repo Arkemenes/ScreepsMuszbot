@@ -60,6 +60,22 @@ function ruins(room) {
     return s.ruins;
 }
 
+// Every creep in the room that is not ours (allies included), one find per tick: what
+// utils/hostiles.getHostiles and structures/rampart each used to search for on their own.
+function foreignCreeps(room) {
+    const s = slot(room);
+    if (!s.foreignCreeps) s.foreignCreeps = room.find(FIND_HOSTILE_CREEPS);
+    return s.foreignCreeps;
+}
+
+// Own spawns in find() order (callers take [0]): defenders, the idle hauler, the miner,
+// combat and spawning each ran their own FIND_MY_SPAWNS - per creep, per tick.
+function mySpawns(room) {
+    const s = slot(room);
+    if (!s.mySpawns) s.mySpawns = room.find(FIND_MY_SPAWNS);
+    return s.mySpawns;
+}
+
 // Structures of a given type, derived from the cached full list.
 function structuresByType(room, structureType) {
     const s = slot(room);
@@ -73,7 +89,47 @@ function structuresByType(room, structureType) {
     return byType[structureType];
 }
 
+// Energy sources of the room, one find per tick.
+function sources(room) {
+    const s = slot(room);
+    if (!s.sources) s.sources = room.find(FIND_SOURCES);
+    return s.sources;
+}
+
+// Structures of `structureType` within `range` of `pos` - the same answer as
+// pos.findInRange(FIND_STRUCTURES, range, {filter: type}), but from the cached
+// per-type list with a coordinate check. The native call scans EVERY structure
+// of the room (and runs inRangeTo on each one) on every call: ~1500 inRangeTo a
+// tick in the 2026-10-02 profile, most of it from mineral/source lookups that
+// repeat per room, per hauler, per tick.
+function structuresNear(room, pos, structureType, range) {
+    const list = structuresByType(room, structureType);
+    const out = [];
+    for (let i = 0; i < list.length; i++) {
+        const p = list[i].pos;
+        if (Math.abs(p.x - pos.x) <= range && Math.abs(p.y - pos.y) <= range) out.push(list[i]);
+    }
+    return out;
+}
+
+// Every structure within `range` of `pos` (any type), same answer as
+// pos.findInRange(FIND_STRUCTURES, range) from the per-tick cached list.
+function structuresInRange(room, pos, range) {
+    const list = structures(room);
+    const out = [];
+    for (let i = 0; i < list.length; i++) {
+        const p = list[i].pos;
+        if (Math.abs(p.x - pos.x) <= range && Math.abs(p.y - pos.y) <= range) out.push(list[i]);
+    }
+    return out;
+}
+
 module.exports = {
+    sources,
+    foreignCreeps,
+    mySpawns,
+    structuresInRange,
+    structuresNear,
     structures,
     myStructures,
     constructionSites,

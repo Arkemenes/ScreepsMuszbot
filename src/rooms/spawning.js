@@ -4,10 +4,21 @@ const census = require("../utils/census");
 const config = require("../utils/config");
 const energyLedger = require("../utils/energyLedger");
 const roomCache = require("../utils/roomCache");
+const { roomNeeds } = require("./needs");
 
-// Priority order: whatever order the roles are declared in roles/index.js
-// (bootstrap, defender, miner, hauler, upgrader, builder, scout).
+// Priority order of the non-critical tier: whatever order the roles are
+// declared in roles/index.js (bootstrap, defender, miner, hauler, upgrader,
+// builder, scout). The critical tier (ROADMAP 0112) is built separately in
+// spawnCreeps().
 let creepTypes = _.keys(creepLogic);
+
+// Cheapest body that still does the job. A critical role with ZERO creeps
+// falls back to it when the full body isn't affordable right now - otherwise
+// a room with no hauler waits for energy only a hauler can distribute.
+const FALLBACK_BODIES = {
+    miner: [MOVE, WORK, WORK],
+    hauler: [CARRY, CARRY, MOVE],
+};
 
 function bodyCost(body) {
     return _.sum(body, (part) => BODYPART_COST[part.type]);
@@ -87,8 +98,17 @@ function renewIdleSpawns(room, spawns, totalSpawns) {
     return stillIdle;
 }
 
+// "Nothing is wanted" verdict per room (heap): spawn()/spawnData() of every role were
+// re-evaluated on every tick with an idle spawn just to conclude, again, that no creep is
+// missing (0,6 CPU/tick for 3 rooms, 2026-10-03). The verdict holds while the room's needs object
+// (rooms/needs.js keeps it needs.cacheTicks ticks, and recomputes it every tick under attack or
+// after a console override) and the number of creeps in the room are the same - a creep dying
+// or the needs being recomputed forces a fresh look at once. A room with a pending request is
+// never skipped: it is waiting for energy and is re-checked every tick, as before.
+const idleVerdict = {};
+
 function spawnCreeps(room) {
-    const allSpawns = room.find(FIND_MY_SPAWNS);
+    const allSpawns = roomCache.mySpawns(room);
     if (!allSpawns.length) return;
 
     let spawns = allSpawns.filter((s) => !s.spawning);
@@ -109,6 +129,18 @@ function spawnCreeps(room) {
     // real bug this fixes.
     const roomMem = Memory.rooms[room.name];
     const underAttack = roomMem && roomMem.defenseActive;
+    const needsNow = roomNeeds(room);
+    const creepsNow = census.allInRoom(room.name).length;
+    const verdict = idleVerdict[room.name];
+    if (
+        !underAttack &&
+        verdict &&
+        verdict.needs === needsNow &&
+        verdict.creeps === creepsNow &&
+        Game.time >= verdict.tick
+    ) {
+        return;
+    }
     const types = underAttack
         ? ["defender", "defenderStriker", "defenderMedic", "bootstrap"]
         : creepTypes;
@@ -123,8 +155,49 @@ function spawnCreeps(room) {
         if (squadData) requests.push(squadData);
     }
 
-    // Every role that currently wants a creep, in priority order. Scouts,
-    // raiders, pioneers, and squadDismantler are pure luxury/never-solo -
+    // ROADMAP 0112 - critical tier, strict order, BLOCKING: bootstrap, first
+    // miner, first hauler, then any further miner. If one of these can't be
+    // paid yet the spawn waits for energy to build up instead of falling
+    // through to a cheaper role (an upgrader used to eat the energy the
+    // hauler was waiting for, so the hauler never came).
+    const queued = {};
+    const pushCritical = (type) => {
+        if (queued[type]) return;
+        if (!creepLogic[type] || !creepLogic[type].spawn(room)) return;
+        const data = creepLogic[type].spawnData(room);
+        if (!data) return;
+        queued[type] = true;
+        data.critical = true;
+        if (FALLBACK_BODIES[type] && census.count(room.name, type, 0) === 0) {
+            data.fallbackBody = FALLBACK_BODIES[type];
+        }
+        requests.push(data);
+    };
+    // The min-body fallback above only buys time: once a hauler exists the
+    // normal count is satisfied, so without this the room would keep the mini
+    // forever. While every hauler is smaller than the full body the room can
+    // now afford, queue one full hauler (even past `wanted`) - blocking, so
+    // an upgrader can't eat the energy it is waiting for.
+    const pushFullHaulerUpgrade = () => {
+        if (queued.hauler || !creepLogic.hauler) return;
+        const data = creepLogic.hauler.spawnData(room);
+        if (!data) return;
+        const haulers = census.creepsByRole(room.name, "hauler");
+        if (_.some(haulers, (c) => c.body.length >= data.body.length)) return;
+        queued.hauler = true;
+        data.critical = true;
+        requests.push(data);
+    };
+    if (!underAttack) {
+        pushCritical("bootstrap");
+        if (creepLogic.miner.spawnTier(room) === "first") pushCritical("miner");
+        if (census.count(room.name, "hauler", 0) === 0) pushCritical("hauler");
+        else pushFullHaulerUpgrade();
+        pushCritical("miner");
+    }
+
+    // Every other role that currently wants a creep, in priority order.
+    // Scouts, raiders, pioneers, and squadDismantler are pure luxury/never-solo -
     // only spawn once every other role (including scout, for the raider) is
     // already satisfied; squadDismantler never spawns here at all (only via
     // spawnPendingSquad above). Pioneer rescues a sister room, which matters,
@@ -135,7 +208,8 @@ function spawnCreeps(room) {
             type === "scout" ||
             type === "raider" ||
             type === "squadDismantler" ||
-            type === "pioneer"
+            type === "pioneer" ||
+            queued[type]
         ) {
             continue;
         }
@@ -175,7 +249,11 @@ function spawnCreeps(room) {
         if (data) requests.push(data);
     }
 
-    if (!requests.length) return;
+    if (!requests.length) {
+        if (!underAttack) idleVerdict[room.name] = { tick: Game.time, needs: needsNow, creeps: creepsNow };
+        return;
+    }
+    delete idleVerdict[room.name];
 
     for (const spawn of spawns) {
         // First request this spawn can actually afford right now. This way a
@@ -183,16 +261,22 @@ function spawnCreeps(room) {
         // pay for the expensive high-priority one.
         let picked = null;
         const energyStructures = energyStructuresForSpawn(room, spawn);
-        for (const req of requests) {
-            const dry = spawn.spawnCreep(req.body, req.name, {
+        const affordable = (req, body) =>
+            spawn.spawnCreep(body, req.name, {
                 memory: req.memory,
                 energyStructures,
                 dryRun: true,
-            });
-            if (dry === OK) {
-                picked = req;
+            }) === OK;
+        for (const req of requests) {
+            if (affordable(req, req.body)) {
+                picked = { name: req.name, body: req.body, memory: req.memory, req };
                 break;
             }
+            if (req.fallbackBody && affordable(req, req.fallbackBody)) {
+                picked = { name: req.name, body: req.fallbackBody, memory: req.memory, req };
+                break;
+            }
+            if (req.critical) break; // blocking: wait for energy, don't skip ahead
         }
         if (!picked) return; // nothing affordable -> stop
 
@@ -209,7 +293,7 @@ function spawnCreeps(room) {
         energyLedger.record(room.name, "spawn", bodyCost(picked.body));
 
         // consume the request so the next idle spawn builds something else
-        requests.splice(requests.indexOf(picked), 1);
+        requests.splice(requests.indexOf(picked.req), 1);
         if (!requests.length) return;
     }
 }
@@ -217,4 +301,7 @@ function spawnCreeps(room) {
 module.exports = spawnCreeps;
 // exposed for the offline smoke test only
 module.exports.renewIdleSpawns = renewIdleSpawns;
+module.exports.resetIdleVerdict = function () {
+    Object.keys(idleVerdict).forEach((name) => { delete idleVerdict[name]; });
+};
 module.exports.energyStructuresForSpawn = energyStructuresForSpawn;

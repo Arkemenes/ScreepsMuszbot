@@ -49,3 +49,9 @@ graph from `src/main.js` into `dist/main.js`. `dist/` is git-ignored.
 `test/smoke.js` stubs `Game` / `Memory` / Screeps constants and runs
 `main.loop()` across several phases plus unit checks. It is the only test
 harness — keep it green and extend it.
+
+## Fluxo de trabalho (Linear + graphify)
+
+- **Tarefas:** o projeto `ScreepsMuszbot` no Linear (workspace e time `Arkemenes`, chave `ARK`) é a fonte de verdade. Antes de começar um trabalho, garanta que exista uma issue; mova-a para *In Progress* ao iniciar e para *Done* ao concluir. Issues criadas por agentes entram no *Backlog* para revisão do usuário. Convenção completa: `90-AI/convencao-projetos-linear.md` no vault Obsidian.
+- **Estrutura do código:** quando existir `graphify-out/graph.json`, use `graphify query "<pergunta>"` (relações: `graphify path "A" "B"`; conceitos: `graphify explain "X"`) antes de varrer arquivos. Leia `graphify-out/GRAPH_REPORT.md` só para revisão ampla de arquitetura. Após alterar código, rode `graphify update .` (só AST, sem custo de API).
+- **Contexto e decisões:** ficam no vault Obsidian (`90-AI/<agente>/projetos/`); a continuidade entre sessões fica no ai-memory. Nunca grave segredos em issues, notas, grafo ou commits.

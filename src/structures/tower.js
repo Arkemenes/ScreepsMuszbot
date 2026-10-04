@@ -1,5 +1,5 @@
-const { getHostiles, isHostile } = require("../utils/hostiles");
-const traffic = require("../utils/traffic");
+const { getHostiles, isHostile, bodyInfo } = require("../utils/hostiles");
+const damaged = require("../utils/damagedStructures");
 const rampartRepair = require("../utils/rampartRepair");
 const energyLedger = require("../utils/energyLedger");
 let cacheTick;
@@ -7,9 +7,6 @@ let hostileTargets = {};
 let repairLists = {};
 let claimedRepairTargets = {};
 let healingTargets = {};
-// Heap: damaged-structure ids per room, rescanned every REPAIR_SCAN_TICKS.
-const repairScan = {};
-const REPAIR_SCAN_TICKS = 5;
 
 const hostilePartPriority = {
     [HEAL]: 0,
@@ -20,13 +17,22 @@ const hostilePartPriority = {
     [CARRY]: 5,
 };
 
+// Cheapest part type first: HEAL 0 ... CARRY 5; Infinity when it has none of them.
 function getHostilePriority(creep) {
-    const priorities = creep.body
-        .filter((part) => hostilePartPriority[part.type] !== undefined)
-        .map((part) => hostilePartPriority[part.type]);
+    const info = bodyInfo(creep);
+    let priority = Infinity;
+    for (const type in hostilePartPriority) {
+        if (info.parts[type] && hostilePartPriority[type] < priority) priority = hostilePartPriority[type];
+    }
+    return info.boosted ? priority - 0.5 : priority;
+}
 
-    const priority = priorities.length ? Math.min(...priorities) : Infinity;
-    return creep.body.some((part) => part.boost) ? priority - 0.5 : priority;
+function hasPriorityPart(creep) {
+    const parts = bodyInfo(creep).parts;
+    for (const type in hostilePartPriority) {
+        if (parts[type]) return true;
+    }
+    return false;
 }
 
 function getTowerDamage(tower, creep) {
@@ -73,10 +79,7 @@ function findHostileTarget(tower) {
 
     const hostiles = getHostiles(tower.room).filter(
         (creep) =>
-            _.some(
-                creep.body,
-                (part) => hostilePartPriority[part.type] !== undefined
-            ) &&
+            hasPriorityPart(creep) &&
             creep.pos.x > 0 &&
             creep.pos.x < 49 &&
             creep.pos.y > 0 &&
@@ -101,11 +104,7 @@ function findHostileTarget(tower) {
 function countNearbyHostiles(tower) {
     return getHostiles(tower.room).filter(
         (creep) =>
-            tower.pos.getRangeTo(creep) <= 3 &&
-            _.some(
-                creep.body,
-                (part) => hostilePartPriority[part.type] !== undefined
-            )
+            tower.pos.getRangeTo(creep) <= 3 && hasPriorityPart(creep)
     ).length;
 }
 
@@ -146,27 +145,9 @@ function computeRepairCandidates(room) {
     if (Object.prototype.hasOwnProperty.call(repairLists, room.name)) {
         return repairLists[room.name];
     }
-
-    // The full structure scan only runs every REPAIR_SCAN_TICKS; in between
-    // the remembered ids are re-resolved and re-filtered for current hits.
-    let scan = repairScan[room.name];
-    if (!scan || Game.time - scan.tick >= REPAIR_SCAN_TICKS) {
-        scan = repairScan[room.name] = {
-            tick: Game.time,
-            ids: room
-                .find(FIND_STRUCTURES, {
-                    filter: (structure) =>
-                        structure.hits < structure.hitsMax &&
-                        traffic.worthRepairing(structure),
-                })
-                .map((structure) => structure.id),
-        };
-    }
-    const damagedStructures = scan.ids
-        .map((id) => Game.getObjectById(id))
-        .filter((structure) => structure && structure.hits < structure.hitsMax);
-
-    repairLists[room.name] = _.sortBy(damagedStructures, rampartRepair.priority);
+    // the shared per-room list (utils/damagedStructures): scanned every 5 ticks, sorted
+    // once a tick - the builder reads the very same one
+    repairLists[room.name] = damaged.sorted(room);
     return repairLists[room.name];
 }
 
@@ -196,9 +177,19 @@ function findRepairTarget(tower) {
         claimedRepairTargets[tower.room.name] ||
         (claimedRepairTargets[tower.room.name] = new Set());
 
-    let target = candidates.find(
-        (s) => !claimed.has(s.id) && rampartRepair.towerMayRepair(s, tower)
-    );
+    // sorted by tier: once this tower is below the non-critical energy floor, nothing
+    // after the critical entries can pass towerMayRepair - stop there instead of
+    // walking (and tier()-ing) every damaged structure of the room, per tower, per tick
+    const nonCritical = rampartRepair.towerMayRepairNonCritical(tower);
+    let target = null;
+    for (let i = 0; i < candidates.length; i++) {
+        const s = candidates[i];
+        if (!nonCritical && rampartRepair.tier(s) !== "critical") break;
+        if (!claimed.has(s.id) && rampartRepair.towerMayRepair(s, tower)) {
+            target = s;
+            break;
+        }
+    }
 
     // nothing new to claim (or affordable) - double up on the single most
     // urgent target overall, but only if THIS tower can actually afford
@@ -242,6 +233,11 @@ var tower = {
             energyLedger.creditTower(tower, "towerRepair");
         }
     },
+};
+
+// Drops the shared heap scan of damaged structures (tests build a fresh room per case).
+tower.resetRepairScan = function () {
+    damaged.reset();
 };
 
 module.exports = tower;

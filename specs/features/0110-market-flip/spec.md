@@ -284,3 +284,11 @@ seja flip — flips já calculam essa taxa como parte do próprio lucro
 líquido. Novo `terminalOps.maxFeeRatio` (default `0.05`) em
 `candidateOrders()`; `marketFlip.js` passa `skipFeeCap:true` nas suas duas
 chamadas pra ficar de fora dessa checagem genérica.
+
+## Superseded em parte pelo 0111 (2026-10-01)
+
+O guardrail `preço ≤ guardrailFairPriceRatio × fairPrice` (AC5 e correlatos) foi
+substituído por `utils/marketPricing.js` ([0111](../0111-craft-flip/spec.md)):
+compra barata (ask ≤ mediana 7d) sem guardrail; compra cara e a perna de venda
+passam por liquidez e filtro de outlier; margem de tempo com `T` curto
+(`marketFlip.horizonTicks`). `guardrailFairPriceRatio` foi removido do config.

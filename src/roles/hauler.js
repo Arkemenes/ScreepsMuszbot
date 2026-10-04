@@ -1,4 +1,6 @@
 const { scaledBody } = require("../utils/population");
+const cpuMeter = require("../utils/cpuMeter");
+const labReactions = require("../utils/labReactions");
 const { receivingLink } = require("../utils/energy");
 const { planEntriesAt } = require("../utils/plan");
 const census = require("../utils/census");
@@ -9,6 +11,7 @@ const reservations = require("../utils/reservations");
 const config = require("../utils/config");
 const resourceTiers = require("../utils/resourceTiers");
 const nonEnergyLogistics = require("../utils/nonEnergyLogistics");
+const transientStock = require("../utils/transientStock");
 const names = require("../utils/names");
 const terminalOps = require("../utils/terminalOps");
 
@@ -34,7 +37,10 @@ function sourceContainers(room) {
         d.sourceContainers = excludeDangerZone(
             _.filter(
                 roomCache.structuresByType(room, STRUCTURE_CONTAINER),
-                (c) => c.pos.findInRange(FIND_SOURCES, 1).length > 0
+                (c) =>
+                    roomCache.sources(room).some(
+                        (src) => Math.abs(src.pos.x - c.pos.x) <= 1 && Math.abs(src.pos.y - c.pos.y) <= 1
+                    )
             ),
             room
         );
@@ -117,7 +123,8 @@ function towerDeliverable(s, room) {
 function spawnExtNeedingEnergy(room) {
     const d = derived(room);
     if (!d.spawnExt) {
-        d.spawnExt = excludeDangerZone(
+        // everything full (the usual case): skip the per-extension store scan
+        d.spawnExt = resourceTiers.spawnsAndExtensionsFull(room) ? [] : excludeDangerZone(
             _.filter(
                 roomCache.myStructures(room),
                 (s) =>
@@ -168,7 +175,9 @@ function labFactoryPowerSpawnNeedingEnergy(room) {
                     (s.structureType === STRUCTURE_LAB ||
                         s.structureType === STRUCTURE_FACTORY ||
                         s.structureType === STRUCTURE_POWER_SPAWN) &&
-                    s.store.getFreeCapacity(RESOURCE_ENERGY) > 0
+                    // ROADMAP 0111: lab/factory are transitory - only what an
+                    // active chain consumes, never up to full capacity
+                    transientStock.energyNeed(s) > 0
             ),
             room
         );
@@ -183,11 +192,10 @@ function controllerContainerCandidates(room) {
     if (d.controllerContainers === undefined) {
         d.controllerContainers = room.controller
             ? excludeDangerZone(
-                  room.controller.pos.findInRange(FIND_STRUCTURES, 3, {
-                      filter: (s) =>
-                          s.structureType === STRUCTURE_CONTAINER &&
-                          s.store.getFreeCapacity(RESOURCE_ENERGY) > 0,
-                  }),
+                  _.filter(
+                      roomCache.structuresNear(room, room.controller.pos, STRUCTURE_CONTAINER, 3),
+                      (s) => s.store.getFreeCapacity(RESOURCE_ENERGY) > 0
+                  ),
                   room
               )
             : [];
@@ -361,6 +369,24 @@ function terminalWithdrawable(room) {
 // same tradeoff pioneer.js's own local-mining estimate makes) - running
 // PathFinder per candidate pile just to compare two guesses isn't worth the
 // CPU.
+// The largest energy pile on the ground of the room (0 if none), once per tick. A pile only
+// qualifies for a pickup when its ESTIMATED amount (decayed over the trip) beats a threshold, and
+// that never exceeds its real amount - so when no pile is bigger than the threshold the
+// findClosestByPath over the room's drops (a Room.find + a filter call per drop + a path
+// search, per hauler, twice per pickLoad) cannot find anything and is skipped.
+function biggestEnergyDrop(room) {
+    const d = derived(room);
+    if (d.biggestDrop === undefined) {
+        let best = 0;
+        const drops = roomCache.droppedResources(room);
+        for (let i = 0; i < drops.length; i++) {
+            if (drops[i].resourceType === RESOURCE_ENERGY && drops[i].amount > best) best = drops[i].amount;
+        }
+        d.biggestDrop = best;
+    }
+    return d.biggestDrop;
+}
+
 function estimatedDropAmount(creep, resource) {
     const eta = creep.pos.getRangeTo(resource);
     const perTick = Math.ceil(
@@ -400,9 +426,45 @@ function estimatedDropAmount(creep, resource) {
 // - then the closest source container built up past hauler.minContainerLoad
 // (not the fullest one - a far container isn't worth the trip when a closer
 // one already qualifies).
+// A hauler walking to its pick-up point re-ran the whole cascade every tick (3.6 calls/tick
+// for 4 haulers, ~0.8 CPU/tick: path searches to the same container over and over). The pick
+// is kept per creep (heap) for hauler.repickTicks (5) and re-checked each tick: the target must
+// still exist and still hold 50+ energy, and no pile above the big-drop bar may have appeared
+// (that tier outranks everything, so it forces a fresh pick the same tick). Picks that carry a
+// fixed withdraw amount (the terminal's) are never reused - the number goes stale.
+const loadPicks = {};
+let loadPicksGc = 0;
+function energyHeld(target) {
+    return target.store ? target.store[RESOURCE_ENERGY] || 0 : target.amount || 0;
+}
 function pickLoad(creep) {
+    const room = creep.room;
+    const last = loadPicks[creep.name];
+    if (
+        last &&
+        last.room === room.name &&
+        Game.time >= last.tick &&
+        Game.time - last.tick < config.get("hauler.repickTicks", 5) &&
+        biggestEnergyDrop(room) <= config.get("hauler.bigDropLoad", 500)
+    ) {
+        const target = Game.getObjectById(last.src.id);
+        if (target && energyHeld(target) >= 50) return last.src;
+    }
+    const src = cpuMeter.span("hauler.pickLoad", () => pickLoadNow(creep));
+    if (src && src.amount === undefined) loadPicks[creep.name] = { tick: Game.time, room: room.name, src };
+    else delete loadPicks[creep.name];
+    if (Game.time - loadPicksGc >= 300 || Game.time < loadPicksGc) {
+        loadPicksGc = Game.time;
+        Object.keys(loadPicks).forEach((name) => {
+            if (!Game.creeps[name] || Game.time - loadPicks[name].tick > 50) delete loadPicks[name];
+        });
+    }
+    return src;
+}
+
+function pickLoadNow(creep) {
     const bigDropMin = config.get("hauler.bigDropLoad", 500);
-    const bigDrop = creep.pos.findClosestByPath(FIND_DROPPED_RESOURCES, {
+    const bigDrop = biggestEnergyDrop(creep.room) <= bigDropMin ? null : creep.pos.findClosestByPath(FIND_DROPPED_RESOURCES, {
         filter: (r) =>
             r.resourceType === RESOURCE_ENERGY &&
             estimatedDropAmount(creep, r) > bigDropMin &&
@@ -489,7 +551,7 @@ function pickLoad(creep) {
     }
 
     const minDrop = config.get("hauler.minDropLoad", 100);
-    const dropped = creep.pos.findClosestByPath(FIND_DROPPED_RESOURCES, {
+    const dropped = biggestEnergyDrop(creep.room) <= minDrop ? null : creep.pos.findClosestByPath(FIND_DROPPED_RESOURCES, {
         filter: (r) =>
             r.resourceType === RESOURCE_ENERGY &&
             estimatedDropAmount(creep, r) > minDrop &&
@@ -676,7 +738,7 @@ function shouldMinerFeedTower(room, tower) {
         feedTowerCache.byTower = {};
     }
     if (tower.id in feedTowerCache.byTower) return feedTowerCache.byTower[tower.id];
-    return (feedTowerCache.byTower[tower.id] = computeMinerFeedTower(room, tower));
+    return (feedTowerCache.byTower[tower.id] = cpuMeter.span("hauler.minerFeedTower", () => computeMinerFeedTower(room, tower)));
 }
 const feedTowerCache = { tick: -1, byTower: {} };
 
@@ -705,7 +767,7 @@ function computeMinerFeedTower(room, tower) {
 }
 
 function idleNear(creep) {
-    const anchor = creep.room.storage || creep.room.find(FIND_MY_SPAWNS)[0];
+    const anchor = creep.room.storage || roomCache.mySpawns(creep.room)[0];
     if (anchor && !creep.pos.inRangeTo(anchor, 3)) {
         creep.moveTo(anchor, { range: 3 });
     }
@@ -735,7 +797,14 @@ function waitForEnergy(creep) {
 // all the time - reusing an already-idle hauler's spare ticks costs
 // nothing extra.
 
-function mineralDeliveryTarget(room) {
+function mineralDeliveryTarget(room, resourceType) {
+    // ROADMAP 0111: a craft chain's FINAL product goes straight to the terminal
+    // (its sale is already planned) - one trip fewer than storage -> terminal.
+    const mem = Memory.rooms && Memory.rooms[room.name];
+    if (resourceType && mem && mem.directToTerminal === resourceType && room.terminal &&
+        room.terminal.store.getFreeCapacity(resourceType) > 0) {
+        return room.terminal;
+    }
     if (room.storage && room.storage.store.getFreeCapacity() > 0) {
         return room.storage;
     }
@@ -760,9 +829,7 @@ function mineralWithdrawSource(room, resourceType) {
 function mineralContainerJob(room) {
     const mineral = roomCache.minerals(room)[0];
     if (!mineral) return null;
-    const container = mineral.pos.findInRange(FIND_STRUCTURES, 1, {
-        filter: (s) => s.structureType === STRUCTURE_CONTAINER,
-    })[0];
+    const container = roomCache.structuresNear(room, mineral.pos, STRUCTURE_CONTAINER, 1)[0];
     if (!container) return null;
     const resourceType = Object.keys(container.store).find(
         (k) => container.store[k] > 0
@@ -773,21 +840,41 @@ function mineralContainerJob(room) {
     return { kind: "mineralContainer", resourceType, from: container, to };
 }
 
-function activeLabReaction(room) {
-    const mem = Memory.rooms[room.name];
-    return mem && mem.labReaction;
+// A running reaction's output lab is only worth a trip once it holds a full
+// hauler load or mineralHauler.labDrainRatio (80%) of its capacity, whichever is
+// smaller (user request, 2026-10-02: the hauler was fetching 5 units at a time).
+// Never above the pressure threshold, so a nearly full lab always drains. Whatever
+// is left when the reaction ends is drained by transientDrainJob, not by this.
+function labDrainFloor(room, lab) {
+    const cap = (lab.store.getCapacity && lab.store.getCapacity(lab.mineralType)) ||
+        (typeof LAB_MINERAL_CAPACITY !== "undefined" ? LAB_MINERAL_CAPACITY : 3000);
+    let load = Infinity;
+    census.creepsByRole(room.name, "hauler").forEach((c) => {
+        const size = c.store && c.store.getCapacity ? c.store.getCapacity() : 0;
+        if (size > 0 && size < load) load = size;
+    });
+    return Math.min(cap * config.get("mineralHauler.labDrainRatio", 0.8), load, cap * config.get("mineralHauler.pressureHigh", 0.75));
 }
 
 // Drain the output lab so a long-running reaction never stalls against
 // LAB_MINERAL_CAPACITY.
 function labOutputJob(room) {
-    const reaction = activeLabReaction(room);
-    if (!reaction) return null;
-    const output = Game.getObjectById(reaction.output);
-    if (!output || !output.mineralType || !output.store[output.mineralType]) {
-        return null;
-    }
-    const to = mineralDeliveryTarget(room);
+    // ROADMAP 0111: a wide reaction has several output labs - drain the fullest.
+    // ROADMAP 0115: a room may run several reactions at once - the fullest of all.
+    let output = null;
+    labReactions.list(room.name).forEach((reaction) => {
+        // an intermediate that the next reaction phase consumes in place stays in its lab -
+        // draining it would just force a round trip
+        if (reaction.keep) return;
+        labReactions.outputsOf(reaction).forEach((id) => {
+            const candidate = Game.getObjectById(id);
+            if (!candidate || !candidate.mineralType || !candidate.store[candidate.mineralType]) return;
+            if (candidate.store[candidate.mineralType] < labDrainFloor(room, candidate)) return;
+            if (!output || candidate.store[candidate.mineralType] > output.store[output.mineralType]) output = candidate;
+        });
+    });
+    if (!output) return null;
+    const to = mineralDeliveryTarget(room, output.mineralType);
     if (!to) return null;
     return {
         kind: "labOutput",
@@ -799,22 +886,36 @@ function labOutputJob(room) {
 
 // Top up whichever input lab is running low, from storage/terminal.
 function labReagentJob(room) {
-    const reaction = activeLabReaction(room);
-    if (!reaction) return null;
     const buffer = config.get("mineralHauler.labBuffer", 500);
-    const pairs = [
-        [reaction.a, reaction.input1],
-        [reaction.b, reaction.input2],
-    ];
-    for (const [resourceType, labId] of pairs) {
-        const lab = Game.getObjectById(labId);
-        if (!lab) continue;
-        if ((lab.store[resourceType] || 0) >= buffer) continue;
-        const from = mineralWithdrawSource(room, resourceType);
-        if (!from) continue;
-        return { kind: "labReagent", resourceType, from, to: lab };
+    // ROADMAP 0115: every running reaction needs its two input labs stocked
+    for (const reaction of labReactions.list(room.name)) {
+        const pairs = [
+            [reaction.a, reaction.input1],
+            [reaction.b, reaction.input2],
+        ];
+        for (const [resourceType, labId] of pairs) {
+            const lab = Game.getObjectById(labId);
+            if (!lab) continue;
+            if ((lab.store[resourceType] || 0) >= buffer) continue;
+            if (feedTaken(room, resourceType, lab.id)) continue;
+            const from = mineralWithdrawSource(room, resourceType);
+            if (!from) continue;
+            return { kind: "labReagent", resourceType, from, to: lab };
+        }
     }
     return null;
+}
+
+// ROADMAP 0111: with several haulers allowed on non-energy work at once, the
+// reagent/component jobs must not be handed to two of them for the same thing -
+// one hauler per (resource, destination) at a time; a different reagent (or
+// another lab/factory) is a different job and runs in parallel.
+function feedTaken(room, resourceType, toId) {
+    return census.creepsByRole(room.name, "hauler").some((c) => {
+        const j = c.memory.mineralJob;
+        return !!(j && j.toId === toId && j.resourceType === resourceType &&
+            (j.kind === "labReagent" || j.kind === "factoryComponent"));
+    });
 }
 
 function activeFactoryProduct(room) {
@@ -828,7 +929,7 @@ function factoryOutputJob(room) {
     if (!product) return null;
     const factory = roomCache.structuresByType(room, STRUCTURE_FACTORY)[0];
     if (!factory || !factory.store[product]) return null;
-    const to = mineralDeliveryTarget(room);
+    const to = mineralDeliveryTarget(room, product);
     if (!to) return null;
     return { kind: "factoryOutput", resourceType: product, from: factory, to };
 }
@@ -846,6 +947,7 @@ function factoryComponentJob(room) {
         if (resourceType === RESOURCE_ENERGY) continue;
         const need = recipe.components[resourceType];
         if ((factory.store[resourceType] || 0) >= need) continue;
+        if (feedTaken(room, resourceType, factory.id)) continue;
         const from = mineralWithdrawSource(room, resourceType);
         if (!from) continue;
         return { kind: "factoryComponent", resourceType, from, to: factory };
@@ -868,6 +970,20 @@ function powerFeedJob(room) {
         from,
         to: powerSpawn,
     };
+}
+
+// ROADMAP 0111: lab/factory are transitory - hand back to storage whatever
+// nothing is going to consume (legacy standing energy, finished-reaction
+// residue). Lowest priority of the cascade: real work always comes first.
+function transientDrainJob(room) {
+    const to = mineralDeliveryTarget(room);
+    if (!to) return null;
+    for (const s of roomCache.myStructures(room)) {
+        if (!transientStock.isTransient(s)) continue;
+        const entry = transientStock.excess(s)[0];
+        if (entry) return { kind: "transientDrain", resourceType: entry.resourceType, from: s, to };
+    }
+    return null;
 }
 
 // Gate for the whole non-energy cascade below: spawns/extensions still
@@ -988,14 +1104,62 @@ function safeMineralJob(job, room) {
     return job;
 }
 
+// ROADMAP 0111 (bug real, usuario reportou em producao, 2026-10-02): a craft
+// chain's input delivery (factoryComponent / labReagent) and product pickup are
+// ordinary mineral jobs, so they only ran when nothing else was going on -
+// never while there was energy to load (mineral jobs are only assigned when
+// pickLoad() finds nothing) and never while the mineral container held ANY
+// amount (mineralContainerJob wins the whole cascade). The factory sat with its
+// energy and no U for 1500 ticks while the U was in storage. While a chain is
+// active in this room its feed/drain jobs come first; outside a chain nothing
+// changes.
+function chainActive(room) {
+    const active = Memory.craft && Memory.craft.active;
+    if (!active) return false;
+    return Object.keys(active).some((key) => active[key] && (active[key].room || String(key).split(":")[0]) === room.name);
+}
+
+// Only a NULL answer is remembered for the rest of the tick (derived(), per room): when
+// the first idle hauler finds no job the others - 2-3 a tick - cannot either, and each
+// of them re-ran the whole cascade (0.3 CPU/tick, 2026-10-03). A job found is never
+// reused: it may exclude what an earlier hauler just took, so each one still asks.
+function pickChainFeedJob(room) {
+    if (!chainActive(room)) return null;
+    const d = derived(room);
+    if (d.noChainJob) return null;
+    const job = cpuMeter.span("hauler.chainFeed", () => pickChainFeedJobNow(room));
+    if (!job) d.noChainJob = true;
+    return job;
+}
+
+function pickChainFeedJobNow(room) {
+    const job =
+        safeMineralJob(labReagentJob(room), room) ||
+        safeMineralJob(factoryComponentJob(room), room) ||
+        safeMineralJob(factoryOutputJob(room), room) ||
+        safeMineralJob(labOutputJob(room), room) ||
+        safeMineralJob(transientDrainJob(room), room);
+    return job ? Object.assign({}, job, { chain: true }) : null;
+}
+
 function pickMineralJob(room) {
+    const d = derived(room);
+    if (d.noMineralJob) return null;
+    const job = cpuMeter.span("hauler.pickMineralJob", () => pickMineralJobNow(room));
+    if (!job) d.noMineralJob = true;
+    return job;
+}
+
+function pickMineralJobNow(room) {
     return (
+        pickChainFeedJob(room) ||
         safeMineralJob(mineralContainerJob(room), room) ||
         safeMineralJob(labOutputJob(room), room) ||
         safeMineralJob(labReagentJob(room), room) ||
         safeMineralJob(factoryOutputJob(room), room) ||
         safeMineralJob(factoryComponentJob(room), room) ||
         safeMineralJob(powerFeedJob(room), room) ||
+        safeMineralJob(transientDrainJob(room), room) ||
         null
     );
 }
@@ -1025,6 +1189,7 @@ function assignMineralJob(creep, job) {
         fromId: job.from.id,
         toId: job.to.id,
         loaded: false,
+        chain: !!job.chain,
     };
     return true;
 }
@@ -1062,7 +1227,7 @@ function runMineralJob(creep) {
         job.loaded = true;
         let to = Game.getObjectById(job.toId);
         if (!canReceive(to, resourceType)) {
-            to = mineralDeliveryTarget(creep.room);
+            to = mineralDeliveryTarget(creep.room, resourceType);
             if (to) job.toId = to.id;
         }
         if (!to) {
@@ -1159,6 +1324,11 @@ var hauler = {
                     loadEnergy(creep, energySource);
                     return;
                 }
+                // ROADMAP 0111: a chain's feed job, once taken, runs to the end
+                if (job.chain && chainActive(creep.room)) {
+                    runMineralJob(creep);
+                    return;
+                }
                 const pressuredJob = pickPressuredJob(creep.room);
                 if (pressuredJob) {
                     assignMineralJob(creep, pressuredJob);
@@ -1221,14 +1391,28 @@ var hauler = {
             }
 
             if (src) {
-                const pressuredJob = hasPressureCapacity(creep.room)
-                    ? pickPressuredJob(creep.room)
-                    : null;
+                const pressuredJob =
+                    hasPressureCapacity(creep.room) && nonEnergyLogistics.keepsEnergyHauler(creep.room)
+                        ? pickPressuredJob(creep.room)
+                        : null;
                 if (
                     creep.store.getUsedCapacity() === 0 &&
                     pressuredJob &&
                     assignMineralJob(creep, pressuredJob)
                 ) {
+                    runMineralJob(creep);
+                    return;
+                }
+                // ROADMAP 0111: feed a running chain before loading more energy -
+                // same guard as the pressured tier (2+ haulers, tank empty), so
+                // one hauler is always left on energy
+                const chainJob =
+                    creep.store.getUsedCapacity() === 0 &&
+                    hasPressureCapacity(creep.room) &&
+                    nonEnergyLogistics.keepsEnergyHauler(creep.room)
+                        ? pickChainFeedJob(creep.room)
+                        : null;
+                if (chainJob && assignMineralJob(creep, chainJob)) {
                     runMineralJob(creep);
                     return;
                 }
@@ -1273,7 +1457,12 @@ var hauler = {
         const target = Game.getObjectById(id);
         if (!target) return;
         reservations.claimDeliver(creep, id);
-        if (creep.transfer(target, RESOURCE_ENERGY) === ERR_NOT_IN_RANGE) {
+        // ROADMAP 0111: a transitory lab/factory takes only its target, the
+        // rest stays on the creep for the next delivery (storage)
+        const amount = transientStock.isTransient(target)
+            ? Math.max(1, Math.min(creep.store.getUsedCapacity(RESOURCE_ENERGY), transientStock.energyNeed(target)))
+            : undefined;
+        if (creep.transfer(target, RESOURCE_ENERGY, amount) === ERR_NOT_IN_RANGE) {
             creep.moveTo(target, { range: 1 });
         }
     },
@@ -1296,6 +1485,8 @@ var hauler = {
 
     // exposed for the offline smoke test only
     pickMineralJob,
+    pickLoad,
+    pickChainFeedJob,
     battlefieldLootJob,
     runLootJob,
     optionalConsumer,

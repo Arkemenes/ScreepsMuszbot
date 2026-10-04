@@ -12,18 +12,39 @@ const { planEntriesAt } = require("./plan");
 let economyCacheTick = -1;
 let economyCache = {};
 
+// Whether the plan marks this tower as a source-defense one: the plan changes rarely, the
+// answer is kept per tower id for a minute (it was a plan lookup per tower per call, from
+// the economy snapshot, the hauler's tower lists and the miner's feed decision).
+const sourceDefenseCache = {};
 function isSourceDefenseTower(structure) {
+    const hit = sourceDefenseCache[structure.id];
+    if (hit && Game.time >= hit.tick && Game.time - hit.tick < 60) return hit.value;
     const entries = planEntriesAt(
         structure.room.name,
         structure.pos.x,
         structure.pos.y
     );
-    return !!(
+    const value = !!(
         entries &&
         entries.some(
             (entry) =>
                 entry.structureType === STRUCTURE_TOWER && entry.sourceDefense
         )
+    );
+    sourceDefenseCache[structure.id] = { tick: Game.time, value };
+    return value;
+}
+
+// Every spawn and extension is full: nobody is hungry. The engine keeps energyAvailable
+// (what they hold) and energyCapacityAvailable (what they can hold) up to date, so this is
+// two property reads instead of a store.getFreeCapacity() per extension - the scan below
+// ran that on every spawn/extension of every room, every tick, to find out "no" almost always.
+// Unknown numbers (not a real room) fall back to the scan.
+function spawnsAndExtensionsFull(room) {
+    return (
+        typeof room.energyAvailable === "number" &&
+        typeof room.energyCapacityAvailable === "number" &&
+        room.energyAvailable >= room.energyCapacityAvailable
     );
 }
 
@@ -116,22 +137,27 @@ function computeEconomySnapshot(room) {
 
     if (typeof FIND_MY_STRUCTURES !== "undefined") {
         const structures = roomCache.myStructures(room);
-        const spawnsAndExtensions = structures.filter((s) =>
-            (s.structureType === STRUCTURE_SPAWN ||
-                s.structureType === STRUCTURE_EXTENSION) &&
-            s.store.getFreeCapacity(RESOURCE_ENERGY) > 0
-        );
+        const spawnsAndExtensions = spawnsAndExtensionsFull(room)
+            ? []
+            : structures.filter((s) =>
+                (s.structureType === STRUCTURE_SPAWN ||
+                    s.structureType === STRUCTURE_EXTENSION) &&
+                s.store.getFreeCapacity(RESOURCE_ENERGY) > 0
+            );
         hasHungrySpawn = spawnsAndExtensions.length > 0;
         if (spawnsAndExtensions.length) count += spawnsAndExtensions.length;
 
-        const criticalTowers = structures.filter((s) =>
-            s.structureType === STRUCTURE_TOWER &&
-            !isSourceDefenseTower(s) &&
-            s.store[RESOURCE_ENERGY] <
-                s.store.getCapacity(RESOURCE_ENERGY) *
-                    config.get("tower.criticalRatio", 0.5)
-        );
-        if (criticalTowers.length) count += criticalTowers.length;
+        // the towers only (cached per-type list), the cheap energy test before the plan lookup
+        const towerCriticalRatio = config.get("tower.criticalRatio", 0.5);
+        const towers = roomCache.structuresByType(room, STRUCTURE_TOWER);
+        for (let i = 0; i < towers.length; i++) {
+            const s = towers[i];
+            if (
+                s.my !== false &&
+                s.store[RESOURCE_ENERGY] < s.store.getCapacity(RESOURCE_ENERGY) * towerCriticalRatio &&
+                !isSourceDefenseTower(s)
+            ) count += 1;
+        }
     }
 
     const roomMem = Memory.rooms && Memory.rooms[room.name];
@@ -185,6 +211,7 @@ function getEconomyState(room) {
 }
 
 module.exports = {
+    spawnsAndExtensionsFull,
     reserveFloor,
     aboveReserve,
     isStorageAbundant,

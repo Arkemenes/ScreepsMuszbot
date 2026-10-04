@@ -258,6 +258,16 @@ global.RawMemory = {
     get: () => JSON.stringify(Memory),
 };
 global.Memory = { creeps: {}, rooms: {}, structures: {} };
+// The suite changes room state and advances one tick at a time: roomNeeds must recompute each
+// tick here (the in-game default keeps it needs.cacheTicks ticks; it has its own test below).
+require(path.join(PROJECT, "src/utils/config")).defaults.needs.cacheTicks = 1;
+// Memory.stats is rebuilt every 60 ticks in production (stats.publishInterval); the fixture
+// reads it right after every tick, so it publishes every tick here (own test below).
+require(path.join(PROJECT, "src/utils/config")).defaults.stats.publishInterval = 1;
+// the fixture drives these state machines tick by tick: production runs them on a grid
+// (craft.tickInterval 10, terminalOps.tickInterval 5) - own test below
+require(path.join(PROJECT, "src/utils/config")).defaults.craft.tickInterval = 1;
+require(path.join(PROJECT, "src/utils/config")).defaults.terminalOps.tickInterval = 1;
 
 // --- world --------------------------------------------------------------
 function store(energy, cap) {
@@ -466,7 +476,7 @@ assert(!/terrainMatrix|walkMatrix/.test(memStr), "no terrainMatrix/walkMatrix in
 assert(typeof global.Memory.rooms.W1N1 === "object", "intel populated Memory.rooms.W1N1");
 assert(Game.creeps.Harv1.memory.role === "hauler",
     "legacy harvester creep was folded into the hauler role");
-assert(global.Memory.rooms.W1N1.numberOfHaulers >= 1, "census counted the migrated hauler");
+assert(require(path.join(PROJECT, "src/utils/census")).count("W1N1", "hauler") >= 1, "census counted the migrated hauler");
 
 // ROADMAP 0098: public API rejects malformed requests without persisting an
 // operation or scheduling a terminal intent.
@@ -880,6 +890,102 @@ assert(
     spawnCalls.length > 0 && !spawnCalls.some((c) => c.role === "scout"),
     "no scout spawned while economy roles still want creeps (phase 1)"
 );
+
+// --- ROADMAP 0112: critical spawn tier blocks, falls back to a min body --
+{
+    const spawning = require(path.join(PROJECT, "src/rooms/spawning"));
+    const creepLogic = require(path.join(PROJECT, "src/roles"));
+    const saved = {};
+    for (const r of ["bootstrap", "miner", "hauler", "upgrader"]) {
+        saved[r] = {
+            spawn: creepLogic[r].spawn,
+            spawnData: creepLogic[r].spawnData,
+            spawnTier: creepLogic[r].spawnTier,
+        };
+    }
+    const fullHauler = [CARRY, CARRY, MOVE, CARRY, CARRY, MOVE]; // 300
+    creepLogic.bootstrap.spawn = () => false;
+    creepLogic.miner.spawn = () => false;
+    creepLogic.miner.spawnTier = () => "rest";
+    creepLogic.hauler.spawn = () => true;
+    creepLogic.hauler.spawnData = () => ({
+        name: "h0112", body: fullHauler, memory: { role: "hauler" },
+    });
+    creepLogic.upgrader.spawn = () => true;
+    creepLogic.upgrader.spawnData = () => ({
+        name: "u0112", body: [WORK, CARRY, MOVE], memory: { role: "upgrader" },
+    });
+
+    const run = (energy) => {
+        const spawned = [];
+        const sp = Object.assign(new Spawn(), {
+            id: "spawn0112", structureType: STRUCTURE_SPAWN, spawning: null,
+            pos: new RoomPosition(10, 10, "W1N1"),
+            spawnCreep(body, name, opts) {
+                const cost = body.length * 50;
+                if (cost > energy) return ERR_NOT_ENOUGH_ENERGY;
+                if (!opts.dryRun) spawned.push({ name, body });
+                return OK;
+            },
+        });
+        const room = {
+            name: "Crit0112", energyAvailable: energy,
+            energyCapacityAvailable: 300, storage: null,
+            find: (t) => (t === FIND_MY_SPAWNS ? [sp] : []),
+        };
+        Memory.rooms["Crit0112"] = {};
+        Game.time++; // every run is its own tick: roomCache.mySpawns would reuse the previous run's spawn
+        spawning(room);
+        return spawned;
+    };
+
+    try {
+        let out = run(100);
+        assert(out.length === 0,
+            "0112: no hauler affordable -> upgrader does NOT jump the queue");
+        out = run(200);
+        assert(out.length === 1 && out[0].name === "h0112" &&
+            out[0].body.length === 3,
+            "0112: zero haulers + full body unaffordable -> min-body hauler spawns");
+        out = run(300);
+        assert(out.length === 1 && out[0].name === "h0112" &&
+            out[0].body.length === 6,
+            "0112: full hauler body spawns when affordable");
+
+        // a lone mini hauler exists and `wanted` is met: a full one still follows
+        creepLogic.hauler.spawn = () => false;
+        const census = require(path.join(PROJECT, "src/utils/census"));
+        const origBy = census.creepsByRole, origCount = census.count;
+        census.creepsByRole = (rn, role) =>
+            rn === "Crit0112" && role === "hauler" ? [{ body: [1, 2, 3] }] : origBy(rn, role);
+        census.count = (rn, role, d) =>
+            rn === "Crit0112" && role === "hauler" ? 1 : origCount(rn, role, d);
+        try {
+            out = run(100);
+            assert(out.length === 0,
+                "0112: mini hauler alive -> waits (no upgrader) for the full hauler");
+            out = run(300);
+            assert(out.length === 1 && out[0].name === "h0112" &&
+                out[0].body.length === 6,
+                "0112: mini hauler alive, wanted met -> a full hauler is still spawned");
+            census.creepsByRole = (rn, role) =>
+                rn === "Crit0112" && role === "hauler" ? [{ body: fullHauler }] : origBy(rn, role);
+            out = run(300);
+            assert(out.length === 1 && out[0].name === "u0112",
+                "0112: full hauler alive -> no extra hauler, normal tier resumes");
+        } finally {
+            census.creepsByRole = origBy;
+            census.count = origCount;
+        }
+    } finally {
+        for (const r of Object.keys(saved)) {
+            Object.assign(creepLogic[r], saved[r]);
+            for (const k of Object.keys(saved[r])) {
+                if (saved[r][k] === undefined) delete creepLogic[r][k];
+            }
+        }
+    }
+}
 
 // --- ROADMAP 0094: spawn passes energy structures in anchor order -------
 {
@@ -1308,6 +1414,9 @@ assert(hlTowerTagged._to !== "tower1",
 // falling back to the prototype default (array form) for everything else -
 // every other hauler fixture above relies on that default.
 function withFindLookup(pos, lists) {
+    // the drops the case serves through findClosestByPath are also what room.find(FIND_DROPPED_RESOURCES)
+    // returns, as in the game (the hauler pre-checks the room's drops before searching a path)
+    if (lists[FIND_DROPPED_RESOURCES] !== undefined) findMap[FIND_DROPPED_RESOURCES] = lists[FIND_DROPPED_RESOURCES];
     const origByPath = RoomPosition.prototype.findClosestByPath;
     pos.findClosestByPath = (a, opts) => {
         if (lists[a] === undefined) return origByPath.call(pos, a, opts);
@@ -1654,9 +1763,20 @@ function withFindLookup(pos, lists) {
     Game.time++;
     const hLab = makeCreep("HLab1", "hauler", { store: store(200, 200) });
     hLab.transfer = (t) => { hLab._to = t && t.id; return OK; };
+    // ROADMAP 0111: labs are transitory - by default they hold no energy at
+    // all (a reaction burns none); craft.labEnergyTarget opts a boost setup in.
+    const savedLabSettings = Memory.settings;
+    Memory.settings = Object.assign({}, savedLabSettings);
+    hauler.run(hLab);
+    assert(hLab._to !== "lab1",
+        "0111 AC6: by default a lab is NOT topped off with energy - labs are transitory (got " + hLab._to + ")");
+    Memory.settings = Object.assign({}, savedLabSettings, { craft: { labEnergyTarget: 2000 } });
+    hLab._to = undefined;
+    Game.time++; // hauler.js's per-tick derived() cache
     hauler.run(hLab);
     assert(hLab._to === "lab1",
-        "hauler tops off a lab once towers/spawn/storage are all satisfied (ROADMAP 0043)");
+        "hauler tops off a lab once towers/spawn/storage are all satisfied (ROADMAP 0043, now opt-in via craft.labEnergyTarget)");
+    Memory.settings = savedLabSettings;
 
     const savedDowngradeTicks = controller.ticksToDowngrade;
     controller.ticksToDowngrade = 1;
@@ -1975,7 +2095,10 @@ function withFindLookup(pos, lists) {
     const hOptional = makeCreep("HOptional", "hauler", { store: store(0, 200) });
     hOptional.withdraw = (t) => { hOptional._from = t && t.id; return OK; };
     hOptional.memory.job = "load";
+    const savedOptionalSettings = Memory.settings;
+    Memory.settings = Object.assign({}, savedOptionalSettings, { craft: { labEnergyTarget: 2000 } }); // lab must be a real consumer here
     hauler.run(hOptional);
+    Memory.settings = savedOptionalSettings;
     assert(hOptional._from !== "storoptional",
         "an optional consumer (lab) does NOT pull storage below its 5% floor " +
             "(ROADMAP 0043 follow-up, got " + hOptional._from + ")");
@@ -2155,6 +2278,49 @@ Game.time++;
 assert(needs.roomNeeds(room).bootstrap === 1,
     "bootstrap wanted when the room has no miner");
 Game.creeps.Miner1 = savedMiner;
+
+// 0113: with needs.cacheTicks > 1 the headcount is kept between ticks (compute() is ~0.3 CPU a
+// room), but never while the room is under attack, and a console override applies at once
+{
+    const cfg = require(path.join(PROJECT, "src/utils/config"));
+    // compute() steps the room's autoscale state: keep this block from leaking into the autoscale tests below
+    const needsMemBackup = JSON.parse(JSON.stringify(Memory.rooms.W1N1));
+    const needsTime0 = Game.time;
+    cfg.defaults.needs.cacheTicks = 5;
+    Game.time += 70000000;
+    needs.invalidate(room.name);
+    const savedMiner2 = Game.creeps.Miner1;
+    const first = needs.roomNeeds(room);
+    delete Game.creeps.Miner1; // the room now lacks a miner: bootstrap should be wanted...
+    Game.time += 2;
+    assert(needs.roomNeeds(room) === first && first.bootstrap === 0, "0113: a computed headcount is served from the cache inside the window");
+    Game.time += 3; // 5 ticks after the first compute
+    assert(needs.roomNeeds(room).bootstrap === 1, "0113: ...and recomputed once the window has passed");
+    // under attack: recomputed every tick
+    Game.creeps.Miner1 = savedMiner2;
+    Game.time++;
+    needs.invalidate(room.name);
+    needs.roomNeeds(room);
+    Memory.rooms.W1N1.defenseActive = true;
+    delete Game.creeps.Miner1;
+    Game.time++;
+    assert(needs.roomNeeds(room).bootstrap === 1, "0113: a room under attack is never served from the cache");
+    Memory.rooms.W1N1.defenseActive = false;
+    Game.creeps.Miner1 = savedMiner2;
+    // console override: immediate
+    Game.time++;
+    needs.invalidate(room.name);
+    needs.roomNeeds(room);
+    Game.time++;
+    global.setWanted("W1N1", "upgrader", 7);
+    assert(needs.roomNeeds(room).upgrader === 7, "0113: setWanted applies at once, not after the cache window");
+    global.clearWanted("W1N1");
+    cfg.defaults.needs.cacheTicks = 1;
+    Game.time++;
+    needs.invalidate(room.name);
+    Memory.rooms.W1N1 = needsMemBackup;
+    Game.time = needsTime0; // autoscale compares lastAdjustTick with Game.time
+}
 
 // builder scales with backlog AND is capped by pickable energy
 findMap[FIND_MY_CONSTRUCTION_SITES] = [];
@@ -2427,11 +2593,12 @@ assert(needs.roomNeeds(room).hauler === 1,
 // (roles/hauler.js's pickMineralJob) - the base tier bumps from 1 to 2
 // while there's real storage to deliver into
 const mineralExtractor = Object.assign(new OwnedStructure(), {
-    id: "needsMinExtractor1", structureType: STRUCTURE_EXTRACTOR, my: true,
+    id: "needsMinExtractor1", structureType: STRUCTURE_EXTRACTOR, my: true, pos: mineral.pos,
 });
 const mineralContainer = Object.assign(new StructureContainer(), {
-    id: "needsMinContainer1", structureType: STRUCTURE_CONTAINER,
+    id: "needsMinContainer1", structureType: STRUCTURE_CONTAINER, pos: mineral.pos,
 });
+findMap[FIND_STRUCTURES].push(mineralExtractor, mineralContainer); // the room cache finds them by position
 const realNeedsMineralFindInRange = mineral.pos.findInRange;
 mineral.pos.findInRange = (type, range, opts) => {
     let list = type === FIND_STRUCTURES ? [mineralExtractor, mineralContainer] : [];
@@ -2452,6 +2619,7 @@ assert(needs.roomNeeds(room).hauler === 1,
 
 mineral.mineralAmount = savedNeedsMineralAmount;
 mineral.pos.findInRange = realNeedsMineralFindInRange;
+findMap[FIND_STRUCTURES] = findMap[FIND_STRUCTURES].filter((s) => s.id !== "needsMinExtractor1" && s.id !== "needsMinContainer1");
 findMap[FIND_MY_STRUCTURES] = findMap[FIND_MY_STRUCTURES].filter(
     (s) => s.id !== "nlc" && s.id !== "nlr"
 );
@@ -2790,6 +2958,16 @@ room.energyCapacityAvailable = 300;
 const miner = require(path.join(PROJECT, "src/roles/miner"));
 global.Memory.rooms.W1N1.defenseActive = false;
 
+// The miner now asks roomCache (room.find(FIND_STRUCTURES) + a coordinate check) what is next to
+// it instead of pos.findInRange: each case sets that room list, in a fresh tick (per-tick cache).
+const minerRoomFind = room.find;
+function minerNear(list) {
+    room.find = (type, opts) => {
+        if (type !== FIND_STRUCTURES) return minerRoomFind.call(room, type, opts);
+        return opts && typeof opts.filter === "function" ? list.filter(opts.filter) : list;
+    };
+    Game.time++;
+}
 const mSource = Object.assign(new Source(), {
     id: "msrc", energy: 3000, energyCapacity: 3000,
     pos: new RoomPosition(5, 5, "W1N1"), room,
@@ -2823,6 +3001,7 @@ const mDisplaced = Object.assign(Object.create(Creep.prototype), {
 });
 mDisplaced.memory = { role: "miner", target: "msrc", seat: [4, 5], onContainer: true };
 mDisplaced.moveTo = (t) => { mDisplaced._to = t && (t.id || t); return OK; };
+minerNear([mContainer]);
 miner.run(mDisplaced);
 assert(mDisplaced._to === "mcont" && mDisplaced.memory.onContainer === false,
     "a displaced miner walks back to its container seat");
@@ -2850,6 +3029,7 @@ function seatedMiner(towerEnergy, containerFull, consumersFull) {
         ? Object.assign(store(2000, 2000), { getFreeCapacity: () => 0 })
         : Object.assign(store(500, 2000), { getFreeCapacity: () => 1500 });
     c.pos.lookFor = () => [mContainer];
+    minerNear([mContainer, mTower, mLink]);
     c.pos.findInRange = (type, r, opts) => {
         const all =
             type === FIND_STRUCTURES
@@ -2877,6 +3057,95 @@ assert(seatedMiner(100, false, false) === "mlink",
 assert(seatedMiner(100, true, false) === "mlink",
     "spawn/extension hunger keeps miner on the link even with full buffers");
 
+// 2c. ROADMAP 0113: the miner forwards its harvest in full loads (each action costs ~0.2 CPU)
+{
+    const fiveWork = [{ type: MOVE }, { type: WORK }, { type: WORK }, { type: WORK }, { type: WORK }, { type: WORK }, { type: CARRY }];
+    function batchMiner(held, opts) {
+        opts = opts || {};
+        room.energyAvailable = 300;
+        room.energyCapacityAvailable = 300;
+        const c = Object.assign(Object.create(Creep.prototype), {
+            id: "mbatch", room, store: Object.assign(store(held, 50), { getFreeCapacity: () => 50 - held }),
+            pos: new RoomPosition(4, 5, "W1N1"), body: fiveWork,
+            harvest: () => OK, move: () => OK, moveTo: () => OK, ticksToLive: opts.ttl === undefined ? 1000 : opts.ttl,
+        });
+        c.memory = { role: "miner", target: "msrc", seat: [4, 5], onContainer: true };
+        c.actions = [];
+        c.transfer = (t) => { c.actions.push("transfer:" + (t && t.id)); return OK; };
+        c.withdraw = (t) => { c.actions.push("withdraw:" + (t && t.id)); return OK; };
+        c.pickup = () => { c.actions.push("pickup"); return OK; };
+        mTower.store = Object.assign(store(900, 1000), { getCapacity: () => 1000, getFreeCapacity: () => 100 });
+        mContainer.store = Object.assign(store(opts.containerEnergy || 0, 2000), { getFreeCapacity: () => 2000 - (opts.containerEnergy || 0) });
+        c.pos.lookFor = () => [mContainer];
+        minerNear([mContainer, mLink]);
+        const saved = Memory.settings;
+        Memory.settings = Object.assign({}, saved, { miner: { batchTransfer: opts.batch !== false } });
+        miner.run(c);
+        Memory.settings = saved;
+        return c.actions;
+    }
+    assert(batchMiner(10).length === 0, "0113: a miner with room for another harvest keeps filling - no transfer this tick (" + batchMiner(10).join() + ")");
+    assert(batchMiner(30).length === 0, "0113: ...even at 30/50 (the next harvest of 10 still fits)");
+    assert(batchMiner(41).join() === "transfer:mlink", "0113: once the next harvest would no longer fit it sends the load to the link (" + batchMiner(41).join() + ")");
+    assert(batchMiner(10, { ttl: 2 }).join() === "transfer:mlink", "0113: a dying miner flushes what it holds");
+    assert(batchMiner(0, { containerEnergy: 100 }).length === 0, "0113: a small container stock is left to the haulers - no withdraw");
+    assert(batchMiner(0, { containerEnergy: 900 }).join() === "withdraw:mcont", "0113: a container backlog is still drained into the miner (" + batchMiner(0, { containerEnergy: 900 }).join() + ")");
+    assert(batchMiner(10, { batch: false }).join() === "transfer:mlink", "0113: miner.batchTransfer = false restores the every-tick transfer");
+    // fewer actions in total: 50 energy per 5 ticks = one transfer in five ticks
+    let sent = 0, held = 0;
+    for (let t = 0; t < 10; t++) {
+        held += 10;
+        if (batchMiner(held).length) { sent++; held = 0; }
+    }
+    assert(sent === 2, "0113: ten ticks of harvest cost two transfers instead of ten (" + sent + ")");
+}
+
+// 2d. ROADMAP 0117: with the source empty (waiting to regenerate) the miner empties its
+// store and the container into the link/tower instead of waiting for a full load/backlog
+{
+    const body = [{ type: MOVE }, { type: WORK }, { type: WORK }, { type: WORK }, { type: WORK }, { type: WORK }, { type: CARRY }];
+    function drainMiner(held, o) {
+        o = o || {};
+        room.energyAvailable = 300;
+        room.energyCapacityAvailable = 300;
+        const c = Object.assign(Object.create(Creep.prototype), {
+            id: "mdrain", room, store: Object.assign(store(held, 50), { getFreeCapacity: () => 50 - held }),
+            pos: new RoomPosition(4, 5, "W1N1"), body, harvest: () => ERR_NOT_ENOUGH_RESOURCES,
+            move: () => OK, moveTo: () => OK, ticksToLive: 1000,
+        });
+        c.memory = { role: "miner", target: "msrc", seat: [4, 5], onContainer: true };
+        c.actions = [];
+        c.transfer = (t) => { c.actions.push("transfer:" + (t && t.id)); return OK; };
+        c.withdraw = (t) => { c.actions.push("withdraw:" + (t && t.id)); return OK; };
+        c.pickup = () => { c.actions.push("pickup"); return OK; };
+        mTower.store = Object.assign(store(900, 1000), { getCapacity: () => 1000, getFreeCapacity: () => 100 });
+        const ce = o.containerEnergy || 0;
+        mContainer.store = Object.assign(store(ce, 2000), { getFreeCapacity: () => 2000 - ce });
+        c.pos.lookFor = () => [mContainer];
+        minerNear(o.near || [mContainer, mLink]);
+        mSource.energy = o.sourceEnergy === undefined ? 0 : o.sourceEnergy;
+        miner.run(c);
+        mSource.energy = 3000;
+        return c.actions;
+    }
+    assert(drainMiner(10).join() === "transfer:mlink",
+        "0117: source empty -> a partial load is flushed to the link right away (" + drainMiner(10).join() + ")");
+    assert(drainMiner(10, { sourceEnergy: 3000 }).length === 0,
+        "0117: source with energy -> unchanged, keeps filling for a full load");
+    assert(drainMiner(0, { containerEnergy: 100 }).join() === "withdraw:mcont",
+        "0117: source empty -> a small container stock is drained too (no 500 backlog gate) (" + drainMiner(0, { containerEnergy: 100 }).join() + ")");
+    assert(drainMiner(0, { containerEnergy: 100, sourceEnergy: 3000 }).length === 0,
+        "0117: source with energy -> a small container stock is still left to the haulers");
+    assert(drainMiner(0, { containerEnergy: 0 }).length === 0,
+        "0117: source empty and nothing to empty -> no actions");
+    assert(drainMiner(0, { containerEnergy: 100, near: [mContainer] }).length === 0,
+        "0117: source empty but no link/tower to receive -> container is not touched");
+    assert(drainMiner(10, { near: [mContainer] }).join() === "transfer:mcont",
+        "0117: source empty, no link -> the carried load still goes to the container");
+    const both = drainMiner(10, { containerEnergy: 100 });
+    assert(both.join() === "withdraw:mcont,transfer:mlink",
+        "0117: source empty -> pull the container and flush the store in the same tick (" + both.join() + ")");
+}
 // 2a. The global economy snapshot uses the real spawn store, not only the
 // room energy summary. A hungry spawn routes source energy into the shared
 // container before the source-defense tower; active defense keeps the tower
@@ -2922,6 +3191,7 @@ function seatedMinerHarvest({ containerFull, hasTower, towerEnergy }) {
         });
     }
     c.pos.lookFor = () => [mContainer];
+    minerNear(hasTower ? [mContainer, mTower] : [mContainer]);
     c.pos.findInRange = (type, r, opts) => {
         const all =
             type === FIND_STRUCTURES
@@ -2959,9 +3229,11 @@ const mArriving = Object.assign(Object.create(Creep.prototype), {
     harvest: () => OK, transfer: () => OK, move: () => OK, moveTo: () => OK,
 });
 mArriving.memory = { role: "miner", target: "msrc" };
+minerNear([mContainer]);
 miner.run(mArriving);
 assert(squatter._shoved === true,
     "a non-miner on the seat is shoved off when the miner arrives");
+room.find = minerRoomFind;
 mContainer.pos.lookFor = () => [];
 
 // 4. the container was destroyed (or never built) - the miner still parks on
@@ -3594,43 +3866,153 @@ delete global.Memory.settings.allies;
         "priority.pick() excludes declaratively disallowed candidates");
 }
 
-// --- rampart opens for an approaching ally --------------------------
-const rampartLogic = require(path.join(PROJECT, "src/structures/rampart"));
-const mkRampart = () => {
-    const r = Object.assign(new OwnedStructure(), {
-        id: "rmp", structureType: STRUCTURE_RAMPART, my: true,
-        pos: new RoomPosition(10, 20, "W1N1"), room, isPublic: false,
-    });
-    r.setPublic = (v) => { r.isPublic = v; };
-    r.pos.findInRange = (arr, range) =>
-        (Array.isArray(arr) ? arr : []).filter(
-            (c) => Math.max(Math.abs((c.pos || c).x - 10),
-                Math.abs((c.pos || c).y - 20)) <= range
-        );
-    return r;
-};
-const ally = { id: "a1", owner: { username: "fR1dj" },
-    pos: new RoomPosition(11, 20, "W1N1") };
-const enemy = { id: "e1", owner: { username: "Invader" },
-    pos: new RoomPosition(11, 21, "W1N1"), body: [{ type: "attack" }] };
+// --- rampart gates: one decision per room, only the gates open ---------
+{
+    const rampartLogic = require(path.join(PROJECT, "src/structures/rampart"));
+    const gatesMod = require(path.join(PROJECT, "src/utils/rampartGates"));
 
-findMap[FIND_HOSTILE_CREEPS] = [ally];
-Game.time++;
-let rmp = mkRampart();
-rampartLogic.run(rmp);
-assert(rmp.isPublic === true, "rampart opens when an ally is adjacent");
+    // Room "GATE1": edges are wall except an exit on the west (0,20..30) and one on the east
+    // (49,20..30); a wall of ramparts at x=25 splits the room, so an ally going west->east has
+    // to cross it. The harness PathFinder ignores obstacles, so use a breadth-first search that
+    // honours the cost matrix (255 = blocked) and the terrain.
+    const realTerrainClass = Room.Terrain;
+    class GateTerrain {
+        get(x, y) {
+            const edge = x === 0 || x === 49 || y === 0 || y === 49;
+            if (!edge) return 0;
+            return (x === 0 || x === 49) && y >= 20 && y <= 30 ? 0 : 1;
+        }
+    }
+    Room.Terrain = GateTerrain;
+    const realSearchGate = PathFinder.search;
+    PathFinder.search = (origin, goal, opts) => {
+        const matrix = opts.roomCallback(origin.roomName);
+        const terr = new GateTerrain();
+        const key = (x, y) => x * 50 + y;
+        const prev = new Map([[key(origin.x, origin.y), null]]);
+        const queue = [[origin.x, origin.y]];
+        const target = goal.pos;
+        while (queue.length) {
+            const [x, y] = queue.shift();
+            if (x === target.x && y === target.y) break;
+            for (let dx = -1; dx <= 1; dx++) {
+                for (let dy = -1; dy <= 1; dy++) {
+                    const nx = x + dx, ny = y + dy;
+                    if ((!dx && !dy) || nx < 0 || ny < 0 || nx > 49 || ny > 49 || prev.has(key(nx, ny))) continue;
+                    if (terr.get(nx, ny) & 1) continue;
+                    if (matrix && matrix.get(nx, ny) === 255) continue;
+                    prev.set(key(nx, ny), [x, y]);
+                    queue.push([nx, ny]);
+                }
+            }
+        }
+        if (!prev.has(key(target.x, target.y))) return { path: [], incomplete: true, ops: 0 };
+        const path = [];
+        for (let at = [target.x, target.y]; at && prev.get(key(at[0], at[1])) !== null; at = prev.get(key(at[0], at[1]))) {
+            path.unshift(new RoomPosition(at[0], at[1], origin.roomName));
+        }
+        return { path, incomplete: false, ops: path.length };
+    };
 
-findMap[FIND_HOSTILE_CREEPS] = [];
-Game.time++;
-rampartLogic.run(rmp);
-assert(rmp.isPublic === false, "rampart closes when the ally leaves");
+    let creepsIn = [];
+    const structsFor = {};
+    const mkGateRoom = (name, structures) => {
+        structsFor[name] = structures;
+        return {
+            name, controller: undefined, energyAvailable: 0, energyCapacityAvailable: 0,
+            find: (type) => {
+                if (type === FIND_STRUCTURES || type === FIND_MY_STRUCTURES) return structsFor[name];
+                if (type === FIND_HOSTILE_CREEPS) return creepsIn;
+                return [];
+            },
+        };
+    };
+    let setPublicCalls = 0;
+    const mkRamp = (roomName, x, y) => {
+        const r = Object.assign(new OwnedStructure(), {
+            id: "gr-" + roomName + "-" + x + "-" + y, structureType: STRUCTURE_RAMPART, my: true,
+            pos: new RoomPosition(x, y, roomName), isPublic: false,
+        });
+        r.setPublic = (v) => { r.isPublic = v; setPublicCalls++; };
+        REG[r.id] = r;
+        return r;
+    };
+    const wall = [];
+    for (let y = 1; y <= 48; y++) wall.push(mkRamp("GATE1", 25, y));
+    const gateRoom = mkGateRoom("GATE1", wall.slice());
+    Memory.rooms.GATE1 = {};
+    gatesMod.reset();
+    rampartLogic.resetSweep();
 
-findMap[FIND_HOSTILE_CREEPS] = [ally, enemy];
-Game.time++;
-rmp = mkRampart();
-rampartLogic.run(rmp);
-assert(rmp.isPublic === false,
-    "rampart stays shut when a hostile is also right there");
+    const ally = { id: "ga1", owner: { username: "fR1dj" }, pos: new RoomPosition(5, 25, "GATE1"), body: [{ type: MOVE }] };
+    const invader = { id: "ge1", owner: { username: "Invader" }, pos: new RoomPosition(6, 25, "GATE1"), body: [{ type: ATTACK }] };
+    const claimer = { id: "ge2", owner: { username: "stranger" }, pos: new RoomPosition(6, 26, "GATE1"), body: [{ type: CLAIM }, { type: MOVE }] };
+    const scout = { id: "ge3", owner: { username: "stranger" }, pos: new RoomPosition(6, 27, "GATE1"), body: [{ type: MOVE }] };
+    const openOnes = () => wall.filter((r) => r.isPublic).length;
+    const step = (list) => { creepsIn = list; Game.time++; rampartLogic.runRoom(gateRoom); };
+
+    step([]);
+    const info = gatesMod.ensure(gateRoom);
+    assert(info.exits === 2 && info.pairs === 1 && info.blocked === 1 && info.ids.length === 1 && info.gates[info.ids[0]].x === 25,
+        "rampartGates: 2 exits split by a wall of ramparts -> exactly 1 gate, on the wall (" + JSON.stringify({ e: info.exits, p: info.pairs, b: info.blocked, g: info.ids.length }) + ")");
+    assert(openOnes() === 0, "rampart: nobody in the room -> every rampart closed");
+
+    setPublicCalls = 0;
+    step([ally]);
+    assert(openOnes() === 1 && REG[info.ids[0]].isPublic === true && setPublicCalls === 1,
+        "rampart: an ally and no threat opens ONLY the gate, with a single intent (" + openOnes() + " open, " + setPublicCalls + " calls)");
+
+    step([ally, scout]);
+    assert(openOnes() === 1, "rampart: an unarmed non-ally scout is not a threat - the gate stays open");
+
+    setPublicCalls = 0;
+    step([ally, invader]);
+    assert(openOnes() === 0 && setPublicCalls === 1, "rampart: an Invader closes the gate on the same tick");
+
+    step([ally]);
+    assert(openOnes() === 1, "rampart: the threat gone and the ally still there - the gate opens again");
+    step([ally, claimer]);
+    assert(openOnes() === 0, "rampart: a non-ally with CLAIM counts as a threat and closes the gate");
+
+    step([]);
+    assert(openOnes() === 0, "rampart: allies gone - closed");
+
+    // a public rampart that is not a gate (old logic / moved gate) is closed by the sweep
+    wall[3].isPublic = true;
+    rampartLogic.resetSweep();
+    step([]);
+    assert(wall[3].isPublic === false, "rampart: a stale public non-gate rampart is closed by the sweep");
+
+    // rampartGates(): the console command lists the room and its gate
+    const savedMyRooms = Game.myRooms;
+    Game.myRooms = [gateRoom];
+    const gateLogs = [];
+    console.log = (...a) => { gateLogs.push(a.join(" ")); };
+    global.rampartGates();
+    console.log = origLog;
+    Game.myRooms = savedMyRooms;
+    assert(gateLogs.some((l) => l.indexOf("GATE1: 1 portão(ões) de 48 ramparts") !== -1 && l.indexOf("25,") !== -1),
+        "rampartGates() prints the gate of the room (" + gateLogs.join(" | ").slice(0, 160) + ")");
+
+    // no wall: the ally walks around, nothing is a gate and nothing ever opens
+    const emptyRoom = mkGateRoom("GATE2", []);
+    Memory.rooms.GATE2 = {};
+    const lone = mkRamp("GATE2", 10, 10); // a rampart off any route
+    structsFor.GATE2 = [lone];
+    setPublicCalls = 0;
+    creepsIn = [ally];
+    Game.time++;
+    rampartLogic.runRoom(emptyRoom);
+    assert(gatesMod.ensure(emptyRoom).ids.length === 0 && setPublicCalls === 0 && lone.isPublic === false,
+        "rampartGates: when the exits connect without crossing a rampart there are no gates and nothing opens");
+
+    PathFinder.search = realSearchGate;
+    Room.Terrain = realTerrainClass;
+    creepsIn = [];
+    delete Memory.rooms.GATE1;
+    delete Memory.rooms.GATE2;
+    gatesMod.reset();
+}
 findMap[FIND_HOSTILE_CREEPS] = [];
 
 // --- combat overhaul Fase 1+2 (ROADMAP 0032 D1/D4, D2/D3/O1) -----------
@@ -3684,8 +4066,20 @@ findMap[FIND_HOSTILE_CREEPS] = [];
             return list;
         };
     }
+    // The tower keeps the ids of damaged structures for a few ticks (heap scan) and
+    // re-resolves them with Game.getObjectById: the mocks must be resolvable, and each
+    // case starts without the previous case's scan.
+    let testObjects = {};
     function mkTestTower(structures, storage, energy) {
         let repaired = null;
+        towerMod.resetRepairScan();
+        testObjects = {};
+        structures.forEach((s) => { testObjects[s.id] = s; });
+        if (!Game.getObjectById.towerTestWrapper) {
+            const inner = Game.getObjectById;
+            Game.getObjectById = (id) => testObjects[id] || inner(id);
+            Game.getObjectById.towerTestWrapper = true;
+        }
         const t = Object.assign(new OwnedStructure(), {
             id: "testtower", structureType: STRUCTURE_TOWER,
             store: store(energy === undefined ? 1000 : energy, 1000),
@@ -3973,6 +4367,8 @@ findMap[FIND_HOSTILE_CREEPS] = [];
             };
         }
         function mkBCapCreep(structures, storage) {
+            // each case builds its own set of structures under the same room name: drop the shared 5-tick damaged scan
+            require(path.join(PROJECT, "src/utils/damagedStructures")).reset();
             const repairs = [];
             const c = Object.assign(new Creep(), {
                 id: "bcap-creep", name: "BCap1",
@@ -6008,6 +6404,9 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
         const savedSpawnStoreRemote = spawn.store;
         const savedStorageRemote = room.storage;
         spawn.store = Object.assign(store(0, 300), { getFreeCapacity: () => 300 });
+        // the engine keeps these in step with the spawn's store: an empty spawn means energyAvailable < capacity
+        const savedAvailableRemote = room.energyAvailable;
+        room.energyAvailable = 0;
         room.storage = Object.assign(new Structure(), {
             id: "rhstoragecritical", structureType: STRUCTURE_STORAGE, room,
             pos: new RoomPosition(26, 24, "W1N1"), store: store(50000, 100000),
@@ -6030,6 +6429,7 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
             "remoteHauler delivers to a critical home-room spawn before storage (0091, got " +
                 rhCritical._to + ")");
         spawn.store = savedSpawnStoreRemote;
+        room.energyAvailable = savedAvailableRemote;
         room.storage = savedStorageRemote;
         delete REG.rhstoragecritical;
     }
@@ -8276,7 +8676,7 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
         ["replanRoom", "prioritizeBuild", "addAlly", "listAlly", "signRoom", "GCStructureMemory",
             "reserveRoom", "unreserveRoom", "claimRoom", "cancelClaim", "planLayout", "cancelLayout", "layoutQueue", "observe",
             "addTargetEnemy", "removeTargetEnemy", "listTargetEnemies", "raidRoom", "raidSquad", "raidRemote",
-            "contestRoom", "cancelContest", "pioneerStatus"]
+            "contestRoom", "cancelContest", "pioneerStatus", "rampartGates"]
             .every((name) => helpOutput.includes(name)),
         "help() lists the known console commands"
     );
@@ -8802,6 +9202,8 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
     let pixelCalls = 0;
     Game.cpu.generatePixel = () => { pixelCalls++; };
 
+    const savedPixelSettings = Memory.settings;
+    Memory.settings = Object.assign({}, savedPixelSettings, { pixel: { headroomGate: false } });
     Game.cpu.bucket = 10000;
     let before = pixelCalls;
     console.log = (...a) => { logs.push(a.join(" ")); };
@@ -8816,12 +9218,70 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
     console.log = origLog;
     assert(pixelCalls === before, "generatePixel() is not called below the bucket threshold");
 
+    // headroom gate: a pixel zeroes the bucket, so it needs a published average with room under the limit
+    Memory.settings = Object.assign({}, savedPixelSettings, { stats: { cpuWindowTicks: 1 } });
+    const pixelMeter = require(path.join(PROJECT, "src/utils/cpuMeter"));
+    const pixelSavedUsed = Game.cpu.getUsed, pixelSavedLimit = Game.cpu.limit;
+    Game.cpu.limit = 20;
+    Game.cpu.bucket = 10000;
+    pixelMeter.reset();
+    before = pixelCalls;
+    console.log = (...a) => { logs.push(a.join(" ")); };
+    mainForPixel.loop();
+    assert(pixelCalls === before || pixelMeter.snapshot() !== null, "0113: no pixel before a CPU window has been published");
+    Game.cpu.getUsed = () => 19; Game.time++; pixelMeter.endTick(); // window: avg 19 of 20 - no room
+    Game.cpu.getUsed = () => 0; // keep the loop itself cheap
+    before = pixelCalls;
+    Game.cpu.bucket = 10000;
+    mainForPixel.loop();
+    const tight = pixelCalls === before;
+    Game.cpu.getUsed = () => 12; Game.time++; pixelMeter.endTick(); // window: avg 12 - room to refill
+    Game.cpu.getUsed = () => 0;
+    Game.cpu.bucket = 10000;
+    before = pixelCalls;
+    mainForPixel.loop();
+    console.log = origLog;
+    assert(tight && pixelCalls === before + 1, "0113: a pixel (which zeroes the bucket) is only made while the CPU average leaves headroom under the limit (tight " + tight + ")");
+    Game.cpu.getUsed = pixelSavedUsed; Game.cpu.limit = pixelSavedLimit;
+    Memory.settings = savedPixelSettings;
+
+    // low bucket: the optional modules pause
+    const flipSeen = [];
+    const flipMod = require(path.join(PROJECT, "src/utils/marketFlip"));
+    const realFlipTick = flipMod.tick;
+    flipMod.tick = () => { flipSeen.push(Game.cpu.bucket); };
+    console.log = (...a) => { logs.push(a.join(" ")); };
+    Game.cpu.bucket = 100; Game.time++; mainForPixel.loop();
+    const shedCalls = flipSeen.length;
+    Game.cpu.bucket = 9999; Game.time++; mainForPixel.loop();
+    console.log = origLog;
+    flipMod.tick = realFlipTick;
+    assert(shedCalls === 0 && flipSeen.length === 1, "0113: below cpu.shedBucket marketFlip is paused, above it runs (" + shedCalls + "/" + flipSeen.length + ")");
+
     Game.cpu.bucket = 10000; // restore the shared default
     delete Game.cpu.generatePixel;
 
     // --- console: profile(ticks) enables itself, then turns itself back off
     const mainForProfiler = require(path.join(PROJECT, "src/main"));
 
+    // 0113 L2: count the wrapped engine methods, capture what the session publishes
+    const wrappedCount = () => {
+        let n = 0;
+        [Game, Room, Structure, Spawn, Creep, RoomPosition, Source, Flag].forEach((o) => {
+            const target = o.prototype || o;
+            Object.getOwnPropertyNames(target).forEach((k) => {
+                const d = Object.getOwnPropertyDescriptor(target, k);
+                if (d && typeof d.value === "function" && d.value.profilerWrapped) n++;
+            });
+        });
+        return n;
+    };
+    const rolesForWrap = require(path.join(PROJECT, "src/roles"));
+    const meterForProfile = require(path.join(PROJECT, "src/utils/cpuMeter"));
+    const realSetFns = meterForProfile.setFns;
+    const published = [];
+    meterForProfile.setFns = (rows, ticks) => { published.push({ rows, ticks }); };
+    assert(wrappedCount() === 0, "0113: before profile() no engine method is wrapped");
     delete Memory.settings;
     global.profile(3);
     assert(Memory.settings.profiler === true,
@@ -8836,12 +9296,17 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
     console.log = (...a) => { logs.push(a.join(" ")); };
     mainForProfiler.loop(); // first tick after the call: wraps prototypes
     const profilerBuilt = Game.profiler && typeof Game.profiler.profile === "function";
+    const wrappedDuring = wrappedCount();
+    const roleWrappedDuring = !!rolesForWrap.hauler.run.profilerWrapped;
     Game.time++;
 
     // run through the disableTick itself (screeps-profiler prints its report
     // there), plus one more tick for maybeAutoDisableProfiler() to notice the
     // window closed and flip the setting back off
-    while (Game.time <= disableTick + 1) {
+    // The engine hands every tick a freshly parsed Memory and memory.wrap swaps the
+    // cached object back in: mimic it, so a write made before the swap is lost like it is live.
+    while (Game.time <= disableTick + 3) {
+        global.Memory = JSON.parse(JSON.stringify(global.Memory));
         mainForProfiler.loop();
         Game.time++;
     }
@@ -8850,10 +9315,767 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
     assert(profilerBuilt, "the tick after profile() call builds Game.profiler");
     assert(logs.slice(logsBefore).some((l) => l.indexOf("calls") !== -1 && l.indexOf("function") !== -1),
         "profile(ticks) prints a calls/time/avg report on the disableTick");
+    assert(logs.slice(logsBefore).some((l) => l.indexOf("[cpuTop]") !== -1),
+        "profile(ticks) also prints the cpuTop table of the same window - one command, no separate cpuTop");
     assert(Memory.settings.profiler === false,
         "profile(ticks) turns Memory.settings.profiler back off once its window closes");
     assert(Memory.profiler === null,
         "profile(ticks) clears Memory.profiler once its window closes");
+    assert(logs.slice(logsBefore).filter((l) => l.indexOf("[cpuTop]") !== -1).length === 1,
+        "profile(ticks) prints the cpuTop table once - not every tick after the window closes");
+    // 0113 L2: published once, then everything is taken off again
+    assert(wrappedDuring > 0 && roleWrappedDuring, "0113: during profile() the engine methods and the role objects are wrapped (" + wrappedDuring + ")");
+    assert(published.length === 1 && published[0].ticks === 3 && published[0].rows.length > 0 && published[0].rows.every((r) => typeof r.name === "string" && r.calls > 0),
+        "0113: the closed session hands its function rows and its length to the meter, once (" + published.length + " calls)");
+    assert(wrappedCount() === 0 && !rolesForWrap.hauler.run.profilerWrapped,
+        "0113: once the window closes every wrapper is gone - no residual cost (still wrapped: " + wrappedCount() + ")");
+    // 0118/0119: the session reports WHO calls Room.find / config.get, config.get is
+    // wrapped only while profiling, and the tick group measures what no guard covers
+    assert(logs.slice(logsBefore).some((l) => l.indexOf("[profile] Room.find callers") !== -1),
+        "0119: profile(ticks) prints the callers of Room.find");
+    assert(!require(path.join(PROJECT, "src/utils/config")).get.profilerWrapped &&
+        !logs.slice(logsBefore).some((l) => l.indexOf("config.get callers") !== -1),
+        "0118: config.get is never wrapped by profile() - its per-call overhead drained the bucket");
+    assert(meterForProfile.GROUPS.indexOf("tick") !== -1,
+        "0118: the CPU meter has a tick group for what no guard covers");
+    assert(!logs.slice(logsBefore).some((l) => /callerChain|recordCaller/.test(l)),
+        "0118/0119: caller rows name the real callers, not the profiler's own frames");
+    {
+        // the engine parses Memory lazily, on first access of the global: touching it
+        // before memory.wrap swaps the cached object in costs a full JSON.parse per tick
+        // (~3.5 CPU/tick live). A consecutive tick must not read global Memory before the swap.
+        Game.time++;
+        const cached = global.Memory;
+        mainForProfiler.loop(); // seeds memory.wrap's cached object for Game.time
+        Game.time++;
+        let reads = 0;
+        delete global.Memory;
+        Object.defineProperty(global, "Memory", { configurable: true, get() { reads++; return cached; } });
+        mainForProfiler.loop();
+        assert(reads === 0, "0118: a consecutive tick never reads global Memory before the cached swap (" + reads + " reads)");
+        if (!Object.getOwnPropertyDescriptor(global, "Memory").get) global.Memory = cached;
+    }
+    {
+        const prof = require(path.join(PROJECT, "src/utils/profiler"));
+        prof.clearCallers();
+        assert(prof.callers().length === 0, "0118/0119: clearCallers() empties the caller table");
+    }
+    {
+        // a session never drains the bucket: below profile.minBucket it closes on that tick
+        const savedBucket = Game.cpu.bucket;
+        Game.cpu.bucket = 9000;
+        global.profile(50);
+        Game.time++;
+        mainForProfiler.loop();
+        Game.cpu.bucket = 50;
+        Game.time++;
+        const abortTick = Game.time;
+        const abortLogsFrom = logs.length;
+        console.log = (...a) => { logs.push(a.join(" ")); };
+        global.Memory = JSON.parse(JSON.stringify(global.Memory));
+        mainForProfiler.loop();
+        console.log = origLog;
+        assert(Memory.profiler && Memory.profiler.disableTick === abortTick &&
+            logs.slice(abortLogsFrom).some((l) => l.indexOf("closing the window early") !== -1),
+            "0118: profile() closes its window early when the bucket is below profile.minBucket");
+        Game.time++;
+        global.Memory = JSON.parse(JSON.stringify(global.Memory));
+        console.log = (...a) => { logs.push(a.join(" ")); };
+        mainForProfiler.loop();
+        console.log = origLog;
+        assert(Memory.profiler === null && Memory.settings.profiler === false && wrappedCount() === 0,
+            "0118: ...and the next tick takes every wrapper off again");
+        published.pop(); // the aborted session published too; the 0113 count below is about full ones
+        Game.cpu.bucket = savedBucket;
+        Game.time++;
+    }
+    {
+        // 0118: the repair ordering/eligibility reads its thresholds once a tick, not per
+        // structure, and the numeric sort key orders exactly like the array key
+        const rr = require(path.join(PROJECT, "src/utils/rampartRepair"));
+        const cfg = require(path.join(PROJECT, "src/utils/config"));
+        const types = [STRUCTURE_ROAD, STRUCTURE_CONTAINER, STRUCTURE_RAMPART, STRUCTURE_WALL];
+        const maxHits = { [STRUCTURE_ROAD]: 5000, [STRUCTURE_CONTAINER]: 250000, [STRUCTURE_RAMPART]: 300000000, [STRUCTURE_WALL]: 300000000 };
+        let seed = 7;
+        const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+        const damaged = [];
+        for (let i = 0; i < 300; i++) {
+            const type = types[i % 4];
+            const ratio = [0.0005, 0.005, 0.05, 0.3, 0.6, 0.95][Math.floor(rnd() * 6)] * (0.5 + rnd());
+            damaged.push({ id: "rr" + i, structureType: type, hitsMax: maxHits[type], hits: Math.max(1, Math.floor(maxHits[type] * Math.min(ratio, 0.99))) });
+        }
+        Game.time++;
+        const byArray = _.sortBy(damaged, rr.priority).map((x) => x.id).join();
+        const byKey = _.sortBy(damaged, rr.priorityKey).map((x) => x.id).join();
+        assert(byArray === byKey, "0118: priorityKey orders 300 mixed structures exactly like priority");
+
+        const realGet = cfg.get;
+        let calls = 0;
+        cfg.get = function () { calls++; return realGet.apply(this, arguments); };
+        Game.time++;
+        const fakeRoom = { name: "RR1", storage: { store: { energy: 500000, getCapacity: () => 1000000 } } };
+        const fakeTower = { room: fakeRoom, store: { energy: 900, getCapacity: () => 1000 } };
+        damaged.forEach((x) => { rr.tier(x); rr.builderMayRepair(x, fakeRoom); rr.towerMayRepair(x, fakeTower); });
+        cfg.get = realGet;
+        assert(calls <= 12, "0118: tier/builderMayRepair/towerMayRepair on 300 structures read config " + calls + " times (bounded, not per structure)");
+    }
+    {
+        // 0118: Memory.stats is rebuilt once per publishInterval (60 ticks in production),
+        // a closed CPU-meter window still reaches it at once
+        const cfgStats = require(path.join(PROJECT, "src/utils/config"));
+        const statsFn = require(path.join(PROJECT, "src/utils/stats"));
+        const meterStats = require(path.join(PROJECT, "src/utils/cpuMeter"));
+        cfgStats.defaults.stats.publishInterval = 60;
+        Game.time++;
+        statsFn(); // a publish tick
+        const publishedAt = Memory.stats.time;
+        const marker = {};
+        Memory.stats.marker = marker;
+        Game.time += 5;
+        statsFn();
+        assert(Memory.stats.marker === marker && Memory.stats.time === publishedAt,
+            "0118: stats() inside the publish interval leaves Memory.stats untouched (no rebuild)");
+        const realSnap = meterStats.snapshot;
+        const fakeWindow = { window: 60, ticks: 60, at: Game.time, used: 9, modules: {}, roles: {}, structures: {}, spans: {}, tick: {} };
+        meterStats.snapshot = () => fakeWindow;
+        statsFn();
+        meterStats.snapshot = realSnap;
+        assert(Memory.stats.cpu.meter === fakeWindow && Memory.stats.marker === marker,
+            "0118: ...but a freshly closed CPU-meter window is attached right away");
+        const realUsed = Game.cpu.getUsed;
+        Game.cpu.getUsed = () => 12.5;
+        Game.cpu.bucket = 7777;
+        statsFn();
+        Game.cpu.getUsed = realUsed;
+        assert(Memory.stats.marker === marker && Memory.stats.cpu.used === 12.5 && Memory.stats.cpu.bucket === 7777,
+            "0118: ...and cpu.used/bucket follow every tick (the reset tick's CPU must not stay on the dashboard for 60 ticks)");
+        Game.time += 60;
+        statsFn();
+        assert(Memory.stats.time === Game.time && !Memory.stats.marker,
+            "0118: stats() rebuilds once the publish interval has elapsed");
+        cfgStats.defaults.stats.publishInterval = 1;
+    }
+    {
+        // 0118: with nothing to haul, the mineral-job cascade runs once per room per tick,
+        // however many idle haulers ask; the next tick asks again
+        const haulerMod = require(path.join(PROJECT, "src/roles/hauler"));
+        const meterJobs = require(path.join(PROJECT, "src/utils/cpuMeter"));
+        const emptyRoom = { name: "EMPTY1", find: () => [], controller: undefined };
+        meterJobs.reset();
+        Game.time++;
+        const results = [haulerMod.pickMineralJob(emptyRoom), haulerMod.pickMineralJob(emptyRoom), haulerMod.pickMineralJob(emptyRoom)];
+        const ran = meterJobs.live().spans["hauler.pickMineralJob"];
+        assert(results.every((r) => r === null) && ran && ran.calls === 1,
+            "0118: three idle haulers in a room with no job run the mineral cascade once a tick (" + (ran && ran.calls) + ")");
+        Game.time++;
+        haulerMod.pickMineralJob(emptyRoom);
+        assert(meterJobs.live().spans["hauler.pickMineralJob"].calls === 2,
+            "0118: ...and the next tick asks again (a no-job answer is not kept across ticks)");
+        meterJobs.reset();
+    }
+    {
+        // 0119: per (room, FIND_*) at most one Room.find per tick however many creeps/modules ask
+        const rc = require(path.join(PROJECT, "src/utils/roomCache"));
+        const en = require(path.join(PROJECT, "src/utils/energy"));
+        const finds = {};
+        const budgetRoom = {
+            name: "BUDGET1", controller: undefined,
+            find: (type) => { finds[type] = (finds[type] || 0) + 1; return []; },
+        };
+        Game.time++;
+        for (let i = 0; i < 6; i++) {
+            rc.mySpawns(budgetRoom);
+            rc.droppedResources(budgetRoom);
+            rc.tombstones(budgetRoom);
+            rc.ruins(budgetRoom);
+            rc.sources(budgetRoom);
+        }
+        try { en.energyPiles(budgetRoom); en.energyPiles(budgetRoom); } catch (e) { /* needs a fuller room - the counts below still hold */ }
+        assert(Object.keys(finds).length >= 5 && Object.keys(finds).every((k) => finds[k] === 1),
+            "0119: six callers of mySpawns/dropped/tombstones/ruins/sources (and energyPiles) cost one find per type: " + JSON.stringify(finds));
+    }
+    {
+        // 0118: creep.body is rebuilt by the engine on every read - a hostile asked about by the
+        // intel filter, three towers and a defender in one tick reads it once, and a boost
+        // that shows up later is picked up when the entry is refreshed
+        const hostilesMod = require(path.join(PROJECT, "src/utils/hostiles"));
+        hostilesMod.resetBodyCache();
+        let bodyReads = 0;
+        let parts = [{ type: ATTACK, hits: 100 }, { type: MOVE, hits: 100 }];
+        const intruder = { id: "bodyprobe1", get body() { bodyReads++; return parts; } };
+        Game.time++;
+        for (let i = 0; i < 8; i++) hostilesMod.bodyInfo(intruder);
+        assert(bodyReads === 1 && hostilesMod.bodyInfo(intruder).parts[ATTACK] === 1 && !hostilesMod.bodyInfo(intruder).boosted,
+            "0118: eight body lookups of one hostile in a tick read creep.body once (" + bodyReads + ")");
+        parts = [{ type: ATTACK, hits: 100, boost: "UH" }, { type: MOVE, hits: 100 }];
+        Game.time += 5;
+        const stale = hostilesMod.bodyInfo(intruder).boosted;
+        Game.time += 25;
+        assert(stale === false && hostilesMod.bodyInfo(intruder).boosted === true && bodyReads === 2,
+            "0118: ...and a boost applied later is seen once the 25-tick refresh passes");
+        hostilesMod.resetBodyCache();
+    }
+    {
+        // 0118 / ARK-34: observing a room we do not own costs no full structure find, counts the
+        // hostile towers from the enemy scan, and drops the dead per-role counters
+        const getIntelFn = require(path.join(PROJECT, "src/rooms/intel"));
+        const finds = {};
+        const observed = {
+            name: "OBS1", controller: undefined,
+            find: (type, opts) => {
+                finds[type] = (finds[type] || 0) + 1;
+                if (type === FIND_HOSTILE_STRUCTURES) {
+                    const list = [{ structureType: STRUCTURE_TOWER }, { structureType: STRUCTURE_TOWER }, { structureType: STRUCTURE_RAMPART }];
+                    return opts && opts.filter ? list.filter(opts.filter) : list;
+                }
+                return [];
+            },
+        };
+        Memory.rooms.OBS1 = { numberOfHaulers: 3, numberOfLinks: 2 };
+        Game.time++;
+        getIntelFn(observed);
+        assert(!finds[FIND_STRUCTURES] && !finds[FIND_MY_STRUCTURES],
+            "ARK-34: getIntel on an observed room does no full structure find (" + JSON.stringify(finds) + ")");
+        assert(Memory.rooms.OBS1.numberOfTowers === 2 && Memory.rooms.OBS1.numberOfHaulers === undefined && Memory.rooms.OBS1.numberOfLinks === undefined,
+            "ARK-34: ...counts hostile towers from the enemy scan and purges the unused numberOf* counters");
+        delete Memory.rooms.OBS1;
+    }
+    {
+        // base 60: market (120) and marketFlip (60) scan on the same ticks and share one fetch
+        const orderBookMod = require(path.join(PROJECT, "src/utils/orderBook"));
+        const marketMod = require(path.join(PROJECT, "src/utils/market"));
+        const flipMod = require(path.join(PROJECT, "src/utils/marketFlip"));
+        const cfgBook = require(path.join(PROJECT, "src/utils/config"));
+        const savedSettings = Memory.settings;
+        const savedMarketObj = Game.market;
+        Memory.settings = {};
+        const savedFlipInterval = cfgBook.defaults.marketFlip.scanInterval;
+        cfgBook.defaults.marketFlip.scanInterval = 60;
+        let fetches = 0;
+        const stub = () => { fetches++; return []; };
+        Game.market = { credits: 1000, incomingTransactions: [], orders: {}, getAllOrders: stub };
+        orderBookMod.reset(); marketMod.reset();
+        Game.time = 120000; // a multiple of 120
+        marketMod.scan(); flipMod.tick();
+        assert(fetches === 1, "base 60: market and marketFlip on the same tick share one order-book fetch (" + fetches + ")");
+        const log = [];
+        for (let t = 1; t <= 240; t++) {
+            Game.time = 120000 + t;
+            const before = fetches;
+            marketMod.scan(); flipMod.tick();
+            if (fetches > before) log.push(t);
+        }
+        assert(log.join() === "60,120,180,240",
+            "base 60: the book is fetched on the 60-tick grid only, market every 2nd line (" + log.join() + ")");
+        cfgBook.defaults.marketFlip.scanInterval = savedFlipInterval;
+        Memory.settings = savedSettings;
+        Game.market = savedMarketObj;
+        orderBookMod.reset();
+    }
+    {
+        // a room whose spawns/extensions are all full is not scanned store by store; a hungry one still is
+        const tiers = require(path.join(PROJECT, "src/utils/resourceTiers"));
+        let freeCalls = 0;
+        const ext = (free) => ({ id: "x" + free + Math.random(), structureType: STRUCTURE_EXTENSION, store: { getFreeCapacity: () => { freeCalls++; return free; }, getCapacity: () => 50, energy: 50 - free } });
+        const mkRoom = (name, available, list) => ({
+            name, energyAvailable: available, energyCapacityAvailable: 100, storage: null, controller: undefined,
+            find: (type) => (type === FIND_MY_STRUCTURES ? list : []),
+        });
+        Memory.rooms.FULL1 = {}; Memory.rooms.HUNGRY1 = {};
+        Game.time++;
+        const full = tiers.getEconomySnapshot(mkRoom("FULL1", 100, [ext(0), ext(0)]));
+        const callsFull = freeCalls;
+        const hungry = tiers.getEconomySnapshot(mkRoom("HUNGRY1", 50, [ext(0), ext(50)]));
+        assert(callsFull === 0 && full.state !== "critical" && hungry.state === "critical" && hungry.reason === "spawn" && freeCalls > 0,
+            "economy snapshot: full spawns/extensions cost no getFreeCapacity scan, a hungry room is still critical (" + callsFull + " calls when full)");
+        delete Memory.rooms.FULL1; delete Memory.rooms.HUNGRY1;
+    }
+    {
+        // base 60 round 2: the grid, chain cadence, one-pass best level, cached medians
+        const cadenceMod = require(path.join(PROJECT, "src/utils/cadence"));
+        Game.time = 600;
+        assert(cadenceMod.due(null, 60) && cadenceMod.due(undefined, 60), "cadence: never run -> due");
+        assert(!cadenceMod.due(600, 60) && !cadenceMod.due(599, 60) === false, "cadence: same bucket not due, previous bucket due");
+        Game.time = 659;
+        assert(!cadenceMod.due(600, 60), "cadence: tick 659 is still bucket 600-659");
+        Game.time = 660;
+        assert(cadenceMod.due(600, 60) && cadenceMod.due(630, 60) && !cadenceMod.due(660, 60), "cadence: first tick of a new bucket is due");
+        assert(cadenceMod.due(700, 60) === true && (Game.time = 500, cadenceMod.due(600, 60)) === true, "cadence: a clock that went backwards is due");
+
+        // craftChain advances on craft.tickInterval, not every tick
+        const cfgC = require(path.join(PROJECT, "src/utils/config"));
+        const planner = require(path.join(PROJECT, "src/utils/craftPlanner"));
+        const chainMod = require(path.join(PROJECT, "src/utils/craftChain"));
+        const realChainTick = chainMod.tick;
+        let chainRuns = 0;
+        chainMod.tick = () => { chainRuns++; };
+        const realInterval = cfgC.defaults.craft.tickInterval;
+        cfgC.defaults.craft.tickInterval = 10;
+        for (let t = 1000; t < 1100; t++) { Game.time = t; try { planner.tick(); } catch (e) { /* scan needs a fuller world */ } }
+        cfgC.defaults.craft.tickInterval = realInterval;
+        chainMod.tick = realChainTick;
+        assert(chainRuns >= 9 && chainRuns <= 11, "craft chains run once per craft.tickInterval (10), not per tick (" + chainRuns + " runs in 100 ticks)");
+
+        // best price in one pass: ties on the best price add their volumes up, per side
+        const marketM = require(path.join(PROJECT, "src/utils/market"));
+        const bookM = require(path.join(PROJECT, "src/utils/orderBook"));
+        const savedMarketObj2 = Game.market;
+        const o = (type, price, amount, id) => ({ id, type, price, amount, remainingAmount: amount, resourceType: RESOURCE_ENERGY, roomName: "W1N1" });
+        Game.market = { credits: 1, incomingTransactions: [], orders: {}, getAllOrders: () => [
+            o(ORDER_SELL, 11, 100, "s1"), o(ORDER_SELL, 10, 5, "s2"), o(ORDER_SELL, 10, 7, "s3"), o(ORDER_SELL, 9, 0, "s4"),
+            o(ORDER_BUY, 19, 50, "b1"), o(ORDER_BUY, 20, 3, "b2"), o(ORDER_BUY, 20, 4, "b3"), o(ORDER_BUY, 0, 9, "b4"),
+        ] };
+        bookM.reset(); marketM.reset();
+        Game.time = 120 * 500;
+        marketM.scan();
+        const e = marketM.snapshot().resources[RESOURCE_ENERGY];
+        assert(e.currentSell === 10 && e.currentSellVolume === 12 && e.currentBuy === 20 && e.currentBuyVolume === 7,
+            "market: best level = best price + summed volume on it, skipping empty/zero-price orders (sell " + e.currentSell + "x" + e.currentSellVolume + ", buy " + e.currentBuy + "x" + e.currentBuyVolume + ")");
+        Game.market = savedMarketObj2;
+        bookM.reset(); marketM.reset();
+    }
+    {
+        // isCollector(): a link never moves - the second call reads neither pos nor memory
+        let posReads = 0;
+        const probeLink = Object.create(StructureLink.prototype);
+        Object.defineProperty(probeLink, "id", { value: "collprobe1" });
+        Object.defineProperty(probeLink, "pos", { get() { posReads++; return { x: 5, y: 6, findInRange: () => [{ id: "src" }] }; } });
+        const memProbe = {};
+        Object.defineProperty(probeLink, "memory", { get() { return memProbe; } });
+        const first = probeLink.isCollector();
+        const readsAfterFirst = posReads;
+        const second = probeLink.isCollector();
+        assert(first === true && second === true && posReads === readsAfterFirst,
+            "isCollector is answered from the heap after the first call (pos read " + posReads + "x)");
+
+        // energyPiles: same piles as the full-structure walk (storage/container/receiving link >= 50), nothing else
+        const energyMod = require(path.join(PROJECT, "src/utils/energy"));
+        const mk = (id, type, energy, extra) => Object.assign({ id, structureType: type, store: { energy }, pos: new RoomPosition(10, 10, "PILES1") }, extra || {});
+        const list = [
+            mk("p-st", STRUCTURE_STORAGE, 500), mk("p-st0", STRUCTURE_STORAGE, 10),
+            mk("p-co", STRUCTURE_CONTAINER, 60), mk("p-ex", STRUCTURE_EXTENSION, 50),
+            mk("p-tw", STRUCTURE_TOWER, 900), mk("p-te", STRUCTURE_TERMINAL, 900),
+            mk("p-lk", STRUCTURE_LINK, 400, { isCollector: () => false }),
+            mk("p-lc", STRUCTURE_LINK, 400, { isCollector: () => true }),
+        ];
+        const pilesRoom = { name: "PILES1", controller: undefined, find: (type) => (type === FIND_STRUCTURES ? list : []) };
+        Game.time++;
+        const ids = energyMod.energyPiles(pilesRoom).map((x) => x.id).sort().join();
+        assert(ids === "p-co,p-lk,p-st", "energyPiles keeps storage, container and receiving link with >= 50 energy only (" + ids + ")");
+    }
+    {
+        // utils/damagedStructures: one scan feeds tower and builder, refreshed every 5 ticks (every tick under attack)
+        const dmg = require(path.join(PROJECT, "src/utils/damagedStructures"));
+        const mkS = (id, type, hits, hitsMax) => {
+            const o = Object.assign(new OwnedStructure(), { id, structureType: type, hits, hitsMax, my: true, pos: new RoomPosition(12, 12, "DMG1") });
+            REG[id] = o;
+            return o;
+        };
+        const sFull = mkS("dmg-full", STRUCTURE_ROAD, 5000, 5000);
+        const sCrit = mkS("dmg-crit", STRUCTURE_CONTAINER, 100, 250000);
+        const sOk = mkS("dmg-ok", STRUCTURE_CONTAINER, 200000, 250000);
+        let structFinds = 0;
+        const structList = [sFull, sCrit, sOk];
+        const dmgRoom = { name: "DMG1", controller: undefined, find: (type) => { if (type === FIND_STRUCTURES) { structFinds++; return structList; } return []; } };
+        dmg.reset();
+        Memory.rooms.DMG1 = { defenseActive: false };
+        Game.time = 5000;
+        const first = dmg.sorted(dmgRoom).map((x) => x.id).join();
+        assert(first === "dmg-crit,dmg-ok" && dmg.critical(dmgRoom).map((x) => x.id).join() === "dmg-crit",
+            "damagedStructures: damaged list sorted by tier, critical = its leading run (" + first + ")");
+        const late = mkS("dmg-late", STRUCTURE_CONTAINER, 50, 250000);
+        structList.push(late);
+        Game.time = 5002;
+        assert(dmg.sorted(dmgRoom).map((x) => x.id).join() === "dmg-crit,dmg-ok" && structFinds === 1,
+            "damagedStructures: a structure damaged after the scan is not listed before the 5-tick refresh, and no extra scan ran (" + structFinds + ")");
+        sCrit.hits = sCrit.hitsMax; // repaired meanwhile: drops out at once
+        Game.time = 5003; // (the sorted list is memoised per tick)
+        assert(dmg.sorted(dmgRoom).map((x) => x.id).join() === "dmg-ok", "damagedStructures: a structure repaired in between leaves the list at once");
+        Game.time = 5005;
+        assert(dmg.sorted(dmgRoom).map((x) => x.id).join() === "dmg-late,dmg-ok" && structFinds === 2,
+            "damagedStructures: the 5-tick refresh picks the new damage up (scans: " + structFinds + ")");
+        Memory.rooms.DMG1.defenseActive = true;
+        const later = mkS("dmg-later", STRUCTURE_CONTAINER, 10, 250000);
+        structList.push(later);
+        Game.time = 5006;
+        assert(dmg.sorted(dmgRoom).some((x) => x.id === "dmg-later"), "damagedStructures: under attack the room is rescanned every tick");
+        delete Memory.rooms.DMG1;
+        dmg.reset();
+    }
+    {
+        // economy snapshot: towers with enough energy never reach the plan lookup (which reads
+        // their pos); a low one counts as critical
+        const tiersT = require(path.join(PROJECT, "src/utils/resourceTiers"));
+        const posReads = {};
+        const mkTower = (id, energy) => {
+            const t = { id, structureType: STRUCTURE_TOWER, my: true, store: { energy, getCapacity: () => 1000, getFreeCapacity: () => 1000 - energy }, room: { name: "TWR1" } };
+            Object.defineProperty(t, "pos", { get() { posReads[id] = (posReads[id] || 0) + 1; return new RoomPosition(20, 20, "TWR1"); } });
+            return t;
+        };
+        const towersList = [mkTower("t-full1", 900), mkTower("t-full2", 800), mkTower("t-low", 100)];
+        const twRoom = { name: "TWR1", energyAvailable: 100, energyCapacityAvailable: 100, storage: null, controller: undefined, find: () => towersList };
+        Memory.rooms.TWR1 = {};
+        Game.time++;
+        const snap = tiersT.getEconomySnapshot(twRoom);
+        assert(snap.state === "critical" && snap.criticalConsumers === 1 && !posReads["t-full1"] && !posReads["t-full2"] && posReads["t-low"] > 0,
+            "economy snapshot: only the low tower counts and only it reaches the plan lookup (" + snap.criticalConsumers + " critical, pos reads " + JSON.stringify(posReads) + ")");
+        delete Memory.rooms.TWR1;
+    }
+    {
+        // hauler.pickLoad: with no energy pile above hauler.minDropLoad on the ground, no path search over drops runs
+        const tinyDrop = Object.assign(new Resource(), {
+            id: "tinydrop", resourceType: RESOURCE_ENERGY, amount: 60,
+            pos: new RoomPosition(21, 21, "W1N1"),
+        });
+        REG[tinyDrop.id] = tinyDrop;
+        Game.time++;
+        const hTiny = makeCreep("HTinyDrop", "hauler", {
+            store: store(0, 200),
+            pos: withFindLookup(new RoomPosition(20, 20, "W1N1"), { [FIND_DROPPED_RESOURCES]: [tinyDrop] }),
+        });
+        let dropSearches = 0;
+        const innerLookup = hTiny.pos.findClosestByPath;
+        hTiny.pos.findClosestByPath = function (a, opts) { if (a === FIND_DROPPED_RESOURCES) dropSearches++; return innerLookup.call(this, a, opts); };
+        hTiny.pickup = noop;
+        hTiny.memory.job = "load";
+        hauler.run(hTiny);
+        assert(dropSearches === 0, "hauler: a 60-energy pile (below every pickup threshold) costs no findClosestByPath over drops (" + dropSearches + " searches)");
+        findMap[FIND_DROPPED_RESOURCES] = [];
+    }
+    {
+        // hauler.pickLoad keeps a pick for hauler.repickTicks while its target still holds 50+ energy
+        const mkDrop = (id, amount) => {
+            const d = Object.assign(new Resource(), { id, resourceType: RESOURCE_ENERGY, amount, pos: new RoomPosition(20, 21, "W1N1") });
+            REG[id] = d;
+            return d;
+        };
+        const keepDrop = mkDrop("keeppick1", 200);
+        const mkPicker = () => {
+            const c = makeCreep("HKeepPick", "hauler", {
+                store: store(0, 200),
+                pos: withFindLookup(new RoomPosition(20, 20, "W1N1"), { [FIND_DROPPED_RESOURCES]: [keepDrop] }),
+            });
+            c.memory.job = "load";
+            return c;
+        };
+        Game.time += 100;
+        let searches = 0;
+        const counted = (c) => {
+            const inner = c.pos.findClosestByPath;
+            c.pos.findClosestByPath = function (a2, o2) { if (a2 === FIND_DROPPED_RESOURCES) searches++; return inner.call(this, a2, o2); };
+            return c;
+        };
+        const picker = counted(mkPicker());
+        const first = hauler.pickLoad(picker);
+        const afterFirst = searches;
+        Game.time++;
+        const second = hauler.pickLoad(picker);
+        assert(first && first.id === "keeppick1" && second === first && searches === afterFirst,
+            "pickLoad: the pick is reused on the next tick without another path search (" + searches + " vs " + afterFirst + ")");
+
+        keepDrop.amount = 40; // pile nearly gone: no longer worth the trip
+        Game.time++;
+        const third = hauler.pickLoad(picker);
+        assert(!third || third.id !== "keeppick1", "pickLoad: a pile that fell below 50 is dropped from the cached pick");
+
+        keepDrop.amount = 200;
+        Game.time++;
+        hauler.pickLoad(picker); // fresh pick again, cached
+        const big = mkDrop("keepbig1", 900);
+        findMap[FIND_DROPPED_RESOURCES] = [keepDrop, big];
+        picker.pos.findClosestByPath = (a2, o2) => (a2 === FIND_DROPPED_RESOURCES ? big : null);
+        Game.time++;
+        const forced = hauler.pickLoad(picker);
+        assert(forced && forced.id === "keepbig1" && forced.tier === "bigDrop",
+            "pickLoad: a pile above the big-drop bar forces a fresh pick even inside the reuse window");
+
+        findMap[FIND_DROPPED_RESOURCES] = [keepDrop];
+        const picker2 = counted(mkPicker());
+        picker2.name = "HKeepPick2";
+        Game.time++;
+        hauler.pickLoad(picker2);
+        const base2 = searches;
+        Game.time += 5; // the window (5 ticks) has passed
+        hauler.pickLoad(picker2);
+        assert(searches > base2, "pickLoad: after hauler.repickTicks the cascade runs again (" + (searches - base2) + " new searches)");
+        findMap[FIND_DROPPED_RESOURCES] = [];
+    }
+    {
+        // spawning: a room that wants nothing is not re-evaluated every tick
+        const spawnMod = require(path.join(PROJECT, "src/rooms/spawning"));
+        const logicIdle = require(path.join(PROJECT, "src/roles"));
+        const censusIdle = require(path.join(PROJECT, "src/utils/census"));
+        const needsIdle = require(path.join(PROJECT, "src/rooms/needs"));
+        const cfgIdle = require(path.join(PROJECT, "src/utils/config"));
+        const savedSpawnFns = {};
+        Object.keys(logicIdle).forEach((type) => { savedSpawnFns[type] = logicIdle[type].spawn; });
+        let spawnChecks = 0;
+        Object.keys(logicIdle).forEach((type) => { logicIdle[type].spawn = () => { spawnChecks++; return false; }; });
+        const savedTtl = cfgIdle.defaults.needs.cacheTicks;
+        cfgIdle.defaults.needs.cacheTicks = 10; // production value: the smoke fixes it at 1
+        const idleSpawn = Object.assign(new Spawn(), {
+            id: "spawnidle1", structureType: STRUCTURE_SPAWN, spawning: null,
+            pos: new RoomPosition(10, 10, "Idle1"), spawnCreep: () => OK,
+        });
+        const idleRoom = { name: "Idle1", energyAvailable: 300, energyCapacityAvailable: 300, storage: null, controller: undefined, find: (t) => (t === FIND_MY_SPAWNS ? [idleSpawn] : []) };
+        Memory.rooms.Idle1 = {};
+        needsIdle.invalidate("Idle1");
+        spawnMod.resetIdleVerdict();
+        Game.time += 100;
+        spawnMod(idleRoom);
+        const firstChecks = spawnChecks;
+        Game.time++;
+        spawnMod(idleRoom); // the verdict does not carry over to this tick: new roomCache, same needs object
+        assert(firstChecks > 0 && spawnChecks === firstChecks,
+            "spawning: a second tick with nothing wanted re-checks no role (" + firstChecks + " checks, then " + spawnChecks + ")");
+        needsIdle.invalidate("Idle1"); // console override: needs recomputed -> new object
+        Game.time++;
+        spawnMod(idleRoom);
+        assert(spawnChecks > firstChecks, "spawning: recomputed needs force a fresh evaluation at once");
+        const afterRecompute = spawnChecks;
+        const extra = censusIdle.allInRoom;
+        censusIdle.allInRoom = (name) => (name === "Idle1" ? [{ name: "x" }] : extra(name));
+        Game.time++;
+        spawnMod(idleRoom);
+        censusIdle.allInRoom = extra;
+        assert(spawnChecks > afterRecompute, "spawning: a change in the room's creep count (a death/spawn) forces a fresh evaluation");
+        const beforeWant = spawnChecks;
+        logicIdle.hauler.spawn = () => { spawnChecks++; return true; };
+        const savedHaulerData = logicIdle.hauler.spawnData;
+        logicIdle.hauler.spawnData = () => ({ name: "hIdle1", body: [CARRY, CARRY, MOVE], memory: { role: "hauler" } });
+        needsIdle.invalidate("Idle1");
+        Game.time++;
+        spawnMod(idleRoom);
+        const wantChecks = spawnChecks - beforeWant;
+        Game.time++;
+        spawnMod(idleRoom);
+        assert(spawnChecks - beforeWant > wantChecks, "spawning: a room with a pending request is re-checked every tick (never skipped)");
+        Object.keys(savedSpawnFns).forEach((type) => { logicIdle[type].spawn = savedSpawnFns[type]; });
+        logicIdle.hauler.spawnData = savedHaulerData;
+        cfgIdle.defaults.needs.cacheTicks = savedTtl;
+        spawnMod.resetIdleVerdict();
+        delete Memory.rooms.Idle1;
+    }
+    // a second session wraps again and unwraps again
+    global.profile(2);
+    const secondDisable = Memory.profiler.disableTick;
+    Game.time++;
+    mainForProfiler.loop();
+    const wrappedSecond = wrappedCount();
+    Game.time++;
+    while (Game.time <= secondDisable + 2) {
+        global.Memory = JSON.parse(JSON.stringify(global.Memory));
+        mainForProfiler.loop();
+        Game.time++;
+    }
+    assert(wrappedSecond > 0 && wrappedCount() === 0 && published.length === 2,
+        "0113: a second profile() wraps again and unwraps again (" + wrappedSecond + " wrapped, " + wrappedCount() + " left)");
+    meterForProfile.setFns = realSetFns;
+}
+
+// --- ROADMAP 0113: unified CPU meter (L0 modules, L1 roles / structures / spans) -------------
+{
+    // a private instance: main.js keeps the shared one (and its accumulated window)
+    const meterKey = require.resolve(path.join(PROJECT, "src/utils/cpuMeter"));
+    const sharedMeter = require.cache[meterKey];
+    delete require.cache[meterKey];
+    const meter = require(path.join(PROJECT, "src/utils/cpuMeter"));
+    require.cache[meterKey] = sharedMeter;
+    const saved = { used: Game.cpu.getUsed, settings: Memory.settings, time: Game.time };
+    let used = 0;
+    Game.cpu.getUsed = () => used;
+    Memory.settings = Object.assign({}, saved.settings, { stats: { cpuWindowTicks: 2, cpuTopFunctions: 2 } });
+    Game.time += 90000000;
+    meter.record("roles", "hauler", 2);
+    meter.record("roles", "hauler", 4);
+    meter.record("structures", "tower", 1);
+    used = 10; meter.endTick();
+    assert(meter.snapshot() === null, "0113: nothing is published before the window closes");
+    Game.time++;
+    meter.record("roles", "hauler", 3);
+    used = 14; meter.endTick();
+    const snap = meter.snapshot();
+    assert(snap && snap.window === 2 && snap.used === 12 && snap.roles.hauler.avg === 4.5 && snap.roles.hauler.max === 4 && snap.roles.hauler.calls === 1.5,
+        "0113: a closed window holds per-tick averages (avg " + (snap && snap.roles && snap.roles.hauler.avg) + ", calls " + (snap && snap.roles && snap.roles.hauler.calls) + ")");
+    assert(snap.structures.tower.avg === 0.5 && snap.modules && snap.spans, "0113: structures are keyed by type, every group is present");
+    Game.time++;
+    meter.record("roles", "hauler", 100);
+    used = 10; meter.endTick();
+    assert(meter.snapshot() === snap && meter.snapshot().roles.hauler.avg === 4.5, "0113: the snapshot does not change between publications");
+    assert(meter.live().roles.hauler.avg === 100, "0113: live() shows the window in progress (cpuTop)");
+    meter.reset();
+    assert(Object.keys(meter.live().roles).length === 0 && meter.snapshot() === snap, "0113: reset() restarts the window and keeps the last published snapshot");
+    // each tick counts once
+    Game.time++; meter.endTick(); meter.endTick();
+    assert(meter.live().ticks === 1, "0113: endTick() counts a tick once however often it is called");
+
+    // spans measure, return the result and propagate exceptions (still counted)
+    used = 0;
+    const out = meter.span("hot.point", () => { used += 3; return "value"; });
+    let thrown = null;
+    try { meter.span("hot.point", () => { used += 2; throw new Error("boom"); }); } catch (e) { thrown = e; }
+    const sp = meter.live().spans["hot.point"];
+    assert(out === "value" && thrown && thrown.message === "boom" && sp && sp.calls === 2 && sp.max === 3,
+        "0113: span() returns the result, rethrows, and counts both calls (got " + JSON.stringify(sp) + ")");
+
+    // L2 result: top N by self time, per-tick values, in the published snapshot
+    meter.setFns([{ name: "a", selfTime: 10, totalTime: 12, calls: 20 }, { name: "b", selfTime: 40, totalTime: 40, calls: 80 }, { name: "c", selfTime: 1, totalTime: 1, calls: 2 }], 10);
+    const fn = meter.snapshot().fns;
+    assert(Object.keys(fn).join() === "b,a" && fn.b.self === 4 && fn.b.calls === 8 && fn.a.total === 1.2,
+        "0113: setFns keeps the heaviest functions by self time as per-tick values (got " + JSON.stringify(fn) + ")");
+
+    Game.cpu.getUsed = saved.used; Memory.settings = saved.settings; Game.time = saved.time;
+}
+
+// 0113 wiring: the main loop feeds modules / roles / structures / spans and stats publishes the window
+{
+    const mainWire = require(path.join(PROJECT, "src/main"));
+    const wireMeter = require(path.join(PROJECT, "src/utils/cpuMeter"));
+    const savedWire = { settings: Memory.settings };
+    Memory.settings = Object.assign({}, savedWire.settings, { stats: { cpuWindowTicks: 3 } });
+    Game.time += 95000000;
+    wireMeter.reset();
+    const roleNames = {};
+    Object.keys(Game.creeps).forEach((n) => { roleNames[Game.creeps[n].memory.role] = true; });
+    // the window closes in cpuMeter.endTick() of the 3rd tick, after stats() already ran: the
+    // 4th tick's stats() is the first to carry it (one tick of publication latency)
+    for (let i = 0; i < 4; i++) { Game.time++; mainWire.loop(); }
+    const wired = Memory.stats && Memory.stats.cpu && Memory.stats.cpu.meter;
+    assert(wired && wired.window === 3 && wired.modules.stats && wired.modules.creep && wired.modules.structure,
+        "0113: the main loop feeds the modules and stats publishes the closed window in Memory.stats.cpu.meter (got " + JSON.stringify(wired && Object.keys(wired)) + ")");
+    assert(Object.keys(wired.roles).length > 0 && Object.keys(wired.roles).every((r) => roleNames[r] && !Game.creeps[r]),
+        "0113: roles are keyed by role name, never by creep name (got " + Object.keys(wired.roles).join() + ")");
+    assert(Object.keys(wired.structures).length > 0 && Object.keys(wired.structures).every((k) => typeof k === "string" && !(Game.structures && Game.structures[k])),
+        "0113: structures are keyed by type, never by id (got " + Object.keys(wired.structures).join() + ")");
+    assert(wired.spans["needs.compute"] && wired.spans["craft.scan"] && wired.spans["craft.chains"], "0113: the named spans are measured every tick");
+    // Game.time is NOT restored: stats() keeps heap caches stamped with the tick (barrier hits)
+    Memory.settings = savedWire.settings;
+}
+
+// --- ROADMAP 0115: several lab reactions at once (labReactions list) -----------------------
+{
+    const labMod = require(path.join(PROJECT, "src/structures/lab"));
+    const labReactions = require(path.join(PROJECT, "src/utils/labReactions"));
+    const tsMod = require(path.join(PROJECT, "src/utils/transientStock"));
+    const nelMod = require(path.join(PROJECT, "src/utils/nonEnergyLogistics"));
+    const savedGet = Game.getObjectById, savedRooms = Memory.rooms;
+    const ROOM = "MultiRxRoom";
+    const mkLab = (id, res) => {
+        const lab = Object.assign(new OwnedStructure(), {
+            id, structureType: STRUCTURE_LAB, my: true, room: { name: ROOM }, pos: new RoomPosition(5, 5, ROOM), cooldown: 0, ran: 0,
+            runReaction(a, b) { this.ran++; this.args = [a.id, b.id]; return OK; },
+        });
+        const set = (resources) => { lab.store = mineralStore(resources, 3000 - _.sum(Object.values(resources))); lab.mineralType = Object.keys(resources)[0] || null; };
+        lab.set = set; set(res || {});
+        return lab;
+    };
+    const L = { ia1: mkLab("mx-ia1", { H: 1000 }), ia2: mkLab("mx-ia2", { O: 1000 }), oa: mkLab("mx-oa"), ib1: mkLab("mx-ib1", { L: 1000 }), ib2: mkLab("mx-ib2", { H: 1000 }), ob: mkLab("mx-ob"), other: mkLab("mx-other") };
+    Game.getObjectById = (id) => { const k = Object.keys(L).find((n) => L[n].id === id); return k ? L[k] : savedGet.call(Game, id); };
+    const rxA = { a: "O", b: "H", product: "OH", input1: "mx-ia2", input2: "mx-ia1", output: "mx-oa" };
+    const rxB = { a: "L", b: "H", product: "LH", input1: "mx-ib1", input2: "mx-ib2", output: "mx-ob" };
+
+    // list(): the plural field, else the singular one, else nothing
+    Memory.rooms = Object.assign({}, savedRooms, { [ROOM]: {} });
+    assert(labReactions.list(ROOM).length === 0 && labReactions.list("NoSuchRoom").length === 0, "0115: no reaction -> empty list");
+    Memory.rooms[ROOM].labReaction = rxA;
+    assert(labReactions.list(ROOM).length === 1 && labReactions.list(ROOM)[0] === rxA, "0115: a single labReaction is a list of one");
+    Memory.rooms[ROOM].labReactions = [rxA, rxB];
+    assert(labReactions.list(ROOM).length === 2, "0115: labReactions wins over the singular field");
+    delete Memory.rooms[ROOM].labReaction;
+
+    // lab.js: every output lab acts for ITS reaction, on its own cooldown; inputs and strangers stay idle
+    Object.keys(L).forEach((k) => labMod.run(L[k]));
+    assert(L.oa.ran === 1 && L.ob.ran === 1 && L.oa.args.join() === "mx-ia2,mx-ia1" && L.ob.args.join() === "mx-ib1,mx-ib2" &&
+        L.ia1.ran + L.ia2.ran + L.ib1.ran + L.ib2.ran + L.other.ran === 0,
+        "0115: both reactions run, each from its own two input labs (ran " + JSON.stringify(Object.keys(L).map((k) => k + ":" + L[k].ran)) + ")");
+
+    // hauler: stocks the input labs of EVERY reaction (one job per reagent and destination)
+    const storage = { store: mineralStore({ L: 2000, H: 2000, O: 2000 }, 1e6) };
+    const room = { name: ROOM, storage, terminal: null, find: () => [] };
+    L.ib1.set({ L: 100 });
+    Game.time++;
+    let job = hauler.pickMineralJob(room);
+    assert(job && job.kind === "labReagent" && job.resourceType === "L" && job.to === L.ib1, "0115: the second reaction's low input lab is stocked (got " + (job && job.kind) + ")");
+    L.ib1.set({ L: 1000 }); L.ia1.set({ H: 100 });
+    Game.time++;
+    job = hauler.pickMineralJob(room);
+    assert(job && job.kind === "labReagent" && job.resourceType === "H" && job.to === L.ia1, "0115: ...and so is the first reaction's");
+    L.ia1.set({ H: 1000 });
+
+    // hauler: drains the fullest output lab of ALL reactions
+    L.oa.set({ OH: 2500 }); L.ob.set({ LH: 2700 });
+    Game.time++;
+    job = hauler.pickMineralJob(room);
+    assert(job && job.kind === "labOutput" && job.from === L.ob && job.resourceType === "LH", "0115: the fullest output lab of any reaction is drained (got " + (job && job.from && job.from.id) + ")");
+    // an in-place intermediate (keep) is left alone, the other reaction's output is still drained
+    Memory.rooms[ROOM].labReactions = [Object.assign({}, rxA), Object.assign({}, rxB, { keep: true })];
+    Game.time++;
+    job = hauler.pickMineralJob(room);
+    assert(job && job.kind === "labOutput" && job.from === L.oa, "0115: a keep reaction's output is not drained, the other one's is (got " + (job && job.from && job.from.id) + ")");
+    Memory.rooms[ROOM].labReactions = [rxA, rxB];
+
+    // pressure reports the fullest output lab across reactions
+    Game.time++;
+    const pressure = nelMod.outputs(room).find((o) => o.kind === "labOutput");
+    assert(pressure && pressure.sourceId === "mx-ob" && pressure.resourceType === "LH" && Math.abs(pressure.ratio - 0.9) < 1e-9,
+        "0115: output pressure is measured on the fullest lab of any reaction (got " + JSON.stringify(pressure) + ")");
+
+    // transitory stock: nothing a running reaction needs is drained; strangers are
+    L.oa.set({ OH: 300 }); L.ob.set({ LH: 300 });
+    assert(tsMod.excess(L.oa).length === 0 && tsMod.excess(L.ob).length === 0 && tsMod.excess(L.ia1).length === 0 && tsMod.excess(L.ib1).length === 0,
+        "0115: transientStock keeps the product and the reagents of every running reaction");
+    L.oa.set({ LH: 300 });
+    assert(tsMod.excess(L.oa).map((e) => e.resourceType).join() === "LH", "0115: another reaction's product in this reaction's output lab is drained");
+    L.other.set({ OH: 300 });
+    assert(tsMod.excess(L.other).map((e) => e.resourceType).join() === "OH", "0115: a lab outside every reaction is drained");
+
+    Game.getObjectById = savedGet; Memory.rooms = savedRooms;
+
+    // 0115: the planner's T follows the critical path - a wave costs its slowest step
+    {
+        const pricing = pricingModule(); // a fresh instance bound to the current market module
+        const marketMod = require(path.join(PROJECT, "src/utils/market"));
+        const savedSamples = marketMod.samples, savedTimeT = Game.time;
+        // the intermediates cost far more than their reagents, so the planner makes them
+        const priceOf = (rt) => (["LH", "OH", "LH2O"].indexOf(rt) >= 0 ? 5000 : 10);
+        marketMod.samples = (rt) => priceSamples(priceOf(rt), priceOf(rt) + 1, 72, 1e9);
+        // the smoke's REACTIONS stub only knows H+O: add the rest of the XLH2O tree, with
+        // different times so that the slowest step of a wave is told apart from the sum
+        const rxBackup = { H: Object.assign({}, REACTIONS.H), L: REACTIONS.L, LH: REACTIONS.LH, OH: REACTIONS.OH, X: REACTIONS.X, LH2O: REACTIONS.LH2O };
+        REACTIONS.H.L = "LH"; REACTIONS.L = { H: "LH" }; REACTIONS.LH = { OH: "LH2O" }; REACTIONS.OH = { LH: "LH2O" };
+        REACTIONS.X = { LH2O: "XLH2O" }; REACTIONS.LH2O = { X: "XLH2O" };
+        global.REACTION_TIME = { LH: 15, OH: 20, LH2O: 10, XLH2O: 60 };
+        pricing.resetCaches();
+        const base = { instant: (rt) => ({ bid: priceOf(rt), ask: priceOf(rt) + 1 }), stock: () => 0, canMake: () => true };
+        const cd = (p) => pricing.recipeOf(p).cooldown;
+        const batches = 20; // 100 units / 5 per reaction, at every level
+        const plain = pricing.planNode("XLH2O", 100, base, 0, {}, true);
+        const sumAll = batches * (cd("LH") + cd("OH") + cd("LH2O") + cd("XLH2O"));
+        const critical = batches * (Math.max(cd("LH"), cd("OH")) + cd("LH2O") + cd("XLH2O"));
+        // the lab plan (labSlots) knows the strategy and its time; the pricing only adds it up
+        const together = pricing.planNode("XLH2O", 100, Object.assign({}, base, { labTime: () => critical }), 0, {}, true);
+        const sequentialWaves = pricing.planNode("XLH2O", 100, Object.assign({}, base, { labTime: () => null }), 0, {}, true);
+        assert(plain && plain.T === sumAll && sequentialWaves.T === sumAll,
+            "0115: without a wave plan T is the sum of every step (got " + (plain && plain.T) + ", expected " + sumAll + ")");
+        assert(together.T === critical && together.T < sumAll,
+            "0115/0116: the lab plan's own time replaces the plain sum (got " + together.T + ", expected " + critical + ", sequential " + sumAll + ")");
+        assert(together.steps.every((st) => typeof st.time === "number" && st.time > 0), "0115: every step records its own production time");
+        marketMod.samples = savedSamples;
+        REACTIONS.H = rxBackup.H;
+        ["L", "LH", "OH", "X", "LH2O"].forEach((k) => { if (rxBackup[k] === undefined) delete REACTIONS[k]; else REACTIONS[k] = rxBackup[k]; });
+        delete global.REACTION_TIME;
+        Game.time = savedTimeT;
+        pricing.resetCaches();
+    }
+
+    // groupAt(): consecutive lab items of one wave run together; anything else is a group of one
+    const { groupAt } = require(path.join(PROJECT, "src/utils/craftChain"));
+    const it = (product, wave, kind) => ({ kind: kind || "lab", product, wave });
+    assert(groupAt({ queue: [it("A", 0), it("B", 0), it("C", 1)] }, 0).map((i) => i.product).join() === "A,B", "0115: two lab steps of wave 0 form a group");
+    assert(groupAt({ queue: [it("A", 0), it("B", 0), it("C", 1)] }, 2).map((i) => i.product).join() === "C", "0115: the next wave is a group of its own");
+    assert(groupAt({ queue: [it("A"), it("B")] }, 0).length === 1, "0115: a chain stored before waves existed (no wave) runs one step at a time");
+    assert(groupAt({ queue: [it("A", 0), it("F", 0, "factory"), it("B", 0)] }, 0).length === 1, "0115: a factory step never joins a lab wave, nor lets a wave jump over it");
+    assert(groupAt({ queue: [it("F", undefined, "factory"), it("G", undefined, "factory")] }, 0).length === 1, "0115: factory steps stay one at a time");
 }
 
 // --- ROADMAP 0046: contestRoom() - siege an already-claimed/reserved room
@@ -9369,7 +10591,7 @@ function mineralStore(resources, freeCap) {
     Memory.rooms.W1N1.defenseActive = false;
 
     const extractorMM = Object.assign(new OwnedStructure(), {
-        id: "extractorMM1", structureType: STRUCTURE_EXTRACTOR, my: true,
+        id: "extractorMM1", structureType: STRUCTURE_EXTRACTOR, my: true, pos: mineral.pos,
     });
     let containerFree = 100;
     const containerMM = Object.assign(new StructureContainer(), {
@@ -9383,9 +10605,12 @@ function mineralStore(resources, freeCap) {
         return list;
     };
 
+    Game.time++; // a fresh roomCache: W1N1's structures were listed earlier this tick
     let harvested = false;
     const mmCreep = Object.assign(Object.create(Creep.prototype), {
-        id: "mmcreep1", room: { name: "W1N1" },
+        id: "mmcreep1",
+        // the role reads the extractor/container from roomCache (one find a tick), not pos.findInRange
+        room: { name: "W1N1", find: (type) => (type === FIND_STRUCTURES ? [extractorMM, containerMM] : []) },
         pos: new RoomPosition(mineral.pos.x, mineral.pos.y, "W1N1"),
         memory: { role: "mineralMiner", target: mineral.id },
         moveTo: noop,
@@ -9411,8 +10636,62 @@ function mineralStore(resources, freeCap) {
     mineralMinerMod.run(mmCreep);
     assert(harvested === false, "mineralMiner does not harvest a depleted mineral");
 
+    containerFree = 100;
+    mineral.mineralAmount = 1999;
+    assert(mineralMinerMod.wanted(room) === 0,
+        "0114: mineral below minAmount -> no mineralMiner spawn");
+    mineral.mineralAmount = 2000;
+    assert(mineralMinerMod.wanted(room) === 1,
+        "0114: mineral at minAmount -> mineralMiner wanted");
+    containerFree = 0;
+    assert(mineralMinerMod.wanted(room) === 0,
+        "0114: mineral container full -> no mineralMiner spawn");
+
     mineral.mineralAmount = savedMineralAmount;
     mineral.pos.findInRange = realMineralFindInRange;
+}
+
+// --- 0114: miner body ladder + mineralMiner body -------------------------
+{
+    const minerMod0114 = require(path.join(PROJECT, "src/roles/miner"));
+    const mmMod0114 = require(path.join(PROJECT, "src/roles/mineralMiner"));
+    const cost0114 = (b) => b.reduce((n, p) => n + BODYPART_COST[p], 0);
+    const n0114 = (b, t) => b.filter((p) => p === t).length;
+
+    const full = minerMod0114.bodyForBudget(1850, true);
+    assert(n0114(full, WORK) === 15 && n0114(full, MOVE) === 3 && n0114(full, CARRY) === 4,
+        "0114: capacity 1850 -> miner W15/M3/C4");
+    const rung12 = minerMod0114.bodyForBudget(1849, true);
+    assert(n0114(rung12, WORK) === 12 && n0114(rung12, CARRY) === 3,
+        "0114: capacity just below 1850 -> regresses to W12/M3/C3");
+    assert(n0114(minerMod0114.bodyForBudget(5600, true), WORK) === 15,
+        "0114: bigger capacity does not buy more than W15");
+    const noFeed = minerMod0114.bodyForBudget(1850, false);
+    assert(n0114(noFeed, CARRY) === 0 && n0114(noFeed, WORK) === 15,
+        "0114: nothing to feed -> no CARRY, same WORK");
+    assert(minerMod0114.bodyForBudget(549, false) === null && minerMod0114.bodyForBudget(300, true) === null,
+        "0114: below the smallest rung -> null (caller falls back to the mini body)");
+    let ladderOk = true, prevWork = 99;
+    for (const cap of [600, 750, 1000, 1250, 1500, 1850, 3000]) {
+        const b = minerMod0114.bodyForBudget(cap, true);
+        ladderOk = ladderOk && b && cost0114(b) <= cap && b.length <= 50 && n0114(b, WORK) >= 5;
+    }
+    for (let cap = 3000; cap >= 600; cap -= 50) {
+        const w = n0114(minerMod0114.bodyForBudget(cap, true), WORK);
+        ladderOk = ladderOk && w <= prevWork;
+        prevWork = w;
+    }
+    assert(ladderOk, "0114: every rung is affordable, <= 50 parts, and WORK never grows as capacity shrinks");
+
+    const mmRoom = { energyCapacityAvailable: 5600 };
+    const mmW = (cap, amount) => n0114(mmMod0114.body({ energyCapacityAvailable: cap }, amount), WORK);
+    assert(mmW(5600, 500) === 4, "0114: tiny deposit -> mineralMiner floor of 4 WORK");
+    assert(mmW(5600, 2000) === 8, "0114: 2000 left -> 8 WORK");
+    assert(mmW(5600, 70000) === 12, "0114: huge deposit -> capped at 12 WORK");
+    assert(mmW(300, 70000) === 2, "0114: mineralMiner body shrinks to the room's capacity");
+    const mmBody = mmMod0114.body(mmRoom, 70000);
+    assert(n0114(mmBody, CARRY) === 0 && n0114(mmBody, MOVE) === 3,
+        "0114: mineralMiner never has CARRY, MOVE ~ WORK/5");
 }
 
 // --- Fase 1: hauler.pickMineralJob() prioritizes the mineral container --
@@ -9422,7 +10701,7 @@ function mineralStore(resources, freeCap) {
         pos: new RoomPosition(10, 10, "PickJobRoom"),
     });
     const pmContainer = Object.assign(new StructureContainer(), {
-        id: "pmContainer1", structureType: STRUCTURE_CONTAINER,
+        id: "pmContainer1", structureType: STRUCTURE_CONTAINER, pos: new RoomPosition(10, 10, "PickJobRoom"),
         store: mineralStore({ H: 50 }, 1950),
     });
     pmMineral.pos.findInRange = (type, range, opts) => {
@@ -9433,7 +10712,7 @@ function mineralStore(resources, freeCap) {
     const pmStorage = { store: mineralStore({}, 100000) };
     const pmRoom = {
         name: "PickJobRoom", storage: pmStorage, terminal: null,
-        find: (type) => (type === FIND_MINERALS ? [pmMineral] : []),
+        find: (type) => (type === FIND_MINERALS ? [pmMineral] : type === FIND_STRUCTURES ? [pmContainer] : []),
     };
     Memory.rooms.PickJobRoom = {
         labReaction: { a: "H", b: "O", product: "OH", output: "nope1", input1: "nope2", input2: "nope3" },
@@ -9456,7 +10735,7 @@ function mineralStore(resources, freeCap) {
 {
     const lootTomb = { id: "lootTomb1", store: mineralStore({ energy: 100, U: 80 }, 0) };
     const lootContainer = Object.assign(new StructureContainer(), {
-        id: "lootContainer1", structureType: STRUCTURE_CONTAINER,
+        id: "lootContainer1", structureType: STRUCTURE_CONTAINER, pos: new RoomPosition(10, 10, "LootJobRoom"),
         store: mineralStore({ H: 50 }, 1950),
     });
     const lootMineral = Object.assign(new RoomObject(), {
@@ -9473,6 +10752,7 @@ function mineralStore(resources, freeCap) {
         name: "LootJobRoom", storage: lootStorage, terminal: null,
         find: (type) => {
             if (type === FIND_MINERALS) return [lootMineral];
+            if (type === FIND_STRUCTURES) return [lootContainer];
             if (type === FIND_TOMBSTONES) return [lootTomb];
             return [];
         },
@@ -9686,7 +10966,7 @@ function mineralStore(resources, freeCap) {
     );
 
     outputLab.mineralType = reaction.product;
-    outputLab.store = mineralStore({ [reaction.product]: 200 }, 2800);
+    outputLab.store = mineralStore({ [reaction.product]: 2500 }, 500); // above the drain floor (80% / pressure)
     const drainJob = hauler.pickMineralJob(
         Object.assign({}, labRoom, { storage: { store: mineralStore({}, 100000) }, terminal: null })
     );
@@ -9798,8 +11078,23 @@ function mineralStore(resources, freeCap) {
     });
     const realMyStructures = roomCacheMod.myStructures;
     roomCacheMod.myStructures = () => [energyFactory];
+    // ROADMAP 0111: a factory only needs energy for an ACTIVE product, and
+    // only that product's batch - never up to its full capacity.
+    const savedRooms = Memory.rooms;
+    Memory.rooms = Object.assign({}, savedRooms, { W1N1: Object.assign({}, savedRooms && savedRooms.W1N1) });
+    delete Memory.rooms.W1N1.factoryProduct;
+    Game.time++;
+    assert(hauler.optionalConsumer(consumerCreep) !== energyFactory,
+        "0111 AC6: a factory with no active product is not fed energy - it is transitory");
+    Memory.rooms.W1N1.factoryProduct = "widgetA";
+    Game.time++; // hauler.js's per-tick derived() cache
     assert(hauler.optionalConsumer(consumerCreep) === energyFactory,
-        "hauler.js's optionalConsumer() also targets a factory needing energy");
+        "hauler.js's optionalConsumer() also targets a factory needing energy (once it has an active product)");
+    energyFactory.store = { energy: 20, getFreeCapacity: () => 500 }; // widgetA needs 20 energy per batch
+    Game.time++;
+    assert(hauler.optionalConsumer(consumerCreep) !== energyFactory,
+        "0111 AC6: a factory already holding its batch's energy (target = components.energy) wants no more");
+    Memory.rooms = savedRooms;
     roomCacheMod.myStructures = realMyStructures;
 }
 
@@ -10740,6 +12035,28 @@ origLog("\nMemory:", memStr.length, "bytes  |  rooms.W1N1 keys:",
     assert(op.state === "awaitingReceipt" && op.sentAmount === 1000, "0097 a stale haulerName from a finished leg does not resurface as a spurious recovery");
     Game.rooms = oldRooms; Memory.terminalOps = oldOps; Game.creeps = oldCreeps; Game.getObjectById = oldGetObject;
 }
+// 0111 follow-up (2026-10-02): an operation cancelled while its hauler was still walking
+// (not carrying yet) must stay cancelled - finishing the leg used to touch() it back to
+// "atTerminal", a zombie holding claims that blocked every new sale of the resource.
+{
+    const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
+    const makeStore = (energy, capacity) => ({ [RESOURCE_ENERGY]: energy, getFreeCapacity: () => capacity - energy, getUsedCapacity: () => energy, getCapacity: () => capacity });
+    const room = { name: "W7N54", controller: { my: true }, find: () => [], storage: { id: "W7N54-storage", store: makeStore(60000, 100000) }, terminal: { id: "W7N54-terminal", cooldown: 0, store: makeStore(0, 300000) } };
+    const oldRooms = Game.rooms, oldOps = Memory.terminalOps, oldCreeps = Game.creeps, oldGetObject = Game.getObjectById;
+    Game.rooms = Object.assign({}, oldRooms, { W7N54: room });
+    Memory.terminalOps = { nextId: 1, operations: {}, seenIncoming: {}, events: [], terminalBalance: {} };
+    const op = { id: "terminal-zombie", kind: "sell", sourceRoom: "W7N54", targetRoom: null, resourceType: RESOURCE_ENERGY, amount: 100, remaining: 100, loadedAmount: 0, sentAmount: 0, receivedAmount: 0, transactionCost: 0, state: "loading", haulerName: "ZombieHauler", createdTick: Game.time, updatedTick: Game.time };
+    Memory.terminalOps.operations[op.id] = op;
+    const creep = { name: "ZombieHauler", memory: { terminalJob: { operationId: op.id, direction: "load", fromId: room.storage.id, toId: room.terminal.id, resourceType: RESOURCE_ENERGY, amount: 100 } }, store: makeStore(0, 1000), transfer: () => OK, withdraw: () => OK };
+    Game.creeps = { ZombieHauler: creep };
+    Game.getObjectById = (id) => id === room.storage.id ? room.storage : id === room.terminal.id ? room.terminal : null;
+    terminalOps.cancel(op.id);
+    assert(op.state === "cancelled", "0111: cancelling an operation whose hauler is not carrying yet ends it");
+    terminalOps.runHauler(creep); // the hauler arrives at the storage with an empty store: the job is dropped, nothing is picked up
+    assert(op.state === "cancelled" && op.haulerName === null && !creep.memory.terminalJob && op.loadedAmount === 0,
+        "0111: a job in flight does not revive its cancelled operation (state " + op.state + ", loaded " + op.loadedAmount + ")");
+    Game.rooms = oldRooms; Memory.terminalOps = oldOps; Game.creeps = oldCreeps; Game.getObjectById = oldGetObject;
+}
 // ROADMAP 0097 oitavo bug real (usuário reportou em produção, 2026-09-28):
 // tickTransfer()'s unload retrigger compared the target terminal's balance
 // against op.amount (the original total) instead of what was still owed. A
@@ -11431,6 +12748,93 @@ origLog("\nMemory:", memStr.length, "bytes  |  rooms.W1N1 keys:",
         "0098 skipFeeCap:true (used by marketFlip.js) restores the pre-cap behavior, dealing despite the same high fee ratio");
     Game.rooms = oldRooms; Game.market = oldMarket; Memory.terminalOps = oldOps;
 }
+// 2026-10-03 (producao): "deal(...) -> -6" repetido a cada ~7 ticks. loadedAmount (contabilidade)
+// maior que o estoque real do terminal: o candidateOrders() oferecia a quantidade contabilizada, o
+// engine devolvia ERR_NOT_ENOUGH_RESOURCES e a operacao voltava ao mesmo estado para sempre.
+{
+    const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
+    const makeStore = (contents, capacity) => Object.assign({
+        getFreeCapacity: () => capacity - Object.keys(contents).reduce((sum, key) => sum + contents[key], 0),
+        getUsedCapacity: () => Object.keys(contents).reduce((sum, key) => sum + contents[key], 0),
+        getCapacity: () => capacity,
+    }, contents);
+    const room = {
+        name: "W7N43", controller: { my: true }, find: () => [],
+        storage: { id: "W7N43-storage", store: makeStore({ [RESOURCE_ENERGY]: 20000, [RESOURCE_OXYGEN]: 0 }, 300000) },
+        terminal: { id: "W7N43-terminal", cooldown: 0, store: makeStore({ [RESOURCE_ENERGY]: 5000, [RESOURCE_OXYGEN]: 100 }, 300000) },
+    };
+    const oldRooms = Game.rooms, oldMarket = Game.market, oldOps = Memory.terminalOps, oldLog = console.log;
+    Game.rooms = Object.assign({}, oldRooms, { W7N43: room });
+    const dealAmounts = [];
+    let dealStatus = OK;
+    Game.market = {
+        credits: 100000, incomingTransactions: [], orders: {},
+        getAllOrders: () => [{ id: "buyer", roomName: "W9N9", price: 50, remainingAmount: 1000 }],
+        calcTransactionCost: () => 10,
+        deal: (id, amount) => { dealAmounts.push(amount); return dealStatus; },
+    };
+    const lines = [];
+    // capture the module's own output, but let the assertions' "ok" lines through
+    console.log = (...a) => { const line = a.join(" "); if (line.indexOf("ok  : ") === 0) oldLog(line); else lines.push(line); };
+    Memory.terminalOps = { nextId: 1, operations: {}, seenIncoming: {}, events: [], terminalBalance: {} };
+    const mkOp = (id) => ({ id, kind: "sell", sourceRoom: "W7N43", resourceType: RESOURCE_OXYGEN, amount: 300, remaining: 300, loadedAmount: 300,
+        limit: 40, energyFairPrice: 1, skipFeeCap: true, state: "atTerminal", sentAmount: 0, createdTick: Game.time, updatedTick: Game.time });
+
+    // (a) accounting says 300, the terminal holds 100: no deal for 300 is ever attempted
+    Memory.terminalOps.operations.short = mkOp("short");
+    terminalOps.tick();
+    const shortOp = Memory.terminalOps.operations.short;
+    assert(dealAmounts.length === 0 && shortOp.loadedAmount === 100 && shortOp.state === "queued",
+        "0111 deal -6: a sale never asks for more than the terminal really holds - loadedAmount drops to the real stock and the rest is carried again (deals " + dealAmounts.length + ", loaded " + shortOp.loadedAmount + ", state " + shortOp.state + ")");
+    assert(/estoque real no terminal \(100\)/.test(shortOp.error || ""), "0111 deal -6: the operation says why (op.error)");
+    // (b) the staging step does not raise it back to the old figure, and asks the hauler for the 200 missing
+    terminalOps.tick();
+    assert(shortOp.loadedAmount === 100, "0111 deal -6: staging keeps the real figure instead of the stale one (got " + shortOp.loadedAmount + ")");
+    // (b2) the staging step on its own: an operation waiting with a stale 300 while 100 are there
+    Memory.terminalOps.operations.stale = mkOp("stale");
+    delete Memory.terminalOps.operations.short;
+    Memory.terminalOps.operations.stale.state = "waiting";
+    Memory.terminalOps.nextId++; // activeIds() is an index rebuilt when nextId changes: an op injected by hand needs this
+    terminalOps.tick();
+    assert(Memory.terminalOps.operations.stale.loadedAmount === 100 && dealAmounts.length === 0,
+        "0111 deal -6: stageSaleCargo lowers a stale loadedAmount to the real stock too (got " + Memory.terminalOps.operations.stale.loadedAmount + ")");
+    delete Memory.terminalOps.operations.stale;
+    Memory.terminalOps.operations.short = shortOp;
+    Memory.terminalOps.nextId++;
+    // (c) once the 200 arrive, the whole 300 is dealt
+    room.terminal.store[RESOURCE_OXYGEN] = 300;
+    shortOp.state = "atTerminal"; shortOp.loadedAmount = 300; Game.time += 10;
+    terminalOps.tick();
+    assert(dealAmounts.length === 1 && dealAmounts[0] === 300, "0111 deal -6: with the stock really there the full amount is dealt (deals " + JSON.stringify(dealAmounts) + ")");
+
+    // (d) the engine itself answers -6 although the books agree: trust the real store and do not spam
+    delete Memory.terminalOps.operations.short;
+    room.terminal.store[RESOURCE_OXYGEN] = 300;
+    Memory.terminalOps.operations.neg6 = mkOp("neg6");
+    Memory.terminalOps.nextId++;
+    dealStatus = ERR_NOT_ENOUGH_RESOURCES; dealAmounts.length = 0; lines.length = 0;
+    for (let i = 0; i < 12; i++) {
+        Game.time += 8;
+        const op = Memory.terminalOps.operations.neg6;
+        if (op.state === "queued" || op.state === "waiting") op.state = "atTerminal"; // what the staging step does when the cargo is there
+        if (op.loadedAmount < 300) { room.terminal.store[RESOURCE_OXYGEN] = 300; op.loadedAmount = 300; }
+        terminalOps.tick();
+    }
+    const neg6Op = Memory.terminalOps.operations.neg6;
+    assert((neg6Op.shortCargoCount || 0) >= 1 && (neg6Op.dealFailures || 0) >= 1 && neg6Op.state !== "waiting",
+        "0111 deal -6: an engine -6 sends a sale back to staging instead of parking it in 'waiting' (state " + neg6Op.state + ", shortCargo " + neg6Op.shortCargoCount + ")");
+    const dealLines = lines.filter((l) => l.indexOf("neg6 deal(") >= 0);
+    assert(dealLines.length === 1, "0111 deal -6: twelve identical -6 answers print one line, not twelve (printed " + dealLines.length + ")");
+    assert(dealLines.length && /ERR_NOT_ENOUGH_RESOURCES: terminal com 300 \S+ e 5000 de energia/.test(dealLines[0]), "0111 deal -6: the line says what the terminal really holds (got " + dealLines[0] + ")");
+    // a different status prints again
+    dealStatus = ERR_FULL; lines.length = 0;
+    Game.time += 8; Memory.terminalOps.operations.neg6.state = "atTerminal"; Memory.terminalOps.operations.neg6.loadedAmount = 300;
+    terminalOps.tick();
+    assert(lines.some((l) => l.indexOf("neg6 deal(") >= 0 && l.indexOf("-> " + ERR_FULL) >= 0), "0111 deal -6: a different status is logged at once");
+
+    console.log = oldLog;
+    Game.rooms = oldRooms; Game.market = oldMarket; Memory.terminalOps = oldOps;
+}
 // managedTerminalIncrease() must recognize a SELL's feeLoadedAmount even
 // when the operation's own resourceType ("O") differs from the resourceType
 // being queried ("energy") - a market fee is always paid in energy no matter
@@ -11649,8 +13053,26 @@ origLog("\nMemory:", memStr.length, "bytes  |  rooms.W1N1 keys:",
     Memory.terminalOps = oldOps; Game.rooms = oldRooms; Game.market = oldMarket;
 }
 
+// ROADMAP 0111: the flip's guardrail reads marketPricing's own 7-day history
+// (market.samples). These tests predate it and only care about flip
+// mechanics, so the history is derived lazily from the test's own order book:
+// medians equal to the standing pair, plenty of depth - i.e. "a calm market".
+const realFlipMarketSamples = require(path.join(PROJECT, "src/utils/market")).samples;
+function flipHistoryFromBook() {
+    const market = require(path.join(PROJECT, "src/utils/market"));
+    market.samples = (resourceType) => {
+        const orders = (Game.market && typeof Game.market.getAllOrders === "function" && Game.market.getAllOrders()) || [];
+        const asks = orders.filter((o) => o.resourceType === resourceType && o.type === ORDER_SELL).map((o) => o.price);
+        const bids = orders.filter((o) => o.resourceType === resourceType && o.type === ORDER_BUY).map((o) => o.price);
+        if (!asks.length || !bids.length) return [];
+        return priceSamples(Math.max.apply(null, bids), Math.min.apply(null, asks), 72, 1e9);
+    };
+}
 // --- ROADMAP 0110: market flip (instant arbitrage) ----------------------
 function marketFlipModule() {
+    // marketPricing binds to whichever market.js instance was current when it
+    // loaded (an earlier test reloads market.js), so reload it with the flip.
+    delete require.cache[require.resolve(path.join(PROJECT, "src/utils/marketPricing"))];
     delete require.cache[require.resolve(path.join(PROJECT, "src/utils/marketFlip"))];
     return require(path.join(PROJECT, "src/utils/marketFlip"));
 }
@@ -11680,7 +13102,7 @@ function resetMarketFlipState() {
             { id: "buy-O", resourceType: "O", type: ORDER_BUY, price: 20, remainingAmount: 1000, roomName: "W2N3" },
         ],
     };
-    market.snapshot = () => ({ resources: { O: { fairPrice: 100, confidence: "ready" } } });
+    flipHistoryFromBook();
     terminalOps.buy = () => { buyCalls++; return { ok: true, id: "should-not-happen" }; };
     terminalOps.sell = () => { sellCalls++; return { ok: true, id: "should-not-happen" }; };
     marketFlip.tick();
@@ -11709,7 +13131,7 @@ function resetMarketFlipState() {
             { id: "buy-O", resourceType: "O", type: ORDER_BUY, price: 20, remainingAmount: 1000, roomName: "W2N3" },
         ],
     };
-    market.snapshot = () => ({ resources: { O: { fairPrice: 100, confidence: "ready" } } });
+    flipHistoryFromBook();
     terminalOps.buy = (room, resourceType, qty, price) => { buyCalls++; buyArgs = { room, resourceType, qty, price }; Memory.terminalOps.operations["buy-1"] = { id: "buy-1", state: "queued" }; return { ok: true, id: "buy-1" }; };
     terminalOps.sell = () => { sellCalls++; Memory.terminalOps.operations["sell-1"] = { id: "sell-1", state: "queued" }; return { ok: true, id: "sell-1" }; };
     marketFlip.tick();
@@ -11750,7 +13172,7 @@ function resetMarketFlipState() {
             { id: "buy-O", resourceType: "O", type: ORDER_BUY, price: 10.5, remainingAmount: 1000, roomName: "W2N3" }, // ratio 0.05, below minProfitRatio 0.5
         ],
     };
-    market.snapshot = () => ({ resources: { O: { fairPrice: 100, confidence: "ready" } } });
+    flipHistoryFromBook();
     marketFlip.tick();
     assert(!Memory.marketFlip.lastOpportunities.some((o) => o.resourceType === "O"),
         "0110 AC3: a pair below minProfitRatio is never logged as an opportunity");
@@ -11776,7 +13198,7 @@ function resetMarketFlipState() {
     };
     // Deliberately divergent from the live book (100) - proves the snapshot's
     // own energy entry is never consulted for the fee conversion.
-    market.snapshot = () => ({ resources: { O: { fairPrice: 100, confidence: "ready" }, energy: { fairPrice: 1, confidence: "ready" } } });
+    flipHistoryFromBook();
     marketFlip.tick();
     const opportunity = Memory.marketFlip.lastOpportunities.find((o) => o.resourceType === "O");
     // quantity 1000, gross (20-10)*1000=10000, fee 20 units * live ask 100 = 2000 -> net 8000, ratio 0.8
@@ -11798,7 +13220,7 @@ function resetMarketFlipState() {
         { id: "sell-O", resourceType: "O", type: ORDER_SELL, price: 10, remainingAmount: 1000, roomName: "W2N2" },
         { id: "buy-O", resourceType: "O", type: ORDER_BUY, price: 20, remainingAmount: 1000, roomName: "W2N3" },
     ];
-    market.snapshot = () => ({ resources: { O: { fairPrice: 5, confidence: "ready" } } }); // 1.05*5=5.25 < buyPrice 10 -> violates
+    require(path.join(PROJECT, "src/utils/market")).samples = (rt) => (rt === "O" ? priceSamples(5, 5, 72, 1e9) : []); // bid 20 vs a 7d median of 5: an outlier -> sell leg blocked // 1.05*5=5.25 < buyPrice 10 -> violates
     // test mode: still logged, flagged, not executed
     {
         const marketFlip = marketFlipModule();
@@ -11830,7 +13252,7 @@ function resetMarketFlipState() {
         let buyCalls = 0;
         Memory.settings = Object.assign({}, oldSettings, { marketFlip: { test: false, scanInterval: 1, minProfitRatio: 0.01, guardrailFairPriceRatio: 1.05, maxCreditRatioPerFlip: 0.05, maxHoldingTicks: 1500 } });
         Game.market = { credits: 1000000, calcTransactionCost: () => 0, getAllOrders: orders };
-        market.snapshot = () => ({ resources: { O: { fairPrice: 100, confidence: "warming" } } }); // 1.05*100=105 >= buyPrice 10, ratio fine
+        flipHistoryFromBook(); // 1.05*100=105 >= buyPrice 10, ratio fine
         terminalOps.buy = () => { buyCalls++; Memory.terminalOps.operations["buy-warm"] = { id: "buy-warm", state: "queued" }; return { ok: true, id: "buy-warm" }; };
         marketFlip.tick();
         assert(buyCalls === 1 && Memory.marketFlip.active.O, "0110 AC5 follow-up: confidence:\"warming\" no longer blocks a pair whose price is within the fairPrice ratio");
@@ -11856,7 +13278,7 @@ function resetMarketFlipState() {
             { id: "buy-widgetA", resourceType: "widgetA", type: ORDER_BUY, price: 600, remainingAmount: 50, roomName: "W2N3" },
         ],
     };
-    market.snapshot = () => ({ resources: { pixel: { fairPrice: 1000, confidence: "ready" }, widgetA: { fairPrice: 1000, confidence: "ready" } } });
+    flipHistoryFromBook();
     marketFlip.tick();
     const pixelOpp = Memory.marketFlip.lastOpportunities.find((o) => o.resourceType === "pixel");
     const widgetOpp = Memory.marketFlip.lastOpportunities.find((o) => o.resourceType === "widgetA");
@@ -11882,7 +13304,7 @@ function resetMarketFlipState() {
             { id: "buy-O", resourceType: "O", type: ORDER_BUY, price: 20, remainingAmount: 1000, roomName: "W2N3" },
         ],
     };
-    market.snapshot = () => ({ resources: { O: { fairPrice: 100, confidence: "ready" } } });
+    flipHistoryFromBook();
     terminalOps.buy = () => { buyCalls++; Memory.terminalOps.operations["buy-x"] = { id: "buy-x", state: "queued" }; return { ok: true, id: "buy-x" }; };
     marketFlip.tick();
     assert(buyCalls === 1 && Memory.marketFlip.active.O, "0110 AC7 setup: first scan opens the flip");
@@ -11920,7 +13342,7 @@ function resetMarketFlipState() {
             { id: "buy-Z", resourceType: "Z", type: ORDER_BUY, price: 12, remainingAmount: 100000, roomName: "W2N3" },
         ],
     };
-    market.snapshot = () => ({ resources: { O: { fairPrice: 100, confidence: "ready" }, Z: { fairPrice: 100, confidence: "ready" } } });
+    flipHistoryFromBook();
     terminalOps.buy = () => { const id = "buy-" + (nextId++); buyCalls++; Memory.terminalOps.operations[id] = { id, state: "queued" }; return { ok: true, id }; };
     marketFlip.tick();
     const oppO = Memory.marketFlip.lastOpportunities.find((o) => o.resourceType === "O");
@@ -12075,7 +13497,7 @@ function resetMarketFlipState() {
             { id: "buy-Z", resourceType: "Z", type: ORDER_BUY, price: 15, remainingAmount: 1000, roomName: "W2N3" },
         ],
     };
-    market.snapshot = () => ({ resources: { O: { fairPrice: 100, confidence: "ready" }, Z: { fairPrice: 100, confidence: "ready" } } });
+    flipHistoryFromBook();
     terminalOps.buy = (room) => { buyRooms.push(room); const id = "buy-" + buyRooms.length; Memory.terminalOps.operations[id] = { id, state: "queued" }; return { ok: true, id }; };
     marketFlip.tick();
     assert(buyRooms.length === 2 && buyRooms[0] !== buyRooms[1],
@@ -12106,7 +13528,7 @@ function resetMarketFlipState() {
             { id: "buy-Z", resourceType: "Z", type: ORDER_BUY, price: 15, remainingAmount: 1000, roomName: "W2N3" },
         ],
     };
-    market.snapshot = () => ({ resources: { O: { fairPrice: 100, confidence: "ready" }, Z: { fairPrice: 100, confidence: "ready" } } });
+    flipHistoryFromBook();
     terminalOps.buy = () => { buyCalls++; const id = "buy-" + buyCalls; Memory.terminalOps.operations[id] = { id, state: "queued" }; return { ok: true, id }; };
     marketFlip.tick();
     const oppO = Memory.marketFlip.lastOpportunities.find((o) => o.resourceType === "O");
@@ -12155,6 +13577,7 @@ function resetMarketFlipState() {
     terminalOps.cancel = oldCancel;
     Game.rooms = oldRooms; Game.market = oldMarket; Memory.settings = oldSettings; Game.time = oldTime;
 }
+require(path.join(PROJECT, "src/utils/market")).samples = realFlipMarketSamples;
 // BUY/SELL of different resources coexist in one room; the same resource still conflicts.
 {
     const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
@@ -12169,4 +13592,2178 @@ function resetMarketFlipState() {
     assert(!terminalOps.lockConflict("buy", "W7N58", null, "Z"), "a standing BUY of power and SELL of O do not block a BUY of Z in the same room");
     assert(terminalOps.lockConflict("buy", "W7N58", null, "O"), "the same resource (O) is still locked by its own SELL");
     Game.rooms = oldRooms; Memory.terminalOps = oldOps;
+}
+
+// --- ROADMAP 0111: marketPricing (conservative prices, margin, liquidity) ---
+function pricingModule() {
+    delete require.cache[require.resolve(path.join(PROJECT, "src/utils/marketPricing"))];
+    return require(path.join(PROJECT, "src/utils/marketPricing"));
+}
+function priceSamples(bid, ask, n, vol) {
+    const rows = [];
+    for (let i = 0; i < (n === undefined ? 72 : n); i++) {
+        rows.push({ tick: i * 3600, buyPrice: bid, buyVolume: vol === undefined ? 1000 : vol, sellPrice: ask, sellVolume: vol === undefined ? 1000 : vol });
+    }
+    return rows;
+}
+{
+    const pricing = pricingModule();
+    const market = require(path.join(PROJECT, "src/utils/market"));
+    const oldSamples = market.samples, oldSettings = Memory.settings;
+    Memory.settings = Object.assign({}, oldSettings);
+    let book = { Z: priceSamples(100, 110), energy: priceSamples(1, 1.1), widgetA: priceSamples(5000, 5400) };
+    market.samples = (rt) => book[rt] || [];
+    assert(Math.abs(pricing.zFromConfidence(0.95) - 1.645) < 0.01, "0111 AC11: confidence 0.95 maps to z ~ 1.645 (got " + pricing.zFromConfidence(0.95) + ")");
+    // AC1: double conservative - only the worse of (7d median, instant) counts
+    assert(pricing.conservativeBid("Z", 90) === 90 && pricing.conservativeBid("Z", 120) === 100,
+        "0111 AC1: revenue = min(7d median bid, instant bid)");
+    assert(pricing.conservativeAsk("Z", 105) === 110 && pricing.conservativeAsk("Z", 130) === 130,
+        "0111 AC1: cost = max(7d median ask, instant ask)");
+    // AC2/AC11: margin = floor + z*sigma*sqrt(T/3600)
+    const m0 = pricing.requiredMargin(0.05, 0), m1 = pricing.requiredMargin(0.05, 3600), m2 = pricing.requiredMargin(0.10, 3600);
+    assert(Math.abs(m0 - 0.01) < 1e-9 && m1 > m0 && m2 > m1 && Math.abs(m1 - (0.01 + 1.645 * 0.05)) < 0.001,
+        "0111 AC2/AC11: margin = floor + zConf*sigma*sqrt(T/3600), grows with T and sigma (got " + [m0, m1, m2] + ")");
+    // AC3: each liquidity guardrail blocks the sell leg with its own reason
+    assert(pricing.liquidity("Z", 100, "sell").ok, "0111 AC3: a liquid book passes");
+    book.W = priceSamples(100, 110, 10);
+    assert(pricing.liquidity("W", 100, "sell").reason === "warming", "0111 AC3: < minSamples blocks (warming)");
+    book.W = priceSamples(100, 110).map((r, i) => (i % 3 ? r : Object.assign({}, r, { buyPrice: null })));
+    assert(pricing.liquidity("W", 100, "sell").reason === "presence", "0111 AC3: presence < 90% blocks");
+    book.W = priceSamples(100, 110, 72, 150);
+    assert(pricing.liquidity("W", 100, "sell").reason === "depth", "0111 AC3: bid depth < 2x lot blocks");
+    book.W = priceSamples(100, 250);
+    assert(pricing.liquidity("W", 100, "sell").reason === "spread", "0111 AC3: sell-side spread above the default 2.0 blocks");
+    book.W = priceSamples(100, 150);
+    assert(pricing.liquidity("W", 100, "sell").ok, "0111 AC3: a 1.5 spread passes on the sell side (default cap is now 2.0, was 1.30)");
+    book.W = priceSamples(100, 110).map((r, i) => Object.assign({}, r, { buyPrice: i % 2 ? 60 : 140 }));
+    assert(pricing.liquidity("W", 100, "sell").reason === "volatility", "0111 AC3: sell-side sigma above the default 30% blocks");
+    // AC3: a cheap ask is never blocked, an expensive one still is
+    book.Q = priceSamples(100, 110, 10);
+    assert(pricing.buyLeg("Q", 100, 100).ok && pricing.buyLeg("Q", 100, 100).cheap, "0111 AC3: ask at/below the 7d median passes with no guardrail even when the book is illiquid");
+    assert(!pricing.buyLeg("Q", 130, 100).ok, "0111 AC3: an expensive ask still has to clear the liquidity checks");
+    // chain verdict on the COMMODITIES mock: widgetA = 20 Z + 20 energy
+    const ctx = { instant: (rt) => ({ bid: book[rt] && book[rt][0].buyPrice, ask: book[rt] && book[rt][0].sellPrice }), stock: () => 0 };
+    const ok = pricing.evaluate("widgetA", 10, ctx);
+    assert(ok.ok && Math.abs(ok.cost - 10 * (20 * 110 + 20 * 1.1)) < 1e-6 && ok.plan.steps.length === 1 && ok.plan.buys.Z === 200,
+        "0111: evaluate() prices a one-level chain with conservative asks (got " + JSON.stringify({ ok: ok.ok, reason: ok.reason, cost: ok.cost }) + ")");
+    book.widgetA = priceSamples(2100, 2300);
+    assert(pricing.evaluate("widgetA", 10, ctx).reason === "margin", "0111: a chain whose revenue does not clear the margin is rejected");
+    book.widgetA = priceSamples(5000, 5400);
+    assert(pricing.evaluate("widgetA", 10, Object.assign({}, ctx, { canMake: () => false })).reason === "no-plan",
+        "0111 AC4: no viable way to make the product (canMake false) yields no plan");
+    // own stock is valued at the conservative bid (opportunity cost), not free
+    const own = pricing.planNode("Z", 200, Object.assign({}, ctx, { stock: (rt) => (rt === "Z" ? 500 : 0) }), 0, {}, false);
+    assert(own.source === "own" && own.total === 200 * 100, "0111 AC1: own input is costed at the conservative bid (opportunity cost)");
+    // AC12: sell-or-process on a held material
+    const heldCtx = Object.assign({}, ctx, { canMake: () => true });
+    assert(pricing.sellOrProcess("Z", 200, heldCtx).action === "process" && pricing.sellOrProcess("Z", 200, heldCtx).product === "widgetA",
+        "0111 AC12: material is processed when the recipe beats selling it as-is");
+    book.widgetA = priceSamples(2000, 2300);
+    assert(pricing.sellOrProcess("Z", 200, heldCtx).action === "sell", "0111 AC12: material is sold as-is when no recipe beats the direct sale");
+    book.widgetA = priceSamples(5000, 5400);
+    assert(pricing.recipeOf("OH").kind === "lab" && pricing.recipeOf("OH").components.H === 5 && pricing.recipeOf("widgetA").kind === "factory",
+        "0111: recipeOf unifies REACTIONS (lab) and COMMODITIES (factory)");
+    market.samples = oldSamples; Memory.settings = oldSettings; pricing.resetCaches();
+}
+
+// --- ROADMAP 0111: labSlots (fixed tree layout + phase planner) -------------
+{
+    const labSlots = require(path.join(PROJECT, "src/utils/labSlots"));
+    // AC8: the architect's lab stamp builds slots in table order: 3 / 6 / 10 labs at RCL 6 / 7 / 8
+    const src = fs.readFileSync(path.join(PROJECT, "src/rooms/architect.js"), "utf8");
+    const labCase = src.slice(src.indexOf("Plan the Lab Stamp"));
+    const grid = (key) => {
+        const from = labCase.indexOf(key + ": [");
+        const body = labCase.slice(from, labCase.indexOf("]", from));
+        return body.split('"').filter((_, k) => k % 2 === 1);
+    };
+    const structures = grid("structures"), rcl = grid("rcl");
+    let tableMatches = true;
+    const rclBySlot = {};
+    labSlots.SLOT_NUMBERS.forEach((slot) => {
+        const [r, c] = labSlots.OFFSETS[slot];
+        if (structures[r][c] !== "L") tableMatches = false;
+        rclBySlot[slot] = Number(rcl[r][c]);
+    });
+    const labCount = structures.join("").split("").filter((ch) => ch === "L").length;
+    const builtAt = (level) => labSlots.SLOT_NUMBERS.filter((s) => rclBySlot[s] <= level);
+    assert(tableMatches && labCount === 10, "0111 AC8: every slot offset sits on an 'L' of the stamp and the stamp has exactly 10 labs");
+    assert(builtAt(6).join() === "1,2,3" && builtAt(7).join() === "1,2,3,4,5,6" && builtAt(8).length === 10,
+        "0111 AC8: the reordered rcl grid builds slots 1-3 at RCL6, 4-6 at RCL7 and 7-10 at RCL8 (got " + JSON.stringify(rclBySlot) + ")");
+    assert(labSlots.SLOT_NUMBERS.filter((s) => s > 2).every((s) => labSlots.reaches(s, 1, 2)),
+        "0111 AC8: slots 1 and 2 reach every other lab (range <= 2) - wide mode");
+    assert(labSlots.wideOutputs(builtAt(8)).length === 8 && labSlots.wideOutputs([3, 4, 5]).length === 0,
+        "0111 AC8: wide mode feeds the other 8 labs, and needs both centre labs");
+    // AC10: phase plan per RCL band - fewest moves wins, every reaction reaches both inputs
+    const lh = { product: "LH", inputs: ["L", "H"] }, oh = { product: "OH", inputs: ["O", "H"] };
+    const lh2o = { product: "LH2O", inputs: [lh, oh] };
+    const xlh2o = { product: "XLH2O", inputs: [lh2o, "X"] };
+    const reachOk = (plan) => plan.phases.every((p) => labSlots.reaches(p.out, p.inputs[0], p.inputs[1]));
+    const p8 = labSlots.planPhases(lh2o, builtAt(8)), p7 = labSlots.planPhases(lh2o, builtAt(7)), p6 = labSlots.planPhases(lh2o, builtAt(6));
+    assert(p8.ok && p8.mode === "tree" && p8.moves === 0, "0111 AC10: a 2-level reaction on 10 labs is the untouched tree (got " + JSON.stringify({ m: p8.mode, n: p8.moves }) + ")");
+    assert(p7.ok && p7.mode === "reuse" && p7.moves === 1, "0111 AC10: on 6 labs it reuses a drained lab in place (got " + JSON.stringify({ m: p7.mode, n: p7.moves }) + ")");
+    assert(p6.ok && p6.mode === "park" && p6.moves > p7.moves, "0111 AC10: on 3 labs it parks the intermediate in storage and costs more moves (got " + JSON.stringify({ m: p6.mode, n: p6.moves }) + ")");
+    assert(reachOk(p8) && reachOk(p7) && reachOk(p6), "0111 AC10: every phase's output lab reaches both of its input labs");
+    const x7 = labSlots.planPhases(xlh2o, builtAt(7)), x8 = labSlots.planPhases(xlh2o, builtAt(8));
+    assert(x8.ok && x8.moves === 0 && x7.ok && x7.moves > 0 && reachOk(x7) && reachOk(x8), "0111 AC10: a 3-level reaction is a tree on 10 labs and still feasible on 6 with remanejamento");
+    assert(labSlots.planPhases(lh2o, [1, 2]).reason === "too-few-labs", "0111 AC9: fewer than 3 labs yields no plan, with a reason");
+    assert(labSlots.planPhases({ product: "OH", inputs: ["O", "H"] }, [4, 5, 6]).ok, "0111 AC9: any 3 built labs in reach can still run one reaction (e.g. after a central lab is lost)");
+    const sparse = labSlots.planPhases(lh2o, [1, 2, 8, 9]);
+    assert(typeof sparse.ok === "boolean" && (sparse.ok || sparse.reason === "no-phase-plan"), "0111 AC9: a sparse slot set yields a verdict with a reason, never a throw (got " + JSON.stringify({ ok: sparse.ok, reason: sparse.reason }) + ")");
+    // 0115: independent steps (same tree height) run in waves, on labs of their own
+    const freshX = () => {
+        const a = { product: "LH", inputs: ["L", "H"] }, b = { product: "OH", inputs: ["O", "H"] };
+        return { product: "XLH2O", inputs: [{ product: "LH2O", inputs: [a, b] }, "X"] };
+    };
+    const w10 = labSlots.planPhases(freshX(), builtAt(8));
+    const waveOf = (plan, product) => plan.phases.find((p) => p.product === product).wave;
+    assert(w10.ok && w10.parallel === true && w10.moves === 0 && waveOf(w10, "OH") === waveOf(w10, "LH") &&
+        waveOf(w10, "LH2O") > waveOf(w10, "OH") && waveOf(w10, "XLH2O") > waveOf(w10, "LH2O"),
+        "0115: on 10 labs OH and LH share a wave, LH2O and XLH2O follow (got " + JSON.stringify(w10.phases.map((p) => p.product + "@" + p.wave)) + ")");
+    const sameWave = w10.phases.filter((p) => p.wave === waveOf(w10, "OH"));
+    const slotsOfWave = [].concat.apply([], sameWave.map((p) => p.inputs.concat(p.out)));
+    assert(sameWave.length === 2 && new Set(slotsOfWave).size === slotsOfWave.length,
+        "0115: inside a wave no slot (input or output) is shared between reactions (got " + slotsOfWave.join() + ")");
+    assert(reachOk(w10), "0115: every wave phase's output lab still reaches both of its input labs");
+    const finalPhase = w10.phases[w10.phases.length - 1];
+    assert(finalPhase.inputs.slice().sort().join() === "1,2" && labSlots.finalOutputs(builtAt(8), finalPhase.inputs, finalPhase.out).length === 8,
+        "0115: the final reaction takes the centre labs as inputs, so it can run on 8 output labs (inputs " + finalPhase.inputs.join() + ")");
+    const w6 = labSlots.planPhases(freshX(), builtAt(7));
+    assert(w6.ok && reachOk(w6), "0115: on 6 labs the wave plan is still feasible (moves " + w6.moves + ")");
+    const w3 = labSlots.planPhases(freshX(), builtAt(6));
+    assert(w3.ok && w3.parallel === false && new Set(w3.phases.map((p) => p.wave)).size === w3.phases.length,
+        "0115: on 3 labs the plan falls back to sequential, one phase per wave (got " + JSON.stringify(w3.phases.map((p) => p.wave)) + ")");
+    const seqOnly = labSlots.planPhases(freshX(), builtAt(8), { parallel: false });
+    assert(seqOnly.parallel === false && new Set(seqOnly.phases.map((p) => p.wave)).size === 4, "0115: options.parallel = false gives the sequential plan");
+    const savedParSettings = Memory.settings;
+    Memory.settings = Object.assign({}, savedParSettings, { craft: { parallelLabs: false } });
+    assert(labSlots.planPhases(freshX(), builtAt(8)).parallel === false, "0115: craft.parallelLabs = false gives the sequential plan");
+    Memory.settings = savedParSettings;
+    const chainTree = { product: "LH2O", inputs: [{ product: "LH", inputs: ["L", "H"] }, "O"] };
+    assert(new Set(labSlots.planPhases(chainTree, builtAt(8)).phases.map((p) => p.wave)).size === 2, "0115: a plain chain (no independent steps) is unchanged: one phase per wave");
+    // 0116: every step wide (centre pair as inputs, one step after the other) vs waves of one lab each
+    {
+        const work = { LH: { batches: 600, cooldown: 15 }, OH: { batches: 600, cooldown: 20 }, LH2O: { batches: 600, cooldown: 10 }, XLH2O: { batches: 600, cooldown: 60 } };
+        const noWork = labSlots.planPhases(freshX(), builtAt(8));
+        assert(noWork.ok && noWork.strategy === undefined && noWork.T === undefined, "0116: without options.work the plan is the in-place one, as before");
+        const auto10 = labSlots.planPhases(freshX(), builtAt(8), { work });
+        const waves10 = labSlots.planPhases(freshX(), builtAt(8), { work, strategy: "waves" });
+        const wide10 = labSlots.planPhases(freshX(), builtAt(8), { work, strategy: "wide" });
+        assert(waves10.strategy === "waves" && waves10.T === 22500, "0116: XLH2O in waves of one lab each is ~22500 ticks (got " + waves10.T + ")");
+        assert(wide10.strategy === "wide" && wide10.T === 7875, "0116: XLH2O with every step on 8 labs is ~7875 ticks (got " + wide10.T + ")");
+        assert(auto10.strategy === "wide" && auto10.T === wide10.T, "0116: auto takes the clearly faster wide strategy on 10 labs");
+        assert(wide10.phases.every((p, n) => p.inputs.join() === "1,2" && p.wave === n && p.ops.length === 0 && labSlots.reaches(p.out, 1, 2)) &&
+            wide10.phases.map((p) => p.product).join() === "LH,OH,LH2O,XLH2O",
+            "0116: the wide plan puts the centre pair on every step, one wave per step, children first");
+        assert(labSlots.finalOutputs(builtAt(8), [1, 2], wide10.phases[0].out).length === 8, "0116: each wide step has 8 output labs on 10 labs");
+        const auto6 = labSlots.planPhases(freshX(), builtAt(7), { work });
+        assert(auto6.strategy === "wide" && auto6.T < labSlots.planPhases(freshX(), builtAt(7), { work, strategy: "waves" }).T, "0116: on 6 labs the wide strategy (4 outputs) is still faster than waves");
+        const auto3 = labSlots.planPhases(freshX(), builtAt(6), { work });
+        assert(auto3.strategy === "waves" && auto3.T === 63000, "0116: on 3 labs both take the same time, so the in-place plan stays (got " + auto3.strategy + " " + auto3.T + ")");
+        assert(labSlots.planPhases(freshX(), [3, 4, 5, 6, 7, 8, 9, 10], { work, strategy: "wide" }).strategy !== "wide", "0116: the wide plan needs both centre labs built");
+        const savedWide = Memory.settings;
+        Memory.settings = Object.assign({}, savedWide, { craft: { labStrategy: "waves" } });
+        assert(labSlots.planPhases(freshX(), builtAt(8), { work }).strategy === "waves", "0116: craft.labStrategy = waves forces the waves plan");
+        Memory.settings = Object.assign({}, savedWide, { craft: { labStrategy: "wide" } });
+        assert(labSlots.planPhases(freshX(), builtAt(8), { work }).strategy === "wide", "0116: craft.labStrategy = wide forces the wide plan");
+        Memory.settings = Object.assign({}, savedWide, { craft: { wideLabs: false } });
+        assert(labSlots.planPhases(freshX(), builtAt(8), { work }).strategy === "waves", "0116: craft.wideLabs = false rules the wide strategy out");
+        Memory.settings = Object.assign({}, savedWide, { craft: { wideMinGain: 0.9 } });
+        assert(labSlots.planPhases(freshX(), builtAt(8), { work }).strategy === "waves", "0116: craft.wideMinGain keeps the wide plan out when it is not faster by enough");
+        Memory.settings = savedWide;
+        const single = { product: "LH", inputs: ["L", "H"] };
+        assert(labSlots.planPhases(single, builtAt(8), { work }).strategy === "waves", "0116: a one-step chain has nothing to gain from the wide strategy");
+    }
+    // resolve(): the stamp origin is recovered from the built labs
+    const mk = (slot, ox, oy) => ({ id: "lab" + slot, pos: { x: ox + labSlots.OFFSETS[slot][1], y: oy + labSlots.OFFSETS[slot][0] } });
+    labSlots.resetCache();
+    const room = { name: "LabSlotsRoom" };
+    const resolved = labSlots.resolve(room, [mk(1, 10, 20), mk(2, 10, 20), mk(3, 10, 20)]);
+    assert(resolved && resolved.ids[1] === "lab1" && resolved.ids[3] === "lab3" && resolved.origin.x === 10 && resolved.origin.y === 20,
+        "0111: resolve() recovers the stamp origin from the built labs (got " + JSON.stringify(resolved) + ")");
+    assert(labSlots.resolve({ name: "Bad" }, [{ id: "a", pos: { x: 1, y: 1 } }, { id: "b", pos: { x: 30, y: 30 } }]) === null,
+        "0111 AC9: labs that do not follow the stamp resolve to null (room is discarded with a reason)");
+    labSlots.resetCache();
+}
+
+// --- ROADMAP 0111: transitory lab/factory - what to keep, what to drain ------
+{
+    const ts = require(path.join(PROJECT, "src/utils/transientStock"));
+    const mk = (id, type, resources, free) => Object.assign(new OwnedStructure(), {
+        id, structureType: type, my: true, pos: new RoomPosition(20, 20, "DrainRoom"),
+        room: { name: "DrainRoom" }, store: mineralStore(resources, free === undefined ? 1000 : free),
+    });
+    const types = (structure) => ts.excess(structure).map((e) => e.resourceType).sort().join();
+    const savedRooms = Memory.rooms, savedSettings = Memory.settings;
+    Memory.rooms = Object.assign({}, savedRooms, { DrainRoom: {} });
+    Memory.settings = Object.assign({}, savedSettings);
+    // AC6: no chain - everything standing in lab/factory goes back to storage (legacy energy included)
+    assert(types(mk("l1", STRUCTURE_LAB, { energy: 500, H: 100 })) === "H,energy", "0111 AC6: an idle lab drains its legacy energy and any mineral");
+    assert(types(mk("f1", STRUCTURE_FACTORY, { energy: 50000, Z: 10 })) === "Z,energy", "0111 AC6: a factory with no active product drains energy and minerals");
+    assert(ts.energyNeed(mk("f1", STRUCTURE_FACTORY, { energy: 0 }, 50000)) === 0 && ts.energyNeed(mk("l1", STRUCTURE_LAB, {}, 2000)) === 0,
+        "0111 AC6: energy need is zero without an active chain (never 'fill to capacity')");
+    // AC6: active pinned product - keep exactly the batch's energy and its components
+    Memory.rooms.DrainRoom.factoryProduct = "widgetA"; // Z:20 + energy:20
+    assert(ts.energyNeed(mk("f2", STRUCTURE_FACTORY, { energy: 5 }, 50000)) === 15, "0111 AC6: factory energy target = recipe energy (need = target - held)");
+    assert(types(mk("f2", STRUCTURE_FACTORY, { energy: 20, Z: 20 })) === "", "0111 AC6: the active product's energy and components are kept");
+    assert(types(mk("f2", STRUCTURE_FACTORY, { energy: 5000, O: 5 })) === "O,energy", "0111 AC6: energy far above the batch target and unrelated minerals drain");
+    Memory.rooms.DrainRoom.factoryEnergy = 400; // a craft chain with pending batches
+    assert(ts.energyNeed(mk("f3", STRUCTURE_FACTORY, { energy: 100 }, 50000)) === 300, "0111 AC6: a craft chain raises the factory target to its pending batches' energy");
+    delete Memory.rooms.DrainRoom.factoryEnergy;
+    // AC6: a manual lab reaction keeps its reagents/product, drains everything else
+    Memory.rooms.DrainRoom.labReaction = { a: "H", b: "O", product: "OH", output: "lo", input1: "li1", input2: "li2" };
+    assert(types(mk("li1", STRUCTURE_LAB, { H: 100 })) === "" && types(mk("li2", STRUCTURE_LAB, { O: 100 })) === "" && types(mk("lo", STRUCTURE_LAB, { OH: 100 })) === "",
+        "0111 AC6: an active reaction keeps reagents in the input labs and the product in the output lab");
+    assert(types(mk("lo", STRUCTURE_LAB, { H: 100 })) === "H" && types(mk("lx", STRUCTURE_LAB, { OH: 100 })) === "OH",
+        "0111 AC7: residue in the wrong lab (or a lab outside the reaction) is drained");
+    delete Memory.rooms.DrainRoom.labReaction;
+    Memory.settings = Object.assign({}, savedSettings, { craft: { drainIdleLabs: false } });
+    assert(types(mk("l1", STRUCTURE_LAB, { energy: 500, G: 100 })) === "energy", "0111: craft.drainIdleLabs=false keeps minerals in idle labs (manual boost prep) but still drains energy");
+    Memory.settings = Object.assign({}, savedSettings, { craft: { labEnergyTarget: 1000 } });
+    assert(ts.energyNeed(mk("l1", STRUCTURE_LAB, { energy: 200 }, 1800)) === 800 && types(mk("l1", STRUCTURE_LAB, { energy: 200 })) === "",
+        "0111: craft.labEnergyTarget opts labs into a standing energy target (boost setups)");
+    Memory.settings = Object.assign({}, savedSettings);
+    // AC7: the hauler's cascade turns the excess into a drain job to storage, after real work
+    const drainLab = mk("dl1", STRUCTURE_LAB, { energy: 750 }, 1250);
+    const drainStorage = { store: mineralStore({}, 100000) };
+    const drainRoom = { name: "DrainRoom", storage: drainStorage, terminal: null, find: (type) => (type === FIND_MY_STRUCTURES ? [drainLab] : []) };
+    Game.time++;
+    const drainJob = hauler.pickMineralJob(drainRoom);
+    assert(drainJob && drainJob.kind === "transientDrain" && drainJob.resourceType === "energy" && drainJob.from === drainLab && drainJob.to === drainStorage,
+        "0111 AC7: pickMineralJob() hands the legacy energy sitting in a lab back to storage (got " + JSON.stringify(drainJob && drainJob.kind) + ")");
+    drainLab.store = mineralStore({}, 2000);
+    Game.time++;
+    assert(hauler.pickMineralJob(drainRoom) === null, "0111 AC7: nothing left to drain - the cascade returns no job");
+    Memory.rooms = savedRooms; Memory.settings = savedSettings;
+}
+
+// --- ROADMAP 0111: flip uses marketPricing (cheap buy free, sell leg guarded) ---
+{
+    const market = require(path.join(PROJECT, "src/utils/market"));
+    const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
+    const oldRooms = Game.rooms, oldMarket = Game.market, oldSettings = Memory.settings, oldSamples = market.samples, oldBuy = terminalOps.buy;
+    // rows: bid/ask price + volume per side, 72 hourly samples (alternating prices model volatility)
+    const rows = (bid, ask, bidVol, askVol, bidAlt) => Array.from({ length: 72 }, (_, i) => ({
+        tick: i * 3600, buyPrice: bidAlt && i % 2 ? bid + bidAlt : bid - (bidAlt || 0), buyVolume: bidVol, sellPrice: ask, sellVolume: askVol,
+    }));
+    function opportunityFor(history, askPrice, bidPrice, minProfitRatio) {
+        const marketFlip = marketFlipModule();
+        resetMarketFlipState();
+        Game.rooms = { W1N1: marketFlipRoom("W1N1") };
+        Memory.settings = Object.assign({}, oldSettings, { marketFlip: { test: true, scanInterval: 1, minProfitRatio: minProfitRatio || 0.01, maxCreditRatioPerFlip: 0.05, maxHoldingTicks: 1500 } });
+        Game.market = {
+            credits: 1000000, calcTransactionCost: () => 0,
+            getAllOrders: () => [
+                { id: "a", resourceType: "O", type: ORDER_SELL, price: askPrice, remainingAmount: 1000, roomName: "W2N2" },
+                { id: "b", resourceType: "O", type: ORDER_BUY, price: bidPrice, remainingAmount: 1000, roomName: "W2N3" },
+            ],
+        };
+        market.samples = (rt) => (rt === "O" ? history : []);
+        marketFlip.tick();
+        return Memory.marketFlip.lastOpportunities.find((o) => o.resourceType === "O");
+    }
+    // AC3: buying at/below the 7d median ask is never guarded - even when the ask book is paper-thin
+    let opp = opportunityFor(rows(20, 10, 1e9, 1), 10, 20);
+    assert(opp && !opp.wouldBlockGuardrail && opp.quantity > 0, "0111 AC3: a cheap ask (<= 7d median) passes with no guardrail even on a thin ask book (got " + JSON.stringify(opp) + ")");
+    // AC3: an expensive ask is guarded by the liquidity checks
+    opp = opportunityFor(rows(20, 10, 1e9, 1), 12, 20);
+    assert(opp && opp.wouldBlockGuardrail && opp.guardrailReason === "buy-depth", "0111 AC3: an ask above the 7d median must clear liquidity (got " + JSON.stringify(opp && opp.guardrailReason) + ")");
+    // AC14: the sell leg is guarded - bid depth, outlier, no history
+    opp = opportunityFor(rows(20, 10, 1, 1e9), 10, 20);
+    assert(opp && opp.guardrailReason === "sell-depth", "0111 AC14: a bid book too thin to sell into blocks the flip (got " + JSON.stringify(opp && opp.guardrailReason) + ")");
+    opp = opportunityFor(rows(5, 5, 1e9, 1e9), 10, 20);
+    assert(opp && opp.wouldBlockGuardrail, "0111 AC14: a bid far above its 7d median (outlier / manipulated order) blocks the flip");
+    opp = opportunityFor([], 10, 20);
+    assert(opp && opp.guardrailReason, "0111 AC14: no history at all blocks the flip (nobody has a read on this resource)");
+    // AC2: time-risk margin with a short T - a volatile market needs more profit than a calm one
+    opp = opportunityFor(rows(10.15, 10, 1e9, 1e9), 10, 10.15);
+    assert(opp && opp.quantity > 0 && !opp.wouldBlockGuardrail, "0111 AC2: a calm market clears a 1.5% flip (got " + JSON.stringify(opp) + ")");
+    opp = opportunityFor(rows(10.15, 10, 1e9, 1e9, 1), 10, 10.15);
+    assert(!opp, "0111 AC2: the same 1.5% flip in a ~10% sigma market is below z*sigma*sqrt(T/3600) and never logged (got " + JSON.stringify(opp) + ")");
+    Game.rooms = oldRooms; Game.market = oldMarket; Memory.settings = oldSettings; market.samples = oldSamples; terminalOps.buy = oldBuy;
+}
+
+// --- ROADMAP 0111: craftPlanner (candidates, feasibility gate, test mode) -----
+{
+    for (const m of ["craftPlanner", "marketPricing", "marketFlip"]) delete require.cache[require.resolve(path.join(PROJECT, "src/utils/" + m))];
+    const craft = require(path.join(PROJECT, "src/utils/craftPlanner"));
+    const market = require(path.join(PROJECT, "src/utils/market"));
+    const oldRooms = Game.rooms, oldMarket = Game.market, oldCreeps = Game.creeps, oldSettings = Memory.settings, oldSamples = market.samples,
+        oldSnapshot = market.snapshot, oldCraft = Memory.craft, oldBucket = Game.cpu.bucket, oldTime = Game.time, oldPwr = global.PWR_OPERATE_FACTORY;
+    global.PWR_OPERATE_FACTORY = 19;
+    Game.cpu.bucket = 10000;
+    COMMODITIES.widgetL = { level: 1, amount: 1, cooldown: 20, components: { Z: 10 } };
+    const quotes = { Z: [100, 110], energy: [1, 1.1], H: [10, 11], O: [10, 11], widgetA: [5000, 5400], widgetL: [5000, 5400], OH: [60, 70] };
+    const samplesFor = (rt) => (quotes[rt] ? priceSamples(quotes[rt][0], quotes[rt][1], 72, 1e9) : []);
+    market.samples = samplesFor;
+    market.snapshot = () => ({ resources: Object.keys(quotes).reduce((acc, rt) => { acc[rt] = { currentBuy: quotes[rt][0], currentSell: quotes[rt][1] }; return acc; }, {}) });
+    const factory = { id: "cf1", structureType: STRUCTURE_FACTORY, level: undefined, store: {}, effects: [] };
+    const mkLab = (slot) => ({ id: "cl" + slot, structureType: STRUCTURE_LAB, store: {}, pos: { x: 10 + labSlotsOffsets[slot][1], y: 10 + labSlotsOffsets[slot][0] } });
+    const labSlotsOffsets = require(path.join(PROJECT, "src/utils/labSlots")).OFFSETS;
+    let structures = [factory];
+    const room = {
+        name: "CraftRoom", controller: { my: true },
+        storage: { store: { energy: 500000 } }, terminal: { store: {} },
+        find: () => structures,
+    };
+    const run = (extra) => {
+        Game.time += 1000; // past scanInterval, new tick for caches
+        Game.rooms = { CraftRoom: room };
+        Game.creeps = extra && extra.noHauler ? {} : { h1: { room: { name: "CraftRoom" }, memory: { role: "hauler" } } };
+        Game.market = { credits: extra && extra.credits !== undefined ? extra.credits : 1000000 };
+        resetMarketFlipState();
+        if (extra && extra.committed) Memory.marketFlip.committedCredits = extra.committed;
+        Memory.craft = undefined;
+        craft.resetScan();
+        craft.tick();
+        return Memory.craft;
+    };
+    Memory.settings = Object.assign({}, oldSettings);
+    // a calm factory room finds the profitable level-0 chain
+    let mem = run();
+    const cand = mem.candidates.find((c) => c.product === "widgetA");
+    assert(cand && cand.room === "CraftRoom" && cand.profit > 0 && cand.ratio >= cand.margin && cand.steps[0].product === "widgetA",
+        "0111: a profitable factory chain becomes a candidate with cost/revenue/margin (got " + JSON.stringify(cand) + ")");
+    assert(cand && cand.cost <= 1000000 * 0.05 && cand.qty >= 1, "0111 AC5: the chain's cost stays inside the 5% per-chain credit cap (cost " + (cand && cand.cost) + ")");
+    assert(!mem.candidates.some((c) => c.product === "widgetB") && !mem.candidates.some((c) => c.product === "widgetL"),
+        "0111: level 3 is outside craft.maxLevel and level 1 is gated by the operator check");
+    assert(Object.keys(mem.active).length === 0, "0111 AC12: craft.test (default) records candidates only - nothing is opened");
+    assert(typeof JSON.parse(global.craftStatus()).mode === "string" && JSON.parse(global.craftStatus()).mode === "test" && JSON.parse(global.craftStatus()).candidates.length > 0,
+        "0111 AC12: craftStatus() reports test mode, candidates and discard reasons");
+    // AC4: the feasibility gate - each missing prerequisite discards with its reason, nothing is bought
+    mem = run({ noHauler: true });
+    assert(mem.candidates.length === 0 && mem.discards["no-hauler"] > 0, "0111 AC4: no hauler in the room discards every product (got " + JSON.stringify(mem.discards) + ")");
+    factory.level = 1;
+    mem = run();
+    assert(mem.discards["no-operator"] > 0 && !mem.candidates.some((c) => c.product === "widgetL"), "0111 AC4: a level-1 recipe without an active power creep operator is discarded (no-operator)");
+    factory.effects = [{ effect: global.PWR_OPERATE_FACTORY, ticksRemaining: 500 }];
+    mem = run();
+    assert(mem.candidates.some((c) => c.product === "widgetL"), "0111 AC4: the same recipe turns on by itself once an operator effect is active");
+    factory.level = undefined; factory.effects = [];
+    mem = run({ credits: 0 });
+    assert(mem.candidates.length === 0 && mem.discards.credits > 0, "0111 AC4: no free credits discards the chain before anything is bought");
+    mem = run({ committed: 999999 });
+    assert(mem.candidates.length === 0, "0111 AC5: credits already committed by flips/crafts shrink what a chain may spend (shared committedCredits)");
+    // own-heavy room, little cash: own inputs cost opportunity, not credits - the lot is sized by CASH outlay
+    room.storage.store = { energy: 500000, Z: 100000 };
+    mem = run({ credits: 10000 });
+    const ownHeavy = mem.candidates.find((c) => c.product === "widgetA");
+    assert(ownHeavy && ownHeavy.spend <= 10000 * 0.05 && ownHeavy.owns.Z > 0 && ownHeavy.cost > ownHeavy.spend,
+        "0111: a room full of its own mineral is not blocked by 'credits' - the lot is sized by the credits spent on purchases, not opportunity cost (got " + JSON.stringify(ownHeavy) + ")");
+    room.storage.store = { energy: 500000 };
+    // a product that cannot be SOLD (warming bid book) is reported as such - never mislabeled "credits"
+    market.samples = (rt) => (rt === "widgetA" ? priceSamples(5000, 5400, 10, 1e9) : samplesFor(rt));
+    mem = run();
+    assert(!mem.candidates.some((c) => c.product === "widgetA") && mem.discards["sell-warming"] > 0 && !mem.discards.credits,
+        "0111: a sell-side guardrail failure is reported as itself, not as 'credits' (got " + JSON.stringify(mem.discards) + ")");
+    market.samples = samplesFor;
+    // AC9: labs - a phase plan needs 3+ labs resolved from the stamp
+    structures = [mkLab(1), mkLab(2)];
+    mem = run();
+    assert(!mem.candidates.some((c) => c.product === "OH"), "0111 AC9: two labs are not enough for any reaction");
+    structures = [mkLab(1), mkLab(2), mkLab(3)];
+    mem = run();
+    const lab = mem.candidates.find((c) => c.product === "OH");
+    assert(lab && lab.steps[0].kind === "lab" && lab.profit > 0, "0111: a 3-lab room finds the profitable compound (got " + JSON.stringify(lab) + ")");
+    structures = [mkLab(1), { id: "stray", structureType: STRUCTURE_LAB, store: {}, pos: { x: 40, y: 40 } }, mkLab(3)];
+    mem = run();
+    assert(!mem.candidates.some((c) => c.product === "OH") && mem.discards["no-labs"] > 0, "0111 AC9: labs that do not follow the stamp discard the room with a reason (no-labs)");
+    // a room already running a chain is skipped (one product per room)
+    structures = [factory];
+    Game.time += 1000; Memory.craft = { active: { CraftRoom: { product: "widgetA", room: "CraftRoom", kinds: ["factory"], queue: [{ kind: "factory" }] } } }; craft.resetScan(); craft.tick();
+    assert(Memory.craft.candidates.length === 0, "0111 AC5: a room whose only structure already runs a chain is not planned again (one chain per structure kind)");
+    delete COMMODITIES.widgetL;
+    market.samples = oldSamples; market.snapshot = oldSnapshot; Game.rooms = oldRooms; Game.market = oldMarket; Game.creeps = oldCreeps;
+    Memory.settings = oldSettings; Memory.craft = oldCraft; Game.cpu.bucket = oldBucket; Game.time = oldTime;
+    if (oldPwr === undefined) delete global.PWR_OPERATE_FACTORY; else global.PWR_OPERATE_FACTORY = oldPwr;
+}
+
+// --- ROADMAP 0111: mixed own+bought inputs and the no-plan detail -----------
+{
+    const pricing = pricingModule();
+    const market = require(path.join(PROJECT, "src/utils/market"));
+    const oldSamples = market.samples;
+    const book = { Z: priceSamples(100, 110), energy: priceSamples(1, 1.1), widgetA: priceSamples(5000, 5400) };
+    market.samples = (rt) => book[rt] || [];
+    const base = { instant: (rt) => ({ bid: book[rt] && book[rt][0].buyPrice, ask: book[rt] && book[rt][0].sellPrice }), stock: () => 0 };
+    const mixed = pricing.planNode("Z", 200, Object.assign({}, base, { stock: (rt) => (rt === "Z" ? 120 : 0) }), 0, {}, false);
+    assert(mixed.source === "mixed" && mixed.owns.Z === 120 && mixed.buys.Z === 80 && mixed.total === 120 * 100 + 80 * 110 && mixed.cash === 80 * 110,
+        "0111: partial own stock is used first and only the shortfall is bought, own at opportunity cost (got " + JSON.stringify(mixed) + ")");
+    assert(pricing.planNode("Z", 100, Object.assign({}, base, { stock: () => 500 }), 0, {}, false).cash === 0, "0111: fully own inputs cost no cash");
+    // a blocked input is named: which resource and which guardrail
+    book.Z = priceSamples(100, 110, 10); // warming
+    const blocked = pricing.evaluate("widgetA", 10, Object.assign({}, base, { instant: (rt) => (rt === "Z" ? { bid: 100, ask: 130 } : base.instant(rt)) }));
+    assert(blocked.reason === "no-plan" && blocked.detail === "Z:liq-warming", "0111: no-plan says which input blocked the chain and why (got " + JSON.stringify(blocked.detail) + ")");
+    market.samples = oldSamples; pricing.resetCaches();
+}
+
+// --- ROADMAP 0111: no-plan detail names the REAL blocker ----------------------
+{
+    const pricing = pricingModule();
+    const market = require(path.join(PROJECT, "src/utils/market"));
+    const oldSamples = market.samples;
+    // OH = O + H: O is fine to buy (cheap ask) but not makeable here; H is warming and expensive.
+    const book = { O: priceSamples(10, 11), H: priceSamples(10, 11, 10), OH: priceSamples(60, 70) };
+    market.samples = (rt) => book[rt] || [];
+    const ctx = { instant: (rt) => (rt === "H" ? { bid: 10, ask: 13 } : { bid: book[rt][0].buyPrice, ask: book[rt][0].sellPrice }), stock: () => 0, canMake: (r) => r.product === "OH" }; // OH is makeable here; O (oxidant -> O) is not
+    const verdict = pricing.evaluate("OH", 10, ctx);
+    assert(verdict.reason === "no-plan" && verdict.detail === "H:liq-warming",
+        "0111: a purchasable-but-unmakeable input (O) is not reported as the blocker - the real one is (got " + JSON.stringify(verdict.detail) + ")");
+    market.samples = oldSamples; pricing.resetCaches();
+}
+
+// --- ROADMAP 0111: inverse recipes (bar <-> mineral) never form a circular plan ---
+{
+    const pricing = pricingModule();
+    const market = require(path.join(PROJECT, "src/utils/market"));
+    const oldSamples = market.samples;
+    COMMODITIES.cycBar = { level: 0, amount: 100, cooldown: 20, components: { cycOre: 500, energy: 200 } };
+    COMMODITIES.cycOre = { level: 0, amount: 500, cooldown: 20, components: { cycBar: 100, energy: 200 } };
+    const book = { cycOre: priceSamples(8, 9, 34), cycBar: priceSamples(4300, 4800, 34), energy: priceSamples(1, 1.1) };
+    market.samples = (rt) => book[rt] || [];
+    const quote = (askOre, askBar) => ({ instant: (rt) => ({ bid: book[rt][0].buyPrice, ask: rt === "cycOre" ? askOre : rt === "cycBar" ? askBar : book[rt][0].sellPrice }), stock: () => 0, canMake: () => true });
+    // both asks above their 7d medians (warming) - the real blocker is named, not "no-option"
+    let v = pricing.evaluate("cycBar", 100, quote(11, 5200));
+    assert(v.reason === "no-plan" && v.detail === "cycOre:liq-warming", "0111: bar<->mineral cycle - the real blocker is named (got " + JSON.stringify(v.detail) + ")");
+    v = pricing.evaluate("cycOre", 500, quote(11, 5200));
+    assert(v.reason === "no-plan" && v.detail === "cycBar:liq-warming", "0111: the inverse recipe reports its own real blocker (got " + JSON.stringify(v.detail) + ")");
+    // bar ask cheap: still no circular plan "buy bars -> make ore -> make bars" for the bar itself
+    v = pricing.evaluate("cycBar", 100, quote(11, 4800));
+    assert(v.reason === "no-plan", "0111: a product is never made from an ore that is itself made from that product (got " + JSON.stringify({ r: v.reason, steps: v.plan && v.plan.steps.length }) + ")");
+    // ore cheap to buy: the plain bar chain still works
+    v = pricing.evaluate("cycBar", 100, quote(8, 4800));
+    assert(v.plan && v.plan.steps.length === 1 && v.plan.buys.cycOre === 500, "0111: with the ore buyable the bar is a plain one-step chain");
+    delete COMMODITIES.cycBar; delete COMMODITIES.cycOre;
+    market.samples = oldSamples; pricing.resetCaches();
+}
+
+
+// --- ROADMAP 0111 phase 6: craftChain (buy -> produce -> sell, caps, failures) ---
+{
+    for (const m of ["craftChain", "craftPlanner", "marketPricing", "marketFlip"]) delete require.cache[require.resolve(path.join(PROJECT, "src/utils/" + m))];
+    const craft = require(path.join(PROJECT, "src/utils/craftPlanner"));
+    const chainMod = require(path.join(PROJECT, "src/utils/craftChain"));
+    const market = require(path.join(PROJECT, "src/utils/market"));
+    const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
+    const saved = { rooms: Game.rooms, market: Game.market, creeps: Game.creeps, settings: Memory.settings, samples: market.samples, snapshot: market.snapshot,
+        craft: Memory.craft, bucket: Game.cpu.bucket, time: Game.time, buy: terminalOps.buy, sell: terminalOps.sell, cancel: terminalOps.cancel, memRooms: Memory.rooms, flip: Memory.marketFlip, ops: Memory.terminalOps };
+    Game.cpu.bucket = 10000;
+    const quotes = { Z: [100, 110], energy: [1, 1.1], widgetA: [5000, 5400] };
+    const live = { widgetA: 5000 }; // current bid, moved by the tests
+    market.samples = (rt) => (quotes[rt] ? priceSamples(quotes[rt][0], quotes[rt][1], 72, 1e9) : []);
+    market.snapshot = () => ({ resources: Object.keys(quotes).reduce((acc, rt) => { acc[rt] = { currentBuy: live[rt] || quotes[rt][0], currentSell: quotes[rt][1] }; return acc; }, {}) });
+    const factory = { id: "chf", structureType: STRUCTURE_FACTORY, store: { widgetA: 0 }, effects: [] };
+    const room = { name: "ChainRoom", controller: { my: true }, storage: { store: { energy: 500000 } }, terminal: { store: {} }, find: () => [factory] };
+    let calls, nextOp;
+    const reset = (settings) => {
+        calls = { buy: [], sell: [], cancel: [] }; nextOp = 1;
+        Game.rooms = { ChainRoom: room };
+        Game.creeps = { h1: { room: { name: "ChainRoom" }, memory: { role: "hauler" } } };
+        Game.market = { credits: 1000000 };
+        Memory.settings = Object.assign({}, saved.settings, { craft: Object.assign({ test: false }, settings || {}) });
+        Memory.rooms = {};
+        Memory.craft = undefined;
+        Memory.marketFlip = { lastScanTick: null, committedCredits: 0, active: {}, lastOpportunities: [], stats: { completed: 0, netProfit: 0, cancelled: 0, guardrailBlocked: 0 } };
+        Memory.terminalOps = { nextId: 1, operations: {}, seenIncoming: {}, events: [], terminalBalance: {} };
+        factory.store = { widgetA: 0 }; room.storage.store = { energy: 500000 }; live.widgetA = 5000;
+        craft.resetScan();
+    };
+    terminalOps.buy = (r, rt, qty, limit) => { const id = "cb" + nextOp++; calls.buy.push({ r, rt, qty, limit, id }); Memory.terminalOps.operations[id] = { id, state: "queued" }; return { ok: true, id }; };
+    terminalOps.sell = (r, rt, qty, floor, listing) => { const id = "cs" + nextOp++; calls.sell.push({ r, rt, qty, floor, listing, id }); Memory.terminalOps.operations[id] = { id, state: "queued" }; return { ok: true, id }; };
+    terminalOps.cancel = (id) => { calls.cancel.push(id); if (Memory.terminalOps.operations[id]) Memory.terminalOps.operations[id].state = "cancelled"; return { ok: true }; };
+    const step = (n) => { for (let i = 0; i < (n || 1); i++) { Game.time += 1; craft.tick(); } };
+    const open = (settings) => { reset(settings); Game.time += 1000; craft.tick(); return Memory.craft && Memory.craft.active.ChainRoom; };
+    const completeBuy = (dealt) => {
+        const op = Memory.terminalOps.operations[calls.buy[0].id];
+        op.state = "completed"; op.dealtAmount = dealt === undefined ? calls.buy[0].qty : dealt;
+    };
+
+    // opens exactly one chain: buys the missing input at a bounded price and reserves the cash.
+    // maxActive:1 - the global cap is off by default now, so this block asks for it to keep testing it
+    let chain = open({ maxActive: 1 });
+    assert(chain && chain.state === "buying" && calls.buy.length === 1 && calls.buy[0].rt === "Z" && calls.buy[0].r === "ChainRoom",
+        "0111 P6: live mode opens a chain and buys the missing input up front (got " + JSON.stringify(calls.buy) + ")");
+    assert(calls.buy[0].limit > 110 * 1.02 + 1 && calls.buy[0].limit < 110 * 1.5,
+        "0111 P6: a chain with ample headroom buys above ask+2% but under the +50% premium cap, using the room left under its ceiling (got " + calls.buy[0].limit + ")");
+    assert(Memory.marketFlip.committedCredits === chain.reserved && chain.reserved > 0, "0111 AC5: the chain's cash is reserved in the shared committedCredits");
+    assert(chain.reserved <= 1000000 * 0.05 + 1e-6 && chain.reserved <= 200000 && chain.reserved > 1000000 * 0.05 - 1,
+        "0111 P6: the chain's planned spend PLUS what its price limits could add fills, and never passes, the 5% ceiling (reserved " + chain.reserved + ")");
+    assert(chain.reserved > chain.est.spend, "0111 AC5: the reservation covers the worst case of the limits, not just the planned spend (" + chain.est.spend + " -> " + chain.reserved + ")");
+    const qty = calls.buy[0].qty;
+    // one chain at a time across the whole empire
+    // a SECOND room with a factory: the planner skips rooms that already run a chain, so the
+    // blocked candidate has to come from another room (as in production: W7N49 busy, E1N45/E1N47 waiting)
+    const factory2 = { id: "chf2", structureType: STRUCTURE_FACTORY, store: { widgetA: 0 }, effects: [] };
+    const room2 = { name: "ChainRoom2", controller: { my: true }, storage: { store: { energy: 500000 } }, terminal: { store: {} }, find: () => [factory2] };
+    Game.rooms.ChainRoom2 = room2;
+    Game.creeps.h2 = { room: { name: "ChainRoom2" }, memory: { role: "hauler" } };
+    const slotLines = [];
+    const slotLog = console.log;
+    console.log = (...a) => { slotLines.push(a.join(" ")); };
+    craft.resetScan(); Game.time += 400; craft.tick();
+    craft.resetScan(); Game.time += 400; craft.tick();
+    console.log = slotLog;
+    delete Game.rooms.ChainRoom2; delete Game.creeps.h2;
+    assert(calls.buy.length === 1 && Object.keys(Memory.craft.active).length === 1, "0111 P6: a second scan never opens a second chain while one is active");
+    const waiting = slotLines.filter((l) => /ja esta sendo comprado/.test(l));
+    assert(waiting.length === 1 && /Z ja esta sendo comprado por ChainRoom/.test(waiting[0]) && Memory.craft.discards["shared-input:Z"] > 0,
+        "0111 P6: a candidate on an input another chain is still buying says so once, naming it (got " + JSON.stringify(waiting) + ")");
+    // buying -> working: factory is configured by the chain, flagged Auto, energy = the batches' energy
+    completeBuy();
+    step();
+    assert(chain.state === "working" && Memory.rooms.ChainRoom.factoryProduct === "widgetA" && Memory.rooms.ChainRoom.factoryProductAuto === true,
+        "0111 P6: once inputs arrive the room's factoryProduct is set and marked Auto");
+    assert(Memory.rooms.ChainRoom.factoryEnergy === chain.queue[0].target * 20, "0111 AC6: the factory's energy target is the batches' energy (got " + Memory.rooms.ChainRoom.factoryEnergy + ")");
+    // the chain has left "buying", so the same input is free again: now only the global cap (maxActive 1) holds the second room back, and says so
+    Game.rooms.ChainRoom2 = room2; Game.creeps.h2 = { room: { name: "ChainRoom2" }, memory: { role: "hauler" } };
+    const capLines = [];
+    console.log = (...a) => { capLines.push(a.join(" ")); };
+    craft.resetScan(); Game.time += 400; craft.tick();
+    craft.resetScan(); Game.time += 400; craft.tick();
+    console.log = slotLog;
+    delete Game.rooms.ChainRoom2; delete Game.creeps.h2;
+    const capWaiting = capLines.filter((l) => /aguardando vaga/.test(l));
+    assert(calls.buy.length === 1 && capWaiting.length === 1 && /ChainRoom:widgetA\(working\)/.test(capWaiting[0]),
+        "0111 P6: with the input free, a candidate held back by craft.maxActive says so once, naming the running chain (got " + JSON.stringify(capWaiting) + ")");
+    // working -> selling when the target is produced; flags cleared
+    factory.store.widgetA = chain.queue[0].target;
+    step();
+    assert(chain.state === "selling" && !Memory.rooms.ChainRoom.factoryProduct && !Memory.rooms.ChainRoom.factoryEnergy, "0111 AC7: finishing the production clears the factory flags");
+    // selling: bid >= break-even floor -> instant sell at the floor, never listed
+    room.storage.store.widgetA = chain.queue[0].target; factory.store.widgetA = 0;
+    step();
+    assert(calls.sell.length === 1 && calls.sell[0].floor === chainMod.saleFloor(chain) && calls.sell[0].listing === false && calls.sell[0].qty === chain.queue[0].target,
+        "0111 P6: the product is sold instantly at the break-even floor (got " + JSON.stringify(calls.sell) + ")");
+    Memory.terminalOps.operations[calls.sell[0].id].state = "completed"; Memory.terminalOps.operations[calls.sell[0].id].dealtAmount = qty;
+    Memory.terminalOps.events.push({ tick: Game.time, room: "ChainRoom", kind: "sell", resourceType: "widgetA", amount: chain.queue[0].target, credits: 5000 * chain.queue[0].target, transactionEnergy: 0 });
+    Memory.terminalOps.events.push({ tick: chain.openedTick, room: "ChainRoom", kind: "buy", resourceType: "Z", amount: qty, credits: -110 * qty, transactionEnergy: 0 });
+    step();
+    assert(!Memory.craft.active.ChainRoom && Memory.marketFlip.committedCredits === 0 && Memory.craft.stats.completed === 1,
+        "0111 AC5: a finished chain releases its reserved credits and is recorded");
+    const entry = Memory.craft.ledger.products.widgetA;
+    assert(entry && entry.runs === 1 && Memory.craft.ledger.runs[0].profit > 0 && typeof Memory.craft.ledger.runs[0].estimated === "number",
+        "0111 AC14: the ledger stores realized vs estimated profit (got " + JSON.stringify(Memory.craft.ledger.runs[0]) + ")");
+
+    // "faz mais": a sold lot makes the planner look again on the very next tick, not after craft.scanInterval
+    assert(typeof Memory.craft.rescanAt === "number" && Memory.craft.rescanAt === Game.time + 1, "0111 P6: a finished lot schedules an immediate rescan (got " + Memory.craft.rescanAt + ")");
+    const buysBefore = calls.buy.length;
+    step();
+    assert(Memory.craft.active.ChainRoom && Memory.craft.active.ChainRoom.openedTick === Game.time && calls.buy.length === buysBefore + 1 && Memory.craft.rescanAt === undefined,
+        "0111 P6: the next lot opens right after the previous one is sold (buys " + buysBefore + " -> " + calls.buy.length + ")");
+
+    // AC13: bid below break-even -> hold (no sale), then list at the floor after the retention window
+    chain = open({ retentionTicks: 5000 });
+    completeBuy();
+    step(); factory.store.widgetA = chain.queue[0].target; step(); room.storage.store.widgetA = chain.queue[0].target; factory.store.widgetA = 0;
+    live.widgetA = chainMod.saleFloor(chain) * 0.5;
+    step(3);
+    assert(chain.state === "selling" && calls.sell.length === 0 && chain.holding === true, "0111 AC13: a bid below break-even is never sold into - the product is held (sells: " + calls.sell.length + ")");
+    Game.time += 6000; craft.tick();
+    assert(calls.sell.length === 1 && calls.sell[0].listing === true && calls.sell[0].floor === chainMod.saleFloor(chain), "0111 AC13: after the retention window it is listed at the break-even floor, still never below it");
+
+    // a floor sell that nobody fills (bid fell under the floor after it opened) is not waited on forever
+    chain = open({ retentionTicks: 5000 });
+    completeBuy();
+    step(); factory.store.widgetA = chain.queue[0].target; step(); room.storage.store.widgetA = chain.queue[0].target; factory.store.widgetA = 0;
+    step();
+    assert(calls.sell.length === 1 && calls.sell[0].listing === false, "0111 AC13: the first sell is an instant sell at the floor (got " + JSON.stringify(calls.sell) + ")");
+    const firstSell = calls.sell[0].id;
+    live.widgetA = chainMod.saleFloor(chain) * 0.97; // the bid slips under the floor; the order stays open and unfilled
+    step(3);
+    assert(calls.cancel.indexOf(firstSell) < 0 && calls.sell.length === 1, "0111 AC13: inside the retention window the unfilled sell is left alone");
+    Game.time += 6000; craft.tick();
+    assert(calls.cancel.indexOf(firstSell) >= 0 && calls.sell.length === 2 && calls.sell[1].listing === true && calls.sell[1].floor === chainMod.saleFloor(chain) && chain.sellOpId === calls.sell[1].id,
+        "0111 AC13: past the retention window an unfilled instant sell is swapped for a listing at the floor (cancels " + JSON.stringify(calls.cancel) + ", sells " + calls.sell.length + ")");
+    Game.time += 100; craft.tick(); Game.time += 100; craft.tick();
+    assert(calls.sell.length === 2 && calls.cancel.length === 1, "0111 AC13: the swap happens once - the listing is not cancelled and recreated again");
+    // a healthy instant sell (bid still at/above the floor) is never cancelled, however long it takes
+    chain = open({ retentionTicks: 5000 });
+    completeBuy();
+    step(); factory.store.widgetA = chain.queue[0].target; step(); room.storage.store.widgetA = chain.queue[0].target; factory.store.widgetA = 0;
+    step();
+    Game.time += 6000; craft.tick();
+    assert(calls.sell.length === 1 && calls.cancel.length === 0, "0111 AC13: an instant sell whose bid is still at the floor is never cancelled (sells " + calls.sell.length + ", cancels " + calls.cancel.length + ")");
+    // failures after buying: abort keeps the inputs as stock, frees credits and flags, never sells at a loss
+    chain = open();
+    completeBuy(1); // partial
+    step();
+    assert(!Memory.craft.active.ChainRoom && Memory.marketFlip.committedCredits === 0 && Object.keys(Memory.craft.stranded).length === 1 && Memory.craft.stats.aborted === 1,
+        "0111 P6: a partial buy aborts the chain, frees the credits and strands the inputs as own stock");
+    chain = open({ stallTicks: 50 });
+    completeBuy();
+    step(); // working, nothing is ever produced
+    Game.time += 100; craft.tick();
+    assert(!Memory.craft.active.ChainRoom && !Memory.rooms.ChainRoom.factoryProduct && Memory.craft.stats.aborted === 1, "0111 P6: the stall guard aborts a chain that stops progressing and clears its flags");
+    // a long job that KEEPS producing outlives stallTicks; one that stops is aborted
+    chain = open({ stallTicks: 50 });
+    completeBuy();
+    step();
+    const bump = Math.max(1, Math.floor(chain.queue[0].target / 20));
+    for (let i = 0; i < 6; i++) { factory.store.widgetA += bump; Game.time += 30; craft.tick(); }
+    assert(Memory.craft.active.ChainRoom && chain.state === "working" && Game.time - chain.openedTick > 150,
+        "0111 P6: a chain that keeps producing is not aborted by the stall guard, however long it runs (age " + (Game.time - chain.openedTick) + " > stallTicks 50, state " + chain.state + ")");
+    Game.time += 100; craft.tick();
+    assert(!Memory.craft.active.ChainRoom && Memory.craft.stats.aborted >= 1, "0111 P6: the same chain is aborted once production stops for stallTicks");
+    chain = open();
+    Memory.terminalOps.operations[calls.buy[0].id].state = "failed";
+    step();
+    assert(!Memory.craft.active.ChainRoom && Memory.marketFlip.committedCredits === 0, "0111 P6: a failed buy aborts the chain");
+
+    // partial fill: the book ran out - carry on, scaled to what arrived, instead of aborting
+    chain = open();
+    const fullTarget = chain.queue[0].target, reservedFull = chain.reserved, floorBefore = chain.est.floor, orderQty = calls.buy[0].qty;
+    completeBuy(Math.floor(orderQty * 0.5));
+    step();
+    assert(Memory.craft.active.ChainRoom && chain.state === "working" && Memory.craft.stats.aborted === 0 && chain.scaled > 0.45 && chain.scaled < 0.55,
+        "0111 P6: a purchase filled at ~50% does not abort - the chain goes on, scaled (got state " + chain.state + ", scaled " + chain.scaled + ")");
+    assert(chain.queue[0].target < fullTarget && chain.queue[0].target >= Math.floor(fullTarget * 0.45), "0111 P6: the production target shrinks to what the inputs allow (" + fullTarget + " -> " + chain.queue[0].target + ")");
+    assert(Memory.rooms.ChainRoom.factoryEnergy === chain.queue[0].target * 20, "0111 P6: the factory's energy target follows the scaled batches (got " + Memory.rooms.ChainRoom.factoryEnergy + ")");
+    assert(chain.reserved < reservedFull && Memory.marketFlip.committedCredits === chain.reserved, "0111 AC5: credits that were not spent go back to the shared budget at once");
+    assert(chain.est.floor === floorBefore, "0111 P6: the unit break-even floor does not change when the lot shrinks");
+    factory.store.widgetA = chain.queue[0].target; step();
+    assert(chain.state === "selling", "0111 P6: the scaled chain still completes and sells");
+    chain = open();
+    completeBuy(Math.floor(calls.buy[0].qty * 0.1)); // far below minPartialRatio
+    step();
+    assert(!Memory.craft.active.ChainRoom && Memory.craft.stats.aborted === 1, "0111 P6: a fill below craft.minPartialRatio still aborts");
+    // a buy that traded part of the order and then sits in "waiting" does not hold the chain until the stall guard
+    chain = open({ buyPatienceTicks: 100 });
+    const waitId = calls.buy[0].id, waitQty = calls.buy[0].qty;
+    Object.assign(Memory.terminalOps.operations[waitId], { state: "waiting", dealtAmount: Math.floor(waitQty * 0.5) });
+    step();
+    Game.time += 60; craft.tick();
+    assert(chain.state === "buying" && calls.cancel.indexOf(waitId) < 0, "0111 P6: a half-filled buy still gets its patience window (state " + chain.state + ")");
+    Game.time += 60; craft.tick();
+    assert(calls.cancel.indexOf(waitId) >= 0 && chain.state === "working" && chain.scaled > 0.45 && chain.scaled < 0.55 && Memory.craft.stats.aborted === 0,
+        "0111 P6: once it shows no new trade for buyPatienceTicks the buy is cancelled and the chain goes on scaled to what arrived (state " + chain.state + ", scaled " + chain.scaled + ")");
+    // new trades reset the clock
+    chain = open({ buyPatienceTicks: 100 });
+    const slowId = calls.buy[0].id;
+    Object.assign(Memory.terminalOps.operations[slowId], { state: "waiting", dealtAmount: 10 });
+    step();
+    Game.time += 80; Memory.terminalOps.operations[slowId].dealtAmount = 20; craft.tick(); // progress at +80
+    Game.time += 80; craft.tick();                                                          // 80 idle < 100
+    assert(chain.state === "buying" && calls.cancel.indexOf(slowId) < 0, "0111 P6: a new trade restarts the patience clock");
+    Game.time += 40; craft.tick();                                                          // 120 idle
+    assert(calls.cancel.indexOf(slowId) >= 0, "0111 P6: ...and the cut happens once it has been idle for the full window");
+    // nothing traded at all: nothing to build on, so it keeps waiting (the stall guard owns that case)
+    chain = open({ buyPatienceTicks: 100 });
+    const idleId = calls.buy[0].id;
+    Memory.terminalOps.operations[idleId].state = "waiting";
+    step();
+    Game.time += 500; craft.tick();
+    assert(chain.state === "buying" && calls.cancel.indexOf(idleId) < 0 && Memory.craft.active.ChainRoom,
+        "0111 P6: a buy that has traded NOTHING is never cut short by the patience window");
+    // kill switch: craftCancel aborts a running chain without losing the bought inputs
+    chain = open();
+    completeBuy(); step();
+    assert(Memory.rooms.ChainRoom.factoryProduct === "widgetA" && global.craftCancel("ChainRoom") === true, "0111 P6: craftCancel() aborts a running chain");
+    assert(!Memory.craft.active.ChainRoom && Memory.marketFlip.committedCredits === 0 && !Memory.rooms.ChainRoom.factoryProduct && Object.keys(Memory.craft.stranded).length === 1,
+        "0111 P6: craftCancel() frees the credits, clears the Auto flags and keeps the inputs as stock");
+    assert(global.craftCancel("ChainRoom") === false, "0111 P6: craftCancel() on a room with no chain is a harmless no-op");
+    // AC16: a manual pin is never overridden
+    reset(); Memory.rooms = { ChainRoom: { factoryProduct: "widgetA" } }; Game.time += 1000; craft.tick();
+    assert(!Memory.craft.active.ChainRoom && calls.buy.length === 0 && Memory.craft.discards["manual-pin"] > 0 && Memory.rooms.ChainRoom.factoryProductAuto === undefined,
+        "0111 AC16: a manually pinned factoryProduct keeps the room out of the planner and is left untouched");
+    // safety caps
+    reset({ maxCashAbsolute: 100 }); Game.time += 1000; craft.tick();
+    assert(!Memory.craft.active.ChainRoom && calls.buy.length === 0 && Memory.craft.discards.credits > 0, "0111 P6: an absolute cap too small for even one batch discards the chain and buys nothing (got " + JSON.stringify(Memory.craft.discards) + ")");
+    reset(); Memory.marketFlip.committedCredits = 249000; Game.time += 1000; craft.tick();
+    assert(!Memory.craft.active.ChainRoom && calls.buy.length === 0, "0111 AC5: committed flips/crafts above 25% of the balance stop a new chain");
+    // AC12: test mode opens nothing
+    reset({ test: true }); Game.time += 1000; craft.tick();
+    assert(!Memory.craft.active.ChainRoom && calls.buy.length === 0 && Memory.craft.candidates.length > 0, "0111 AC12: craft.test never opens a chain even with a good candidate");
+
+    // AC14: breakers
+    reset({ productLosses: 3, globalRuns: 10 });
+    const fake = { product: "widgetA", room: "ChainRoom", est: { profit: 100 } };
+    chainMod.recordRun(fake, -5); chainMod.recordRun(fake, -5);
+    assert(!Memory.craft.suspended.widgetA, "0111 AC14: two losses do not suspend a product");
+    chainMod.recordRun(fake, -5);
+    assert(Memory.craft.suspended.widgetA > Game.time, "0111 AC14: three losses in a row suspend the product for suspendTicks");
+    reset({ productLosses: 99, globalRuns: 4 });
+    [20, -5, -5, -5].forEach((p) => chainMod.recordRun(fake, p));
+    assert(Memory.settings.craft.test === false, "0111 AC14: a global window with a positive total keeps live mode");
+    chainMod.recordRun(fake, -50);
+    assert(Memory.settings.craft.test === true, "0111 AC14: a net-negative global window puts the planner back in test mode");
+
+    terminalOps.buy = saved.buy; terminalOps.sell = saved.sell; terminalOps.cancel = saved.cancel;
+    market.samples = saved.samples; market.snapshot = saved.snapshot; Game.rooms = saved.rooms; Game.market = saved.market; Game.creeps = saved.creeps;
+    Memory.settings = saved.settings; Memory.craft = saved.craft; Memory.rooms = saved.memRooms; Memory.marketFlip = saved.flip; Memory.terminalOps = saved.ops;
+    Game.cpu.bucket = saved.bucket; Game.time = saved.time;
+}
+
+// --- ROADMAP 0111 phase 6: lab chain (slots, drain barrier, reaction setup) ---
+{
+    for (const m of ["craftChain", "craftPlanner", "marketPricing", "marketFlip"]) delete require.cache[require.resolve(path.join(PROJECT, "src/utils/" + m))];
+    const craft = require(path.join(PROJECT, "src/utils/craftPlanner"));
+    const market = require(path.join(PROJECT, "src/utils/market"));
+    const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
+    const labSlots = require(path.join(PROJECT, "src/utils/labSlots"));
+    const saved = { rooms: Game.rooms, market: Game.market, creeps: Game.creeps, settings: Memory.settings, samples: market.samples, snapshot: market.snapshot,
+        craft: Memory.craft, bucket: Game.cpu.bucket, time: Game.time, buy: terminalOps.buy, sell: terminalOps.sell, memRooms: Memory.rooms, flip: Memory.marketFlip,
+        ops: Memory.terminalOps, getObj: Game.getObjectById };
+    Game.cpu.bucket = 10000;
+    const quotes = { H: [10, 11], O: [10, 11], OH: [60, 70], energy: [1, 1.1] };
+    market.samples = (rt) => (quotes[rt] ? priceSamples(quotes[rt][0], quotes[rt][1], 72, 1e9) : []);
+    market.snapshot = () => ({ resources: Object.keys(quotes).reduce((acc, rt) => { acc[rt] = { currentBuy: quotes[rt][0], currentSell: quotes[rt][1] }; return acc; }, {}) });
+    const mkLab = (slot) => ({ id: "lc" + slot, structureType: STRUCTURE_LAB, store: { OH: 0 }, mineralType: null, pos: { x: 10 + labSlots.OFFSETS[slot][1], y: 10 + labSlots.OFFSETS[slot][0] } });
+    const labs = [mkLab(1), mkLab(2), mkLab(3)];
+    const byId = {}; labs.forEach((l) => { byId[l.id] = l; });
+    Game.getObjectById = (id) => byId[id] || null;
+    const room = { name: "LabChainRoom", controller: { my: true }, storage: { store: { energy: 500000 } }, terminal: { store: {} }, find: () => labs };
+    const calls = { buy: [] };
+    let nextOp = 1;
+    terminalOps.buy = (r, rt, qty) => { const id = "lb" + nextOp++; calls.buy.push({ rt, qty, id }); Memory.terminalOps.operations[id] = { id, state: "queued" }; return { ok: true, id }; };
+    terminalOps.sell = () => ({ ok: true, id: "ls" + nextOp++ });
+    Game.rooms = { LabChainRoom: room };
+    Game.creeps = { h1: { room: { name: "LabChainRoom" }, memory: { role: "hauler" } } };
+    Game.market = { credits: 1000000 };
+    Memory.settings = Object.assign({}, saved.settings, { craft: { test: false } });
+    Memory.rooms = {}; Memory.craft = undefined;
+    Memory.marketFlip = { lastScanTick: null, committedCredits: 0, active: {}, lastOpportunities: [], stats: { completed: 0, netProfit: 0, cancelled: 0, guardrailBlocked: 0 } };
+    Memory.terminalOps = { nextId: 1, operations: {}, seenIncoming: {}, events: [], terminalBalance: {} };
+    labSlots.resetCache(); craft.resetScan();
+    Game.time += 1000; craft.tick();
+    const chain = Memory.craft.active.LabChainRoom;
+    assert(chain && chain.product === "OH" && chain.queue.length === 1 && chain.queue[0].kind === "lab", "0111 P6: a profitable compound opens a one-step lab chain (got " + JSON.stringify(Memory.craft.candidates.map((c) => c.product)) + ")");
+    const item = chain.queue[0];
+    assert(item.input1 === "lc1" && item.input2 === "lc2" && item.output === "lc3" && item.a === "H" && item.b === "O",
+        "0111 P6: the lab item takes its input/output labs from the fixed slot table, reagents in recipe order (got " + JSON.stringify(item) + ")");
+    assert(calls.buy.length === 2 && calls.buy.every((b) => b.qty >= item.target), "0111 P6: both reagents are bought up front, at least the batch target each");
+    calls.buy.forEach((b) => { Memory.terminalOps.operations[b.id].state = "completed"; Memory.terminalOps.operations[b.id].dealtAmount = b.qty; });
+    // drain barrier: a lab still holding a foreign mineral blocks the reaction setup
+    labs[1].mineralType = "G"; labs[1].store = { G: 50 };
+    Game.time += 1; craft.tick();
+    assert(!Memory.rooms.LabChainRoom.labReaction && chain.state === "working", "0111 P6: labs still holding another mineral hold the reaction back (drain barrier)");
+    labs[1].mineralType = null; labs[1].store = { OH: 0 };
+    Game.time += 1; craft.tick();
+    const reaction = Memory.rooms.LabChainRoom.labReaction;
+    assert(reaction && reaction.output === "lc3" && reaction.input1 === "lc1" && reaction.input2 === "lc2" && reaction.product === "OH" && Memory.rooms.LabChainRoom.labReactionAuto === true,
+        "0111 P6: once the labs are clear the reaction is set on those labs and marked Auto");
+    // a manual reaction is never touched
+    labs[2].store = { OH: item.target }; labs[2].mineralType = "OH";
+    Game.time += 1; craft.tick();
+    assert(chain.state === "selling" && !Memory.rooms.LabChainRoom.labReaction && !Memory.rooms.LabChainRoom.labReactionAuto, "0111 P6: reaching the target clears the Auto reaction");
+    Memory.craft.active = {}; Memory.marketFlip.committedCredits = 0;
+    Memory.rooms.LabChainRoom = { labReaction: { a: "H", b: "O", product: "OH", output: "lc3", input1: "lc1", input2: "lc2" } }; // manual
+    craft.resetScan(); Game.time += 1000; craft.tick();
+    assert(!Memory.craft.active.LabChainRoom && Memory.craft.discards["manual-pin"] > 0 && Memory.rooms.LabChainRoom.labReactionAuto === undefined,
+        "0111 AC16: a manual labReaction keeps lab products out of the planner and stays untouched");
+
+    terminalOps.buy = saved.buy; terminalOps.sell = saved.sell; Game.getObjectById = saved.getObj;
+    market.samples = saved.samples; market.snapshot = saved.snapshot; Game.rooms = saved.rooms; Game.market = saved.market; Game.creeps = saved.creeps;
+    Memory.settings = saved.settings; Memory.craft = saved.craft; Memory.rooms = saved.memRooms; Memory.marketFlip = saved.flip; Memory.terminalOps = saved.ops;
+    Game.cpu.bucket = saved.bucket; Game.time = saved.time; labSlots.resetCache();
+}
+
+// --- ROADMAP 0111 follow-ups: in-place lab intermediates, direct-to-terminal, terminal-stock sale ---
+{
+    // (1) terminalOps: a SELL may use material that is already in the terminal
+    delete require.cache[require.resolve(path.join(PROJECT, "src/utils/terminalOps"))];
+    const market = require(path.join(PROJECT, "src/utils/market"));
+    const terminalOpsFresh = require(path.join(PROJECT, "src/utils/terminalOps"));
+    const oldSnapshot = market.snapshot, oldRooms = Game.rooms, oldOps = Memory.terminalOps, oldMarket = Game.market;
+    market.snapshot = () => ({ resources: { power: { buyPrice: 10, sellPrice: 11, fairPrice: 10.5 }, energy: { fairPrice: 1 } } });
+    Memory.terminalOps = { nextId: 1, operations: {}, seenIncoming: {}, events: [], terminalBalance: {} };
+    Game.market = { credits: 1e6, calcTransactionCost: () => 0, getAllOrders: () => [] };
+    const stockRoom = (storageZ, terminalZ) => ({
+        name: "SellRoom", controller: { my: true }, find: () => [],
+        storage: { id: "ss", store: { power: storageZ, energy: 100000, getFreeCapacity: () => 1e6, getUsedCapacity: () => 1e5, getCapacity: () => 1e6 } },
+        terminal: { id: "st", cooldown: 0, store: { power: terminalZ, energy: 50000, getFreeCapacity: () => 1e5, getUsedCapacity: () => 5e4, getCapacity: () => 3e5 } },
+    });
+    Game.rooms = { SellRoom: stockRoom(0, 0) };
+    const noStock = terminalOpsFresh.sell("SellRoom", "power", 50, 5, false, true);
+    assert(noStock.ok === false && /material insuficiente/.test(noStock.error || ""), "0111: a sell with no material anywhere is refused for that reason (got " + JSON.stringify(noStock) + ")");
+    Game.rooms = { SellRoom: stockRoom(0, 100) };
+    Memory.terminalOps = { nextId: 1, operations: {}, seenIncoming: {}, events: [], terminalBalance: {} };
+    const termSell = terminalOpsFresh.sell("SellRoom", "power", 50, 5, false, true);
+    assert(termSell.ok === true, "0111: a sell is accepted when the material is already in the terminal, storage empty (got " + JSON.stringify(termSell) + ")");
+    Game.rooms = { SellRoom: stockRoom(0, 0) };
+    Memory.terminalOps = { nextId: 1, operations: {}, seenIncoming: {}, events: [], terminalBalance: {} };
+    market.snapshot = oldSnapshot; Game.rooms = oldRooms; Memory.terminalOps = oldOps; Game.market = oldMarket;
+
+    // (2) hauler: the final product goes straight to the terminal when the chain asks for it
+    const chainRoomFor = (name) => {
+        const factory = { id: "df-" + name, structureType: STRUCTURE_FACTORY, store: mineralStore({ widgetA: 40 }, 1000), pos: new RoomPosition(20, 20, name) };
+        return { name, storage: { id: "dstore-" + name, store: mineralStore({}, 100000) }, terminal: { id: "dterm-" + name, store: mineralStore({}, 100000) },
+            find: (type) => (type === FIND_STRUCTURES || type === FIND_MY_STRUCTURES ? [factory] : []), factory };
+    };
+    const savedMemRooms = Memory.rooms;
+    Memory.rooms = { DirectA: { factoryProduct: "widgetA" }, DirectB: { factoryProduct: "widgetA", directToTerminal: "widgetA" } };
+    Game.time++;
+    const roomA = chainRoomFor("DirectA"), roomB = chainRoomFor("DirectB");
+    const jobA = hauler.pickMineralJob(roomA), jobB = hauler.pickMineralJob(roomB);
+    assert(jobA && jobA.kind === "factoryOutput" && jobA.to === roomA.storage, "0111: without the flag a factory product still goes to storage (got " + (jobA && jobA.kind) + ")");
+    assert(jobB && jobB.kind === "factoryOutput" && jobB.to === roomB.terminal, "0111: with directToTerminal the final product goes straight to the terminal (got " + (jobB && jobB.kind) + ")");
+    Memory.rooms = savedMemRooms;
+}
+{
+    // (3) a two-level lab chain keeps its intermediates in place
+    for (const m of ["craftChain", "craftPlanner", "marketPricing", "marketFlip"]) delete require.cache[require.resolve(path.join(PROJECT, "src/utils/" + m))];
+    const craft = require(path.join(PROJECT, "src/utils/craftPlanner"));
+    const market = require(path.join(PROJECT, "src/utils/market"));
+    const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
+    const labSlots = require(path.join(PROJECT, "src/utils/labSlots"));
+    const transientStock = require(path.join(PROJECT, "src/utils/transientStock"));
+    const saved = { rooms: Game.rooms, market: Game.market, creeps: Game.creeps, settings: Memory.settings, samples: market.samples, snapshot: market.snapshot,
+        craft: Memory.craft, bucket: Game.cpu.bucket, time: Game.time, buy: terminalOps.buy, sell: terminalOps.sell, memRooms: Memory.rooms, flip: Memory.marketFlip,
+        ops: Memory.terminalOps, getObj: Game.getObjectById };
+    const reactionsBackup = { P: REACTIONS.P, R: REACTIONS.R, PQ: REACTIONS.PQ };
+    REACTIONS.P = { Q: "PQ" }; REACTIONS.R = { S: "RS" }; REACTIONS.PQ = { RS: "PQRS" };
+    Game.cpu.bucket = 10000;
+    const quotes = { P: [10, 11], Q: [10, 11], R: [10, 11], S: [10, 11], PQRS: [300, 350], energy: [1, 1.1] };
+    market.samples = (rt) => (quotes[rt] ? priceSamples(quotes[rt][0], quotes[rt][1], 72, 1e9) : []);
+    market.snapshot = () => ({ resources: Object.keys(quotes).reduce((acc, rt) => { acc[rt] = { currentBuy: quotes[rt][0], currentSell: quotes[rt][1] }; return acc; }, {}) });
+    const mkLab = (slot) => ({ id: "ip" + slot, structureType: STRUCTURE_LAB, store: {}, mineralType: null, pos: { x: 10 + labSlots.OFFSETS[slot][1], y: 10 + labSlots.OFFSETS[slot][0] }, room: { name: "InPlaceRoom" } });
+    const labs = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(mkLab);
+    const byId = {}; labs.forEach((l) => { byId[l.id] = l; });
+    Game.getObjectById = (id) => byId[id] || null;
+    const room = { name: "InPlaceRoom", controller: { my: true }, storage: { store: { energy: 500000 } }, terminal: { store: {} }, find: () => labs };
+    const bought = [];
+    let nextOp = 1;
+    terminalOps.buy = (r, rt, qty) => { const id = "ib" + nextOp++; bought.push({ rt, qty, id }); Memory.terminalOps.operations[id] = { id, state: "queued" }; return { ok: true, id }; };
+    terminalOps.sell = () => ({ ok: true, id: "is" + nextOp++ });
+    Game.rooms = { InPlaceRoom: room };
+    Game.creeps = { h1: { room: { name: "InPlaceRoom" }, memory: { role: "hauler" } } };
+    Game.market = { credits: 1e8 };
+    // 0116: this block is about intermediates kept IN PLACE (waves); the wide strategy has its own block
+    Memory.settings = Object.assign({}, saved.settings, { craft: { test: false, maxCashAbsolute: 1e7, labStrategy: "waves" } });
+    Memory.rooms = {}; Memory.craft = undefined;
+    Memory.marketFlip = { lastScanTick: null, committedCredits: 0, active: {}, lastOpportunities: [], stats: { completed: 0, netProfit: 0, cancelled: 0, guardrailBlocked: 0 } };
+    Memory.terminalOps = { nextId: 1, operations: {}, seenIncoming: {}, events: [], terminalBalance: {} };
+    labSlots.resetCache(); craft.resetScan(); craft.resetLog();
+    const marketPricing = require(path.join(PROJECT, "src/utils/marketPricing")); marketPricing.resetCaches();
+    Game.time += 1000; craft.tick();
+    const chain = Memory.craft.active.InPlaceRoom;
+    assert(chain && chain.product === "PQRS" && chain.queue.length === 3 && chain.queue.every((i) => i.kind === "lab"),
+        "0111 P6: a two-level compound opens a three-step lab chain (got " + JSON.stringify(Memory.craft.candidates.map((c) => c.product)) + ")");
+    const [q0, q1, q2] = chain.queue;
+    // 0115: the planner priced the chain by its critical path: PQ and RS run together (one wave)
+    const cand = Memory.craft.candidates.find((c) => c.product === "PQRS");
+    const b = cand.steps[0].batches;
+    // PQ and RS run together: one wave of b reactions x 10 ticks; the final step runs wide on the 8
+    // other labs (ceil(b/8) x 10); plus 50 ticks of logistics per step. Sequentially it would be
+    // 2 x b x 10 for the intermediates.
+    const expectedT = b * 10 + Math.ceil(b / 8) * 10 + 3 * 50;
+    assert(cand && cand.T === expectedT, "0115: the planner's T for a 10-lab room counts the two independent steps once (T " + (cand && cand.T) + ", expected " + expectedT + ", sequential " + (expectedT + b * 10) + ")");
+    assert(q0.keep === true && q1.keep === true && q2.keep === false, "0111 P6: intermediates stay in place (keep), only the final phase is drained");
+    assert([q2.input1, q2.input2].sort().join() === [q0.output, q1.output].sort().join() && q2.consumes.length === 2,
+        "0111 P6: the last phase takes the two intermediates straight from the labs that made them (got " + JSON.stringify({ in: [q2.input1, q2.input2], out: [q0.output, q1.output] }) + ")");
+    bought.forEach((b) => { Memory.terminalOps.operations[b.id].state = "completed"; Memory.terminalOps.operations[b.id].dealtAmount = b.qty; });
+    const memRoom = () => Memory.rooms.InPlaceRoom;
+    const finishItem = (item, mineral) => { byId[item.output].mineralType = mineral; byId[item.output].store = { [mineral]: item.target }; };
+    // the barrier covers EVERY lab of the wave: one dirty lab of the second step holds the whole wave back
+    byId[q1.input1].mineralType = "Z"; byId[q1.input1].store = { Z: 5 };
+    Game.time += 1; craft.tick();
+    assert(!memRoom().labReaction && !memRoom().labReactions && !chain.queue[0].started && !chain.queue[1].started,
+        "0115: a lab of ANY step of the wave still holding a foreign mineral keeps the whole wave from starting");
+    byId[q1.input1].mineralType = null; byId[q1.input1].store = {};
+    Game.time += 1; craft.tick(); // wave 0 starts: the two independent intermediates run together (0115)
+    assert(q0.wave === q1.wave && q2.wave > q0.wave, "0115: the two intermediates share a wave, the final step follows");
+    assert(!memRoom().labReaction && Array.isArray(memRoom().labReactions) && memRoom().labReactions.length === 2 &&
+        memRoom().labReactions.every((r) => r.keep === true) &&
+        memRoom().labReactions.map((r) => r.product).sort().join() === [q0.product, q1.product].sort().join() && !memRoom().directToTerminal,
+        "0111 P6: the first wave runs both intermediates at once, each with keep=true and no direct-to-terminal yet (got " + JSON.stringify(memRoom().labReactions && memRoom().labReactions.map((r) => r.product)) + ")");
+    finishItem(q0, q0.product);
+    Game.time += 1; craft.tick();
+    assert(chain.holds[q0.output] === q0.product && memRoom().labLoad && memRoom().labLoad[q0.output][0] === q0.product && !memRoom().labReaction,
+        "0111 P6: a finished intermediate is held in its lab and protected by labLoad");
+    assert(chain.qi === 0 && memRoom().labReactions.length === 1 && memRoom().labReactions[0].product === q1.product,
+        "0115: the step that finished first leaves the list at once (the hauler stops stocking its inputs), the other keeps running and the wave is not over");
+    const holder = byId[q0.output]; holder.store = mineralStore({ [q0.product]: q0.target }, 1000); holder.mineralType = q0.product; holder.structureType = STRUCTURE_LAB;
+    assert(transientStock.excess(holder).length === 0, "0111 AC6: the transient drain leaves a protected intermediate alone");
+    assert(chain.queue[0].started && chain.queue[1].started && !chain.queue[2].started, "0115: both steps of the wave are started together, the next wave is not");
+    finishItem(q1, q1.product);
+    Game.time += 1; craft.tick();
+    assert(Object.keys(chain.holds).length === 2 && chain.qi === 2 && !memRoom().labReactions, "0111 P6: both intermediates are now held and the wave is closed (qi " + chain.qi + ")");
+    // the last phase: inputs already hold exactly the intermediates, so the barrier lets it start at once
+    Game.time += 1; craft.tick();
+    assert(memRoom().labReaction && memRoom().labReaction.product === "PQRS" && !memRoom().labReaction.keep && memRoom().directToTerminal === undefined,
+        "0111 P6: the final phase starts on the in-place intermediates (the product goes to storage and is sold from there) (got " + JSON.stringify(memRoom().labReaction) + ")");
+    finishItem(q2, "PQRS");
+    Game.time += 1; craft.tick();
+    assert(chain.state === "selling" && !memRoom().labLoad && !memRoom().directToTerminal && Object.keys(chain.holds).length === 0,
+        "0111 P6: after the last phase the holds, labLoad and the terminal flag are cleared");
+    // hauler: a keep reaction never gets its output drained; a normal one does
+    const out = byId[q0.output]; out.store = mineralStore({ [q0.product]: 2500 }, 500); out.mineralType = q0.product;
+    const pickRoom = { name: "InPlaceRoom", storage: { store: mineralStore({}, 1e6) }, terminal: null, find: (type) => (type === FIND_STRUCTURES || type === FIND_MY_STRUCTURES ? labs : []) };
+    Memory.rooms.InPlaceRoom = { labReaction: { a: q0.a, b: q0.b, product: q0.product, output: q0.output, input1: q0.input1, input2: q0.input2, keep: true } };
+    Game.time++;
+    const keptJob = hauler.pickMineralJob(pickRoom);
+    assert(!keptJob || keptJob.kind !== "labOutput", "0111 P6: the hauler does not drain a keep reaction's output lab (got " + (keptJob && keptJob.kind) + ")");
+    delete Memory.rooms.InPlaceRoom.labReaction.keep;
+    Game.time++;
+    const drainJob = hauler.pickMineralJob(pickRoom);
+    assert(drainJob && drainJob.kind === "labOutput", "0111 P6: without keep the output lab is drained as before (got " + (drainJob && drainJob.kind) + ")");
+
+    REACTIONS.P = reactionsBackup.P; REACTIONS.R = reactionsBackup.R; REACTIONS.PQ = reactionsBackup.PQ;
+    ["P", "R", "PQ"].forEach((k) => { if (reactionsBackup[k] === undefined) delete REACTIONS[k]; });
+    terminalOps.buy = saved.buy; terminalOps.sell = saved.sell; Game.getObjectById = saved.getObj;
+    market.samples = saved.samples; market.snapshot = saved.snapshot; Game.rooms = saved.rooms; Game.market = saved.market; Game.creeps = saved.creeps;
+    Memory.settings = saved.settings; Memory.craft = saved.craft; Memory.rooms = saved.memRooms; Memory.marketFlip = saved.flip; Memory.terminalOps = saved.ops;
+    Game.cpu.bucket = saved.bucket; Game.time = saved.time; labSlots.resetCache(); marketPricing.resetCaches();
+}
+{
+    // 0116 craftReplan: a chain opened under the in-place (waves) plan gets its pending steps rebuilt wide
+    
+    for (const m of ["craftChain", "craftPlanner", "marketPricing", "marketFlip"]) delete require.cache[require.resolve(path.join(PROJECT, "src/utils/" + m))];
+    const craft = require(path.join(PROJECT, "src/utils/craftPlanner"));
+    const market = require(path.join(PROJECT, "src/utils/market"));
+    const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
+    const labSlots = require(path.join(PROJECT, "src/utils/labSlots"));
+    const transientStock = require(path.join(PROJECT, "src/utils/transientStock"));
+    const saved = { rooms: Game.rooms, market: Game.market, creeps: Game.creeps, settings: Memory.settings, samples: market.samples, snapshot: market.snapshot,
+        craft: Memory.craft, bucket: Game.cpu.bucket, time: Game.time, buy: terminalOps.buy, sell: terminalOps.sell, memRooms: Memory.rooms, flip: Memory.marketFlip,
+        ops: Memory.terminalOps, getObj: Game.getObjectById };
+    const reactionsBackup = { P: REACTIONS.P, R: REACTIONS.R, PQ: REACTIONS.PQ };
+    REACTIONS.P = { Q: "PQ" }; REACTIONS.R = { S: "RS" }; REACTIONS.PQ = { RS: "PQRS" };
+    Game.cpu.bucket = 10000;
+    const quotes = { P: [10, 11], Q: [10, 11], R: [10, 11], S: [10, 11], PQRS: [300, 350], energy: [1, 1.1] };
+    market.samples = (rt) => (quotes[rt] ? priceSamples(quotes[rt][0], quotes[rt][1], 72, 1e9) : []);
+    market.snapshot = () => ({ resources: Object.keys(quotes).reduce((acc, rt) => { acc[rt] = { currentBuy: quotes[rt][0], currentSell: quotes[rt][1] }; return acc; }, {}) });
+    const mkLab = (slot) => ({ id: "ip" + slot, structureType: STRUCTURE_LAB, store: {}, mineralType: null, pos: { x: 10 + labSlots.OFFSETS[slot][1], y: 10 + labSlots.OFFSETS[slot][0] }, room: { name: "InPlaceRoom" } });
+    const labs = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(mkLab);
+    const byId = {}; labs.forEach((l) => { byId[l.id] = l; });
+    Game.getObjectById = (id) => byId[id] || null;
+    const room = { name: "InPlaceRoom", controller: { my: true }, storage: { store: { energy: 500000 } }, terminal: { store: {} }, find: () => labs };
+    const bought = [];
+    let nextOp = 1;
+    terminalOps.buy = (r, rt, qty) => { const id = "ib" + nextOp++; bought.push({ rt, qty, id }); Memory.terminalOps.operations[id] = { id, state: "queued" }; return { ok: true, id }; };
+    terminalOps.sell = () => ({ ok: true, id: "is" + nextOp++ });
+    Game.rooms = { InPlaceRoom: room };
+    Game.creeps = { h1: { room: { name: "InPlaceRoom" }, memory: { role: "hauler" } } };
+    Game.market = { credits: 1e8 };
+    // 0116: this block is about intermediates kept IN PLACE (waves); the wide strategy has its own block
+    Memory.settings = Object.assign({}, saved.settings, { craft: { test: false, maxCashAbsolute: 1e7, labStrategy: "waves" } });
+    Memory.rooms = {}; Memory.craft = undefined;
+    Memory.marketFlip = { lastScanTick: null, committedCredits: 0, active: {}, lastOpportunities: [], stats: { completed: 0, netProfit: 0, cancelled: 0, guardrailBlocked: 0 } };
+    Memory.terminalOps = { nextId: 1, operations: {}, seenIncoming: {}, events: [], terminalBalance: {} };
+    labSlots.resetCache(); craft.resetScan(); craft.resetLog();
+    const marketPricing = require(path.join(PROJECT, "src/utils/marketPricing")); marketPricing.resetCaches();
+    Game.time += 1000; craft.tick();
+    const chain = Memory.craft.active.InPlaceRoom;
+    assert(chain && chain.product === "PQRS" && chain.queue.length === 3 && chain.queue.every((i) => i.kind === "lab"),
+        "0111 P6: a two-level compound opens a three-step lab chain (got " + JSON.stringify(Memory.craft.candidates.map((c) => c.product)) + ")");
+    const craftChainMod = require(path.join(PROJECT, "src/utils/craftChain"));
+    const memRoom = () => Memory.rooms.InPlaceRoom;
+    const [r0, r1, r2] = chain.queue;
+    assert(r0.keep === true && r1.keep === true && r2.outputs.length === 8 && r2.consumes.length === 2, "0116 replan: the chain starts as an in-place (waves) chain");
+    assert(craftChainMod.replan("NoSuchRoom").length === 0 && craftChainMod.replan("InPlaceRoom")[0].indexOf("waves") >= 0,
+        "0116 replan: with the strategy still 'waves' there is nothing to change (said so)");
+    bought.forEach((x) => { Memory.terminalOps.operations[x.id].state = "completed"; Memory.terminalOps.operations[x.id].dealtAmount = x.qty; });
+    Game.time += 1; craft.tick(); // wave 0 (r0 and r1) starts
+    assert(r0.started && r1.started && !r2.started && memRoom().labReactions && memRoom().labReactions.length === 2, "0116 replan: wave 0 is running, the final step is pending");
+    // a product of an earlier step pinned in place: one in a lab that the new wide step reads as an
+    // input (ip1), and one in a lab it does not use (ip9)
+    chain.holds = { ip1: r0.product, ip9: "XX" };
+    memRoom().labLoad = { ip1: [r0.product], ip9: ["XX"] }; memRoom().labLoadAuto = true;
+    // the user switches the room to the wide strategy and replans
+    Memory.settings.craft.labStrategy = "auto";
+    const report = craftChainMod.replan("InPlaceRoom");
+    assert(report.length === 1 && report[0].indexOf("1 etapa(s) pendente(s) trocada(s)") >= 0 && report[0].indexOf("PQRS") >= 0, "0116 replan: the pending step is rebuilt (got " + JSON.stringify(report) + ")");
+    assert(chain.queue[0] === r0 && chain.queue[1] === r1 && chain.queue[2] !== r2, "0116 replan: running steps are left alone, only the pending one is replaced");
+    let newFinal = chain.queue[2];
+    assert(newFinal.outputs.length === 8 && newFinal.keep === false && newFinal.consumes.length === 0 && [newFinal.input1, newFinal.input2].sort().join() === "ip1,ip2" && !newFinal.started,
+        "0116 replan: the pending step is now wide, on the centre pair, taking its inputs from storage");
+    assert(r0.keep === false && r1.keep === false && memRoom().labReactions.every((r) => r.keep === undefined),
+        "0116 replan: the running steps no longer pin their product (keep cleared on the steps and on their reactions)");
+    assert(Object.keys(chain.holds).join() === "ip1" && Object.keys(memRoom().labLoad).join() === "ip1",
+        "0116 replan: a hold on a lab the drain would take is released, one on an input lab of the wide step stays (holds " + Object.keys(chain.holds).join() + ")");
+    assert(craftChainMod.replan("InPlaceRoom")[0].indexOf("1 etapa(s) pendente(s)") >= 0, "0116 replan: running it again is harmless");
+    newFinal = chain.queue[2]; // the pending step is rebuilt (an equal, fresh object) on every run
+    // the running wave finishes in its old layout; its products are still in their labs
+    const finish = (item) => { byId[item.output].mineralType = item.product; byId[item.output].store = { [item.product]: item.target }; };
+    finish(r0); finish(r1);
+    Game.time += 1; craft.tick();
+    assert(chain.qi === 2 && Object.keys(chain.holds).join() === "ip1", "0116 replan: the wave closes; only the input lab of the wide step stays protected (holds " + Object.keys(chain.holds).join() + ")");
+    // The waves plan leaves the intermediates in the centre labs (1 and 2) - exactly the inputs
+    // of the wide step - so the wide step uses them where they are, no round trip through storage.
+    assert(r0.output === newFinal.input1 && r1.output === newFinal.input2, "0116 replan: the in-place intermediates already sit in the wide step's input labs");
+    byId.ip5.mineralType = "Z"; byId.ip5.store = { Z: 5 }; // a stray mineral in one of the 8 output labs
+    Game.time += 1; craft.tick();
+    assert(!newFinal.started && !memRoom().labReaction, "0116 replan: the wide step waits while one of its output labs still holds a foreign mineral");
+    byId.ip5.mineralType = null; byId.ip5.store = {}; // drained
+    Game.time += 1; craft.tick();
+    assert(newFinal.started && memRoom().labReaction && memRoom().labReaction.product === "PQRS" && memRoom().labReaction.outputs.length === 8,
+        "0116 replan: once the output labs are clear the wide step runs on 8 labs");
+    // a chain with nothing pending, and states other than buying/working, are reported and left alone
+    const doneReport = craftChainMod.replan("InPlaceRoom");
+    assert(doneReport.length === 1 && doneReport[0].indexOf("nenhuma etapa pendente") >= 0, "0116 replan: with every step started there is nothing pending (got " + JSON.stringify(doneReport) + ")");
+    assert(typeof global.craftReplan === "function" && global.craftReplan("InPlaceRoom").indexOf("nenhuma etapa pendente") >= 0, "0116 replan: the console command craftReplan() returns the same report");
+    REACTIONS.P = reactionsBackup.P; REACTIONS.R = reactionsBackup.R; REACTIONS.PQ = reactionsBackup.PQ;
+    ["P", "R", "PQ"].forEach((k) => { if (reactionsBackup[k] === undefined) delete REACTIONS[k]; });
+    terminalOps.buy = saved.buy; terminalOps.sell = saved.sell; Game.getObjectById = saved.getObj;
+    market.samples = saved.samples; market.snapshot = saved.snapshot; Game.rooms = saved.rooms; Game.market = saved.market; Game.creeps = saved.creeps;
+    Memory.settings = saved.settings; Memory.craft = saved.craft; Memory.rooms = saved.memRooms; Memory.marketFlip = saved.flip; Memory.terminalOps = saved.ops;
+    Game.cpu.bucket = saved.bucket; Game.time = saved.time; labSlots.resetCache(); marketPricing.resetCaches();
+}
+{
+    // 0116: with the default strategy ("auto") a 10-lab room runs EVERY step wide, one after the other, through storage
+    
+    for (const m of ["craftChain", "craftPlanner", "marketPricing", "marketFlip"]) delete require.cache[require.resolve(path.join(PROJECT, "src/utils/" + m))];
+    const craft = require(path.join(PROJECT, "src/utils/craftPlanner"));
+    const market = require(path.join(PROJECT, "src/utils/market"));
+    const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
+    const labSlots = require(path.join(PROJECT, "src/utils/labSlots"));
+    const transientStock = require(path.join(PROJECT, "src/utils/transientStock"));
+    const saved = { rooms: Game.rooms, market: Game.market, creeps: Game.creeps, settings: Memory.settings, samples: market.samples, snapshot: market.snapshot,
+        craft: Memory.craft, bucket: Game.cpu.bucket, time: Game.time, buy: terminalOps.buy, sell: terminalOps.sell, memRooms: Memory.rooms, flip: Memory.marketFlip,
+        ops: Memory.terminalOps, getObj: Game.getObjectById };
+    const reactionsBackup = { P: REACTIONS.P, R: REACTIONS.R, PQ: REACTIONS.PQ };
+    REACTIONS.P = { Q: "PQ" }; REACTIONS.R = { S: "RS" }; REACTIONS.PQ = { RS: "PQRS" };
+    Game.cpu.bucket = 10000;
+    const quotes = { P: [10, 11], Q: [10, 11], R: [10, 11], S: [10, 11], PQRS: [300, 350], energy: [1, 1.1] };
+    market.samples = (rt) => (quotes[rt] ? priceSamples(quotes[rt][0], quotes[rt][1], 72, 1e9) : []);
+    market.snapshot = () => ({ resources: Object.keys(quotes).reduce((acc, rt) => { acc[rt] = { currentBuy: quotes[rt][0], currentSell: quotes[rt][1] }; return acc; }, {}) });
+    const mkLab = (slot) => ({ id: "ip" + slot, structureType: STRUCTURE_LAB, store: {}, mineralType: null, pos: { x: 10 + labSlots.OFFSETS[slot][1], y: 10 + labSlots.OFFSETS[slot][0] }, room: { name: "InPlaceRoom" } });
+    const labs = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(mkLab);
+    const byId = {}; labs.forEach((l) => { byId[l.id] = l; });
+    Game.getObjectById = (id) => byId[id] || null;
+    const room = { name: "InPlaceRoom", controller: { my: true }, storage: { store: { energy: 500000 } }, terminal: { store: {} }, find: () => labs };
+    const bought = [];
+    let nextOp = 1;
+    terminalOps.buy = (r, rt, qty) => { const id = "ib" + nextOp++; bought.push({ rt, qty, id }); Memory.terminalOps.operations[id] = { id, state: "queued" }; return { ok: true, id }; };
+    terminalOps.sell = () => ({ ok: true, id: "is" + nextOp++ });
+    Game.rooms = { InPlaceRoom: room };
+    Game.creeps = { h1: { room: { name: "InPlaceRoom" }, memory: { role: "hauler" } } };
+    Game.market = { credits: 1e8 };
+    Memory.settings = Object.assign({}, saved.settings, { craft: { test: false, maxCashAbsolute: 1e7 } });
+    Memory.rooms = {}; Memory.craft = undefined;
+    Memory.marketFlip = { lastScanTick: null, committedCredits: 0, active: {}, lastOpportunities: [], stats: { completed: 0, netProfit: 0, cancelled: 0, guardrailBlocked: 0 } };
+    Memory.terminalOps = { nextId: 1, operations: {}, seenIncoming: {}, events: [], terminalBalance: {} };
+    labSlots.resetCache(); craft.resetScan(); craft.resetLog();
+    const marketPricing = require(path.join(PROJECT, "src/utils/marketPricing")); marketPricing.resetCaches();
+    Game.time += 1000; craft.tick();
+    const chain = Memory.craft.active.InPlaceRoom;
+    assert(chain && chain.product === "PQRS" && chain.queue.length === 3 && chain.queue.every((i) => i.kind === "lab"),
+        "0111 P6: a two-level compound opens a three-step lab chain (got " + JSON.stringify(Memory.craft.candidates.map((c) => c.product)) + ")");
+    const memRoom = () => Memory.rooms.InPlaceRoom;
+    const wideItems = chain.queue;
+    const wideCand = Memory.craft.candidates.find((c) => c.product === "PQRS");
+    const wideB = wideCand.steps[0].batches;
+    assert(wideCand.T === 3 * Math.ceil(wideB / 8) * 10 + 3 * 50,
+        "0116: the planner's T for the wide strategy is three steps on 8 labs (T " + wideCand.T + ", expected " + (3 * Math.ceil(wideB / 8) * 10 + 150) + ")");
+    assert(chain && chain.product === "PQRS" && wideItems.length === 3 && wideItems.every((i) => i.kind === "lab"),
+        "0116: the wide strategy still opens a three-step lab chain");
+    assert(wideItems.every((i) => i.keep === false && (i.consumes || []).length === 0 && i.outputs.length === 8),
+        "0116: every step runs on 8 output labs and nothing is kept in place (outputs " + wideItems.map((i) => i.outputs.length).join() + ")");
+    assert(wideItems.every((i) => [i.input1, i.input2].sort().join() === "ip1,ip2"), "0116: every step takes the centre labs (slots 1 and 2) as inputs");
+    assert(new Set(wideItems.map((i) => i.wave)).size === 3 && wideItems.every((i, n) => i.wave === n),
+        "0116: the steps run one after the other (a wave each)");
+    wideItems.forEach((i) => { assert(i.outputs.indexOf(i.input1) < 0 && i.outputs.indexOf(i.input2) < 0, "0116: an input lab is never one of the step's own output labs"); });
+    const spread = (item) => { const share = Math.ceil(item.target / item.outputs.length); item.outputs.forEach((id) => { byId[id].mineralType = item.product; byId[id].store = { [item.product]: share }; }); };
+    const emptyOutputs = (item) => item.outputs.forEach((id) => { byId[id].mineralType = null; byId[id].store = {}; });
+    bought.forEach((x) => { Memory.terminalOps.operations[x.id].state = "completed"; Memory.terminalOps.operations[x.id].dealtAmount = x.qty; });
+    Game.time += 1; craft.tick(); // step 0 starts
+    assert(memRoom().labReaction && !memRoom().labReactions && memRoom().labReaction.product === wideItems[0].product &&
+        memRoom().labReaction.outputs.length === 8 && !memRoom().labReaction.keep,
+        "0116: the first step runs alone on the 8 output labs (got " + JSON.stringify(memRoom().labReaction && { p: memRoom().labReaction.product, n: (memRoom().labReaction.outputs || []).length }) + ")");
+    spread(wideItems[0]); // its product is spread over the output labs
+    Game.time += 1; craft.tick();
+    assert(chain.qi === 1 && !memRoom().labReaction && Object.keys(chain.holds).length === 0 && !memRoom().labLoad,
+        "0116: a finished step leaves nothing held in place (qi " + chain.qi + ")");
+    const ts = require(path.join(PROJECT, "src/utils/transientStock"));
+    const lingering = byId[wideItems[0].outputs[3]];
+    assert(ts.excess(lingering).map((e) => e.resourceType).join() === wideItems[0].product,
+        "0116: the product left in the output labs is handed back to storage by the drain (it is not protected)");
+    Game.time += 1; craft.tick();
+    assert(!wideItems[1].started && !memRoom().labReaction && !memRoom().labReactions,
+        "0116: the next step waits while the previous product is still in the output labs");
+    emptyOutputs(wideItems[0]); // the hauler carried it to storage
+    Game.time += 1; craft.tick();
+    assert(wideItems[1].started && memRoom().labReaction && memRoom().labReaction.product === wideItems[1].product,
+        "0116: once the labs are empty the next step starts, and receives the product like any reagent");
+    spread(wideItems[1]);
+    Game.time += 1; craft.tick();
+    emptyOutputs(wideItems[1]);
+    Game.time += 1; craft.tick(); // final step starts
+    assert(memRoom().labReaction && memRoom().labReaction.product === "PQRS" && memRoom().labReaction.outputs.length === 8, "0116: the final step runs on the 8 output labs too");
+    spread(wideItems[2]);
+    Game.time += 1; craft.tick();
+    assert(chain.state === "selling" && !memRoom().labReaction && chain.produced >= wideItems[2].target,
+        "0116: the chain reaches selling after the last wide step (state " + chain.state + ")");
+    REACTIONS.P = reactionsBackup.P; REACTIONS.R = reactionsBackup.R; REACTIONS.PQ = reactionsBackup.PQ;
+    ["P", "R", "PQ"].forEach((k) => { if (reactionsBackup[k] === undefined) delete REACTIONS[k]; });
+    terminalOps.buy = saved.buy; terminalOps.sell = saved.sell; Game.getObjectById = saved.getObj;
+    market.samples = saved.samples; market.snapshot = saved.snapshot; Game.rooms = saved.rooms; Game.market = saved.market; Game.creeps = saved.creeps;
+    Memory.settings = saved.settings; Memory.craft = saved.craft; Memory.rooms = saved.memRooms; Memory.marketFlip = saved.flip; Memory.terminalOps = saved.ops;
+    Game.cpu.bucket = saved.bucket; Game.time = saved.time; labSlots.resetCache(); marketPricing.resetCaches();
+}
+
+// --- ROADMAP 0111: credits spent vs delivery fee, flip-reserved stock, energy reserve ---
+{
+    for (const m of ["craftChain", "craftPlanner", "marketPricing", "marketFlip"]) delete require.cache[require.resolve(path.join(PROJECT, "src/utils/" + m))];
+    const craft = require(path.join(PROJECT, "src/utils/craftPlanner"));
+    const market = require(path.join(PROJECT, "src/utils/market"));
+    const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
+    const saved = { rooms: Game.rooms, market: Game.market, creeps: Game.creeps, settings: Memory.settings, samples: market.samples, snapshot: market.snapshot,
+        craft: Memory.craft, bucket: Game.cpu.bucket, time: Game.time, buy: terminalOps.buy, memRooms: Memory.rooms, flip: Memory.marketFlip, ops: Memory.terminalOps };
+    Game.cpu.bucket = 10000;
+    Game.time += 7000000; // real ticks never repeat: a tick no other block used, so census/roomCache start cold
+    const quotes = { Z: [100, 110], energy: [1, 1.1], widgetA: [5000, 5400] };
+    market.samples = (rt) => (quotes[rt] ? priceSamples(quotes[rt][0], quotes[rt][1], 72, 1e9) : []);
+    market.snapshot = () => ({ resources: Object.keys(quotes).reduce((acc, rt) => { acc[rt] = { currentBuy: quotes[rt][0], currentSell: quotes[rt][1] }; return acc; }, {}) });
+    const factory = { id: "spf", structureType: STRUCTURE_FACTORY, store: { widgetA: 0 }, effects: [] };
+    let buys = 0;
+    terminalOps.buy = (r, rt, qty) => { buys++; const id = "sb" + buys; Memory.terminalOps.operations[id] = { id, state: "queued" }; return { ok: true, id }; };
+    const room = { name: "SpendRoom", controller: { my: true }, storage: { store: { energy: 500000 } }, terminal: { store: {} }, find: () => [factory] };
+    const run = (settings, flipActive) => {
+        buys = 0;
+        Game.rooms = { SpendRoom: room };
+        Game.creeps = { h1: { room: { name: "SpendRoom" }, memory: { role: "hauler" } } };
+        Game.market = { credits: 1e6 };
+        Memory.settings = Object.assign({}, saved.settings, { craft: Object.assign({ test: false }, settings || {}) });
+        Memory.rooms = {}; Memory.craft = undefined;
+        Memory.marketFlip = { lastScanTick: null, committedCredits: 0, active: flipActive || {}, lastOpportunities: [], stats: { completed: 0, netProfit: 0, cancelled: 0, guardrailBlocked: 0 } };
+        Memory.terminalOps = { nextId: 1, operations: {}, seenIncoming: {}, events: [], terminalBalance: {} };
+        craft.resetScan(); craft.resetLog();
+        Game.time += 1000; craft.tick();
+        return Memory.craft;
+    };
+    // all inputs owned: nothing is bought, so no credits leave - the energy delivery fee must not count against the credit caps
+    room.storage.store = { energy: 500000, Z: 100000 };
+    let mem = run({ maxCashAbsolute: 1 });
+    const own = Memory.craft.active.SpendRoom;
+    assert(own && own.est.spend === 0 && own.est.cash > 0 && Memory.marketFlip.committedCredits === 0,
+        "0111: a chain made only of own inputs spends no credits - the delivery fee is energy, not a cap-relevant spend (got " + JSON.stringify(own && own.est) + " discards " + JSON.stringify(Memory.craft.discards) + " candidates " + JSON.stringify(Memory.craft.candidates.map((c) => [c.product, c.spend, c.cash])) + ")");
+    assert(Object.keys(own.buys).length === 0 && own.state === "working", "0111: with nothing to buy the chain goes straight to production");
+    // an active flip owns its material: it is not free stock for a craft
+    room.storage.store = { energy: 500000, Z: 100000 };
+    mem = run({ test: true }, { Z: { resourceType: "Z", room: "SpendRoom", state: "selling", quantity: 100000 } });
+    const withoutZ = mem.candidates.find((c) => c.product === "widgetA");
+    assert(withoutZ && withoutZ.buys.Z > 0 && !withoutZ.owns.Z, "0111: material reserved by an active flip is not used as own stock (got " + JSON.stringify(withoutZ && { buys: withoutZ.buys, owns: withoutZ.owns }) + ")");
+    mem = run({ test: true }, { Z: { resourceType: "Z", room: "OtherRoom", state: "selling", quantity: 100000 } });
+    const withZ = mem.candidates.find((c) => c.product === "widgetA");
+    assert(withZ && withZ.owns.Z > 0 && !withZ.buys.Z, "0111: a flip in ANOTHER room does not touch this room's stock");
+    // energy below the room's reserve floor is not usable as an input
+    const energyOnly = (amount) => ({ energy: amount, Z: 100000, getCapacity: () => 1000000, getUsedCapacity: () => amount + 100000, getFreeCapacity: () => 1 });
+    room.storage.store = energyOnly(10020); // reserve floor = 1% of 1,000,000 = 10,000 -> only 20 energy is free
+    mem = run({ test: true });
+    const lowEnergy = mem.candidates.find((c) => c.product === "widgetA");
+    assert(lowEnergy && lowEnergy.owns.energy <= 20 && lowEnergy.buys.energy > 0, "0111: energy under the reserve floor is bought, not consumed from the reserve (got " + JSON.stringify(lowEnergy && { buys: lowEnergy.buys, owns: lowEnergy.owns }) + ")");
+    room.storage.store = energyOnly(500000);
+    mem = run({ test: true });
+    const richEnergy = mem.candidates.find((c) => c.product === "widgetA");
+    assert(richEnergy && richEnergy.owns.energy > 20 && !richEnergy.buys.energy, "0111: plenty of energy above the floor is used as own stock");
+    // a candidate that cannot open says why in the log, once
+    const lines = [];
+    const origLog = console.log;
+    console.log = (...a) => { lines.push(a.join(" ")); };
+    room.storage.store = { energy: 500000, Z: 0 };
+    run({}); // fresh scan state; then credits already committed elsewhere block the open
+    Memory.marketFlip.committedCredits = 249000; Memory.craft.active = {};
+    craft.resetScan(); Game.time += 1000; craft.tick();
+    console.log = origLog;
+    const notOpened = lines.filter((l) => /nao abriu/.test(l));
+    assert(notOpened.length === 1 && /committed-cap/.test(notOpened[0]), "0111: a candidate blocked by a cap is logged once with the reason (got " + JSON.stringify(notOpened) + ")");
+
+    terminalOps.buy = saved.buy; market.samples = saved.samples; market.snapshot = saved.snapshot; Game.rooms = saved.rooms; Game.market = saved.market; Game.creeps = saved.creeps;
+    Memory.settings = saved.settings; Memory.craft = saved.craft; Memory.rooms = saved.memRooms; Memory.marketFlip = saved.flip; Memory.terminalOps = saved.ops;
+    Game.cpu.bucket = saved.bucket; Game.time = saved.time;
+}
+
+// --- ROADMAP 0111: flip lock window, depth-shrunk lots, cap-sized lots, min profit ---
+{
+    for (const m of ["craftChain", "craftPlanner", "marketPricing", "marketFlip"]) delete require.cache[require.resolve(path.join(PROJECT, "src/utils/" + m))];
+    const craft = require(path.join(PROJECT, "src/utils/craftPlanner"));
+    const flipMod = require(path.join(PROJECT, "src/utils/marketFlip"));
+    const market = require(path.join(PROJECT, "src/utils/market"));
+    const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
+    const saved = { rooms: Game.rooms, market: Game.market, creeps: Game.creeps, settings: Memory.settings, samples: market.samples, snapshot: market.snapshot,
+        craft: Memory.craft, bucket: Game.cpu.bucket, time: Game.time, buy: terminalOps.buy, sell: terminalOps.sell, memRooms: Memory.rooms, flip: Memory.marketFlip, ops: Memory.terminalOps };
+    Game.cpu.bucket = 10000;
+    Game.time += 9000000; // a tick no other block used: census/roomCache start cold
+    const book = { Z: priceSamples(100, 110, 72, 1e9), energy: priceSamples(1, 1.1, 72, 1e9), widgetA: priceSamples(5000, 5400, 72, 1e9) };
+    const liveAsk = {};
+    market.samples = (rt) => book[rt] || [];
+    market.snapshot = () => ({ resources: Object.keys(book).reduce((acc, rt) => { acc[rt] = { currentBuy: book[rt][0].buyPrice, currentSell: liveAsk[rt] || book[rt][0].sellPrice }; return acc; }, {}) });
+    const factory = { id: "lotf", structureType: STRUCTURE_FACTORY, store: { widgetA: 0 }, effects: [] };
+    const room = { name: "LotRoom", controller: { my: true }, storage: { store: { energy: 500000 } }, terminal: { store: {} }, find: () => [factory] };
+    let opened;
+    terminalOps.buy = (r, rt, qty) => { opened.push({ rt, qty }); const id = "lt" + opened.length; Memory.terminalOps.operations[id] = { id, state: "queued" }; return { ok: true, id }; };
+    const run = (settings, flipActive) => {
+        opened = [];
+        Game.rooms = { LotRoom: room };
+        Game.creeps = { h1: { room: { name: "LotRoom" }, memory: { role: "hauler" } } };
+        Game.market = { credits: 1e6 };
+        Memory.settings = Object.assign({}, saved.settings, { craft: Object.assign({ test: true }, settings || {}) });
+        Memory.rooms = {}; Memory.craft = undefined;
+        Memory.marketFlip = { lastScanTick: null, committedCredits: 0, active: flipActive || {}, lastOpportunities: [], stats: { completed: 0, netProfit: 0, cancelled: 0, guardrailBlocked: 0 } };
+        Memory.terminalOps = { nextId: 1, operations: {}, seenIncoming: {}, events: [], terminalBalance: {} };
+        craft.resetScan(); craft.resetLog();
+        Game.time += 1000; craft.tick();
+        return Memory.craft;
+    };
+    const widget = (mem) => mem.candidates.find((c) => c.product === "widgetA");
+
+    // flip lock: material of a flip is locked only briefly, then it is plain stock
+    room.storage.store = { energy: 500000, Z: 100000 };
+    const flipEntry = (extra) => ({ Z: Object.assign({ resourceType: "Z", room: "LotRoom", quantity: 100000 }, extra) });
+    let c = widget(run({}, flipEntry({ state: "buying", openedTick: Game.time + 1000 - 10 })));
+    assert(c && c.buys.Z > 0 && !c.owns.Z, "0111: a flip bought a few ticks ago still owns its material (got " + JSON.stringify(c && c.owns) + ")");
+    c = widget(run({}, flipEntry({ state: "selling", openedTick: Game.time - 5000, sellStartTick: Game.time + 1000 - 10 })));
+    assert(c && c.buys.Z > 0 && !c.owns.Z, "0111: a flip that only just started selling keeps its lock, however old the buy is");
+    c = widget(run({}, flipEntry({ state: "selling", openedTick: Game.time - 5000, sellStartTick: Game.time - 500 })));
+    assert(c && c.owns.Z > 0 && !c.buys.Z, "0111: a flip that failed to sell within the lock window leaves its material as plain stock (got " + JSON.stringify(c && c.owns) + ")");
+    c = widget(run({ flipLockTicks: 5000 }, flipEntry({ state: "selling", openedTick: Game.time - 5000, sellStartTick: Game.time - 500 })));
+    assert(c && c.buys.Z > 0 && !c.owns.Z, "0111: craft.flipLockTicks sets the window");
+    // the flip records when it starts selling
+    {
+        const flip = flipMod;
+        Memory.marketFlip = { lastScanTick: null, committedCredits: 0, active: { Z: { resourceType: "Z", room: "LotRoom", state: "buying", buyOpId: "fb1", sellOpId: null, quantity: 10, buyPrice: 10, sellPrice: 20, reservedCredits: 100, expectedNetProfit: 50, openedTick: Game.time } },
+            lastOpportunities: [], stats: { completed: 0, netProfit: 0, cancelled: 0, guardrailBlocked: 0 } };
+        Memory.terminalOps = { nextId: 1, operations: { fb1: { id: "fb1", state: "completed", dealtAmount: 10 } }, seenIncoming: {}, events: [], terminalBalance: {} };
+        Memory.settings = Object.assign({}, saved.settings, { marketFlip: { test: true, scanInterval: 99999 } });
+        terminalOps.sell = () => ({ ok: true, id: "fs1" });
+        Game.time += 1; flip.tick();
+        assert(Memory.marketFlip.active.Z && Memory.marketFlip.active.Z.state === "selling" && Memory.marketFlip.active.Z.sellStartTick === Game.time,
+            "0111: the flip stamps sellStartTick when it starts selling (got " + JSON.stringify(Memory.marketFlip.active.Z) + ")");
+    }
+
+    // depth: an expensive ask with a thin book shrinks the lot instead of killing the product
+    room.storage.store = { energy: 500000 };
+    book.Z = priceSamples(100, 110, 72, 6000); // top ask level holds 6000: lots up to 3000 Z (qty 150) fit 2x depth
+    liveAsk.Z = 115; // above the 7d median: the buy leg has to clear liquidity
+    let mem = run({});
+    c = widget(mem);
+    assert(c && c.qty >= 1 && c.qty < 3000 && c.buys.Z <= 3000 && !mem.discards["no-plan:Z:liq-depth"],
+        "0111: a thin ask book shrinks the lot until the input fits its depth (got qty " + (c && c.qty) + ", buys " + JSON.stringify(c && c.buys) + ", discards " + JSON.stringify(mem.discards) + ")");
+    book.Z = priceSamples(100, 110, 72, 1);
+    mem = run({});
+    assert(!widget(mem) && Object.keys(mem.discards).some((k) => /liq-depth/.test(k)), "0111: when no lot size fits the book the product is discarded as liq-depth (got " + JSON.stringify(mem.discards) + ")");
+    book.Z = priceSamples(100, 110, 72, 1e9); delete liveAsk.Z;
+
+    // minimum profit: shrinking never produces trivial chains
+    mem = run({ minProfit: 1e12 });
+    assert(!widget(mem) && mem.discards["min-profit"] > 0, "0111: a chain below craft.minProfit is discarded (got " + JSON.stringify(mem.discards) + ")");
+
+    // the absolute cap sizes the lot (it no longer lets an oversized chain through to be refused at open)
+    mem = run({ maxCashAbsolute: 20000 });
+    c = widget(mem);
+    assert(c && c.spend <= 20000 && c.spend > 0 && c.qty < 3000, "0111: craft.maxCashAbsolute sizes the lot, so the candidate fits it (got spend " + (c && c.spend) + ", qty " + (c && c.qty) + ")");
+    mem = run({ maxCashAbsolute: 20000, test: false });
+    assert(opened.length === 1 && opened[0].rt === "Z" && Memory.craft.active.LotRoom && Memory.craft.active.LotRoom.est.spend <= 20000,
+        "0111: a lot sized to the cap actually opens within it (got " + JSON.stringify(opened) + ")");
+
+    terminalOps.buy = saved.buy; terminalOps.sell = saved.sell; market.samples = saved.samples; market.snapshot = saved.snapshot;
+    Game.rooms = saved.rooms; Game.market = saved.market; Game.creeps = saved.creeps;
+    Memory.settings = saved.settings; Memory.craft = saved.craft; Memory.rooms = saved.memRooms; Memory.marketFlip = saved.flip; Memory.terminalOps = saved.ops;
+    Game.cpu.bucket = saved.bucket; Game.time = saved.time;
+}
+
+// --- ROADMAP 0111: a BUY stuck in awaitingReceipt after its goods left the terminal ---
+{
+    delete require.cache[require.resolve(path.join(PROJECT, "src/utils/terminalOps"))];
+    const ops = require(path.join(PROJECT, "src/utils/terminalOps"));
+    const saved = { rooms: Game.rooms, market: Game.market, creeps: Game.creeps, ops: Memory.terminalOps, settings: Memory.settings, time: Game.time };
+    Game.time += 11000000; // a tick no other block used
+    const mkRoom = (terminalPower) => ({
+        name: "OrphanRoom", controller: { my: true }, find: () => [],
+        storage: { id: "ost", store: { power: 1500, energy: 100000, getFreeCapacity: () => 1e6, getUsedCapacity: () => 1e5, getCapacity: () => 1e6 } },
+        terminal: { id: "otm", cooldown: 0, store: { power: terminalPower, energy: 50000, getFreeCapacity: () => 1e5, getUsedCapacity: () => 5e4, getCapacity: () => 3e5 } },
+    });
+    const freshOps = () => ({
+        nextId: 10, seenIncoming: {}, events: [], terminalBalance: {},
+        operations: { "terminal-1": { id: "terminal-1", kind: "buy", sourceRoom: "OrphanRoom", targetRoom: null, resourceType: "power", amount: 1500, remaining: 0, dealtAmount: 1500,
+            state: "awaitingReceipt", createdTick: Game.time, updatedTick: Game.time, loadedAmount: 0, sentAmount: 0, receivedAmount: 0, transactionCost: 0, error: "terminal em cooldown" } },
+    });
+    const run = (room, ticks) => {
+        Game.rooms = { OrphanRoom: room }; Game.creeps = {}; Game.market = { credits: 1e6, incomingTransactions: [] };
+        Memory.settings = Object.assign({}, saved.settings);
+        Memory.terminalOps = freshOps();
+        for (let i = 0; i < ticks; i++) { Game.time += 1; ops.tick(); }
+        return Memory.terminalOps.operations["terminal-1"];
+    };
+    // goods already left the terminal (they are in storage) and no linked receipt exists: not stuck forever
+    let op = run(mkRoom(0), 3);
+    assert(op.state === "awaitingReceipt", "0111: a buy whose goods left the terminal waits out the confirmation window first (state " + op.state + ")");
+    op = run(mkRoom(0), 40);
+    assert(op.state === "completed" && /outro caminho/.test(op.error || ""), "0111: a buy whose goods already left the terminal completes instead of waiting forever (state " + op.state + ", error " + op.error + ")");
+    // goods still sitting in the terminal: the normal receipt flow owns it, the buy must not be closed early
+    op = run(mkRoom(1500), 40);
+    assert(op.state === "awaitingReceipt", "0111: a buy whose goods are still in the terminal is left to the receipt flow (state " + op.state + ")");
+    assert(Object.values(Memory.terminalOps.operations).some((o) => o.kind === "receipt" && o.parentId === "terminal-1"), "0111: that receipt is linked to the buy so it can close it");
+    // the window is configurable
+    Game.rooms = { OrphanRoom: mkRoom(0) }; Game.creeps = {}; Game.market = { credits: 1e6, incomingTransactions: [] };
+    Memory.settings = Object.assign({}, saved.settings, { terminalOps: { orphanBuyConfirmTicks: 3 } });
+    Memory.terminalOps = freshOps();
+    for (let i = 0; i < 6; i++) { Game.time += 1; ops.tick(); }
+    assert(Memory.terminalOps.operations["terminal-1"].state === "completed", "0111: terminalOps.orphanBuyConfirmTicks sets the window");
+
+    Game.rooms = saved.rooms; Game.market = saved.market; Game.creeps = saved.creeps; Memory.terminalOps = saved.ops; Memory.settings = saved.settings; Game.time = saved.time;
+}
+
+// --- ROADMAP 0111: the "no order covers the limit" line is not repeated every few ticks ---
+{
+    delete require.cache[require.resolve(path.join(PROJECT, "src/utils/terminalOps"))];
+    const ops = require(path.join(PROJECT, "src/utils/terminalOps"));
+    const market = require(path.join(PROJECT, "src/utils/market"));
+    const saved = { rooms: Game.rooms, market: Game.market, creeps: Game.creeps, ops: Memory.terminalOps, settings: Memory.settings, time: Game.time, snapshot: market.snapshot, log: console.log };
+    Game.time += 12000000;
+    market.snapshot = () => ({ resources: { power: { buyPrice: 10, sellPrice: 11, fairPrice: 10.5 }, energy: { fairPrice: 1 } } });
+    const room = {
+        name: "SpamRoom", controller: { my: true }, find: () => [],
+        storage: { id: "sps", store: { power: 5000, energy: 1e5, getFreeCapacity: () => 1e6, getUsedCapacity: () => 1e5, getCapacity: () => 1e6 } },
+        terminal: { id: "spt", cooldown: 0, store: { power: 100, energy: 5e4, getFreeCapacity: () => 1e5, getUsedCapacity: () => 5e4, getCapacity: () => 3e5 } },
+    };
+    Game.rooms = { SpamRoom: room }; Game.creeps = { h1: { room: { name: "SpamRoom" }, memory: { role: "hauler" }, store: { getUsedCapacity: () => 0 } } };
+    Game.market = { credits: 1e6, incomingTransactions: [], calcTransactionCost: () => 1, getAllOrders: () => [{ id: "b1", resourceType: "power", type: "buy", price: 5, remainingAmount: 1000, roomName: "OtherRoom" }] };
+    Memory.settings = Object.assign({}, saved.settings);
+    Memory.terminalOps = { nextId: 1, operations: {}, seenIncoming: {}, events: [], terminalBalance: {} };
+    const made = ops.sell("SpamRoom", "power", 100, 50, false, true); // nobody pays 50 (best bid is 5)
+    const lines = [];
+    console.log = (...a) => { lines.push(a.join(" ")); };
+    for (let i = 0; i < 300; i++) { Game.time += 1; ops.tick(); }
+    console.log = saved.log;
+    const noOrder = lines.filter((l) => l.indexOf(made.id) >= 0 && /nenhuma ordem cobre o limite/.test(l));
+    const kept = Memory.terminalOps.operations[made.id].noCandidate;
+    assert(kept && /nenhuma ordem cobre o limite/.test(kept.reason) && kept.limit === 50 && kept.best && kept.best.price === 5 && kept.best.room === "OtherRoom" && typeof kept.best.effective === "number",
+        "0111: the last 'no order covers the limit' reason is kept on the operation itself (got " + JSON.stringify(kept) + ")");
+    const shown = JSON.parse(global.terminalOperation(made.id));
+    assert(shown.id === made.id && shown.noCandidate && shown.noCandidate.best.price === 5, "0111: terminalOperation(id) shows one operation with its noCandidate reason");
+    assert(/desconhecida/.test(global.terminalOperation("terminal-does-not-exist")), "0111: terminalOperation() on an unknown id says so instead of throwing");
+    // the stored reason follows the market even though the log line stays silent
+    const bookBefore = Game.market.getAllOrders;
+    Game.market.getAllOrders = () => [{ id: "b1", resourceType: "power", type: "buy", price: 7, remainingAmount: 1000, roomName: "OtherRoom" }];
+    const logsBefore = lines.length;
+    console.log = (...a) => { lines.push(a.join(" ")); };
+    for (let i = 0; i < 100; i++) { Game.time += 1; ops.tick(); }
+    console.log = saved.log;
+    assert(Memory.terminalOps.operations[made.id].noCandidate.best.price === 7 && lines.length === logsBefore,
+        "0111: the stored reason is refreshed as the book moves (price 5 -> " + Memory.terminalOps.operations[made.id].noCandidate.best.price + ") without printing again");
+    Game.market.getAllOrders = bookBefore;
+    assert(made.ok && noOrder.length >= 1 && noOrder.length <= 1, "0111: a sell nobody covers logs its 'no order covers the limit' line once, not every few ticks (got " + noOrder.length + " in 300 ticks)");
+    Game.time += 5000;
+    console.log = (...a) => { lines.push(a.join(" ")); };
+    const before = lines.filter((l) => l.indexOf(made.id) >= 0 && /nenhuma ordem cobre o limite/.test(l)).length;
+    for (let i = 0; i < 60; i++) { Game.time += 1; ops.tick(); }
+    console.log = saved.log;
+    const after = lines.filter((l) => l.indexOf(made.id) >= 0 && /nenhuma ordem cobre o limite/.test(l)).length;
+    assert(after === before, "0111: by default the line is never repeated for the same operation, however long it waits (" + before + " -> " + after + ")");
+    Memory.settings = Object.assign({}, saved.settings, { terminalOps: { noCandidateLogTicks: 600 } });
+    Game.time += 700;
+    console.log = (...a) => { lines.push(a.join(" ")); };
+    for (let i = 0; i < 60; i++) { Game.time += 1; ops.tick(); }
+    console.log = saved.log;
+    const repeated = lines.filter((l) => l.indexOf(made.id) >= 0 && /nenhuma ordem cobre o limite/.test(l)).length;
+    assert(repeated === after + 1, "0111: terminalOps.noCandidateLogTicks > 0 repeats the line once per window (" + after + " -> " + repeated + ")");
+    Game.rooms = saved.rooms; Game.market = saved.market; Game.creeps = saved.creeps; Memory.terminalOps = saved.ops; Memory.settings = saved.settings; Game.time = saved.time; market.snapshot = saved.snapshot;
+}
+
+// --- ROADMAP 0111: the planner's CPU bucket gate (default 500) ---------------
+{
+    for (const m of ["craftChain", "craftPlanner", "marketPricing", "marketFlip"]) delete require.cache[require.resolve(path.join(PROJECT, "src/utils/" + m))];
+    const craft = require(path.join(PROJECT, "src/utils/craftPlanner"));
+    const market = require(path.join(PROJECT, "src/utils/market"));
+    const saved = { rooms: Game.rooms, market: Game.market, creeps: Game.creeps, settings: Memory.settings, samples: market.samples, snapshot: market.snapshot,
+        craft: Memory.craft, bucket: Game.cpu.bucket, time: Game.time, memRooms: Memory.rooms, flip: Memory.marketFlip };
+    Game.time += 13000000;
+    market.samples = () => []; market.snapshot = () => ({ resources: {} });
+    Game.rooms = {}; Game.creeps = {}; Game.market = { credits: 1e6 };
+    Memory.rooms = {}; Memory.marketFlip = { lastScanTick: null, committedCredits: 0, active: {}, lastOpportunities: [], stats: {} };
+    const scansAt = (bucket, settings) => {
+        Memory.settings = Object.assign({}, saved.settings, { craft: Object.assign({ test: true }, settings || {}) });
+        Memory.craft = undefined; Game.cpu.bucket = bucket;
+        craft.resetScan(); Game.time += 1000; craft.tick();
+        return !!(Memory.craft && Memory.craft.lastScanTick);
+    };
+    assert(scansAt(499) === false, "0111: below craft.minBucket (default 500) the planner does not scan");
+    assert(scansAt(500) === true && scansAt(1767) === true, "0111: at or above 500 - e.g. the 1767 after a pixel - the planner scans");
+    assert(scansAt(1767, { minBucket: 3000 }) === false && scansAt(1767, { minBucket: 1000 }) === true, "0111: craft.minBucket overrides the default");
+    market.samples = saved.samples; market.snapshot = saved.snapshot; Game.rooms = saved.rooms; Game.market = saved.market; Game.creeps = saved.creeps;
+    Memory.settings = saved.settings; Memory.craft = saved.craft; Memory.rooms = saved.memRooms; Memory.marketFlip = saved.flip; Game.cpu.bucket = saved.bucket; Game.time = saved.time;
+}
+
+// --- ROADMAP 0111: craftConfig() and the maxCashAbsolute default --------------
+{
+    delete require.cache[require.resolve(path.join(PROJECT, "src/utils/craftPlanner"))];
+    require(path.join(PROJECT, "src/utils/craftPlanner"));
+    const configMod = require(path.join(PROJECT, "src/utils/config"));
+    const saved = Memory.settings;
+    Memory.settings = Object.assign({}, saved, { craft: undefined });
+    assert(configMod.get("craft.maxCashAbsolute") === 1000000, "0111: the default craft.maxCashAbsolute is 1000000 (got " + configMod.get("craft.maxCashAbsolute") + ")");
+    assert(JSON.parse(global.craftConfig()) && Object.keys(JSON.parse(global.craftConfig())).length === 0, "0111: craftConfig() lists nothing when no craft.* setting is overridden");
+    Memory.settings = Object.assign({}, saved, { craft: { maxCashAbsolute: 20000, minSamples: 30, brandNew: 7 } });
+    const shown = JSON.parse(global.craftConfig());
+    assert(shown.maxCashAbsolute.value === 20000 && shown.maxCashAbsolute.default === 1000000 && shown.maxCashAbsolute.overridden === true && shown.minSamples.value === 30 && shown.minSamples.default === 48,
+        "0111: craftConfig() shows each override against its default (got " + JSON.stringify(shown.maxCashAbsolute) + ")");
+    assert(Object.keys(shown).sort().join() === "brandNew,maxCashAbsolute,minSamples" && !("minBucket" in shown), "0111: craftConfig() lists only overrides, including keys that have no default");
+    const full = JSON.parse(global.craftConfig(true));
+    assert(full.minBucket.value === 500 && full.minBucket.overridden === false && full.maxCashAbsolute.overridden === true && Object.keys(full).length > 10,
+        "0111: craftConfig(true) lists every craft.* value with its source");
+    Memory.settings = saved;
+}
+
+// --- ROADMAP 0111: craftScan() forces a scan without waiting for the interval ---
+{
+    for (const m of ["craftChain", "craftPlanner", "marketPricing", "marketFlip"]) delete require.cache[require.resolve(path.join(PROJECT, "src/utils/" + m))];
+    const craft = require(path.join(PROJECT, "src/utils/craftPlanner"));
+    const market = require(path.join(PROJECT, "src/utils/market"));
+    const saved = { rooms: Game.rooms, market: Game.market, creeps: Game.creeps, settings: Memory.settings, samples: market.samples, snapshot: market.snapshot,
+        craft: Memory.craft, bucket: Game.cpu.bucket, time: Game.time, memRooms: Memory.rooms, flip: Memory.marketFlip, log: console.log };
+    Game.time += 14000000;
+    market.samples = () => []; market.snapshot = () => ({ resources: {} });
+    Game.rooms = {}; Game.creeps = {}; Game.market = { credits: 1e6 };
+    Memory.rooms = {}; Memory.marketFlip = { lastScanTick: null, committedCredits: 0, active: {}, lastOpportunities: [], stats: {} };
+    Memory.settings = Object.assign({}, saved.settings, { craft: { test: true, log: false } });
+    Memory.craft = undefined; Game.cpu.bucket = 5000;
+    craft.resetScan(); craft.tick();
+    const first = Memory.craft.lastScanTick;
+    Game.time += 5; craft.tick();
+    assert(Memory.craft.lastScanTick === first, "0111: without a force, a second tick inside craft.scanInterval does not scan again");
+    const said = [];
+    console.log = (...a) => { said.push(a.join(" ")); };
+    const answer = global.craftScan();
+    console.log = saved.log;
+    assert(/próximo tick/.test(answer) && said.some((l) => /\[craft\]/.test(l)), "0111: craftScan() says the scan was forced (got " + answer + ")");
+    Game.time += 1; craft.tick();
+    assert(Memory.craft.lastScanTick === Game.time && Memory.craft.lastScanTick > first && Memory.craft.rescanAt === undefined,
+        "0111: craftScan() makes the very next tick scan, inside the interval (scan at " + Memory.craft.lastScanTick + ", previous " + first + ")");
+    // the bucket gate still applies, and craftScan() warns about it
+    Game.cpu.bucket = 100;
+    console.log = () => {};
+    const warned = global.craftScan();
+    console.log = saved.log;
+    assert(/abaixo de craft.minBucket/.test(warned), "0111: craftScan() warns when the CPU bucket is below craft.minBucket (got " + warned + ")");
+    const before = Memory.craft.lastScanTick;
+    Game.time += 1; craft.tick();
+    assert(Memory.craft.lastScanTick === before, "0111: a forced scan is still skipped while the bucket is below craft.minBucket");
+    Game.cpu.bucket = 5000; Game.time += 1; craft.tick();
+    assert(Memory.craft.lastScanTick === Game.time, "0111: and it runs as soon as the bucket recovers");
+    market.samples = saved.samples; market.snapshot = saved.snapshot; Game.rooms = saved.rooms; Game.market = saved.market; Game.creeps = saved.creeps;
+    Memory.settings = saved.settings; Memory.craft = saved.craft; Memory.rooms = saved.memRooms; Memory.marketFlip = saved.flip; Game.cpu.bucket = saved.bucket; Game.time = saved.time;
+}
+
+// --- ROADMAP 0111: buy-side guards are only existence + depth; sell side keeps spread/volatility ---
+{
+    const pricing = pricingModule();
+    const market = require(path.join(PROJECT, "src/utils/market"));
+    const oldSamples = market.samples, oldSettings = Memory.settings;
+    Memory.settings = Object.assign({}, oldSettings);
+    const book = {};
+    market.samples = (rt) => book[rt] || [];
+    // a wild, wide-spread ask book: asks swing 80/140 (sigma ~27%), bids sit at 50 (spread ~2.2 on the median ask)
+    const wild = Array.from({ length: 72 }, (_, i) => ({ tick: i * 3600, buyPrice: 50, buyVolume: 1e9, sellPrice: i % 2 ? 140 : 80, sellVolume: 1e9 }));
+    book.IN = wild;
+    assert(pricing.buyLeg("IN", 140, 100).ok === true, "0111: an expensive ask in a volatile, wide-spread book still passes the buy leg - the cost is fixed at purchase (got " + JSON.stringify(pricing.buyLeg("IN", 140, 100)) + ")");
+    assert(pricing.liquidity("IN", 100, "sell").ok === false, "0111: the same wide spread blocks the SELL side (the sell leg keeps its spread guard)");
+    // what the buy leg DOES still require
+    book.IN = wild.slice(0, 10);
+    assert(pricing.buyLeg("IN", 140, 100).reason === "warming", "0111: a buy still needs enough samples");
+    book.IN = wild.map((r) => Object.assign({}, r, { sellVolume: 100 }));
+    assert(pricing.buyLeg("IN", 140, 100).reason === "depth", "0111: a buy still needs the ask book to hold the lot (depth)");
+    book.IN = wild.map((r, i) => (i % 3 ? r : Object.assign({}, r, { sellPrice: null })));
+    assert(pricing.buyLeg("IN", 140, 100).reason === "presence", "0111: a buy still needs the book to be present");
+    // input volatility no longer inflates the margin; the product's own sigma still does
+    book.IN = wild; book.OUT = priceSamples(1000, 1100, 72, 1e9); book.energy = priceSamples(1, 1.1, 72, 1e9);
+    const mk = () => ({ instant: (rt) => ({ bid: book[rt][0].buyPrice, ask: rt === "IN" ? 140 : book[rt][0].sellPrice }), stock: () => 0, canMake: () => true });
+    COMMODITIES.guardWidget = { level: 0, amount: 1, cooldown: 100, components: { IN: 10 } };
+    pricing.resetCaches();
+    book.guardWidget = priceSamples(1000, 1100, 72, 1e9);
+    const calm = pricing.evaluate("guardWidget", 10, Object.assign(mk(), { instant: (rt) => ({ bid: book[rt][0].buyPrice, ask: rt === "IN" ? 140 : book[rt][0].sellPrice }) }));
+    assert(calm.plan && calm.sigma === 0 && Math.abs(calm.margin - pricing.requiredMargin(0, calm.T)) < 1e-12,
+        "0111: volatile INPUTS add nothing to the margin sigma (got sigma " + (calm && calm.sigma) + ")");
+    book.guardWidget = priceSamples(1000, 1100, 72, 1e9).map((r, i) => Object.assign({}, r, { buyPrice: i % 2 ? 800 : 1200 }));
+    const risky = pricing.evaluate("guardWidget", 10, mk());
+    assert(risky.sigma > 0.15 && risky.margin > calm.margin, "0111: a volatile PRODUCT still raises the margin (sigma " + (risky.sigma && risky.sigma.toFixed(2)) + ")");
+    // sell-side volatility: 20% passes under the new 30% default, blocks under the old 15%
+    book.W = priceSamples(100, 110).map((r, i) => Object.assign({}, r, { buyPrice: i % 2 ? 80 : 120 }));
+    assert(pricing.liquidity("W", 100, "sell").ok === true, "0111: ~20% bid volatility now passes the sell side (default maxSigma 0.30)");
+    Memory.settings = Object.assign({}, oldSettings, { craft: { maxSigma: 0.15 } });
+    assert(pricing.liquidity("W", 100, "sell").reason === "volatility", "0111: craft.maxSigma can bring the old 15% limit back");
+    Memory.settings = Object.assign({}, oldSettings, { craft: { maxSpread: 1.3 } });
+    book.W = priceSamples(100, 150);
+    assert(pricing.liquidity("W", 100, "sell").reason === "spread", "0111: craft.maxSpread can bring the old 1.30 limit back");
+    delete COMMODITIES.guardWidget;
+    market.samples = oldSamples; Memory.settings = oldSettings; pricing.resetCaches();
+}
+
+// --- ROADMAP 0111: a running chain's feed jobs outrank the mineral container / energy -----
+{
+    Game.time += 15000000; // a tick no other block used: the hauler's per-tick caches start cold
+    const savedCraft = Memory.craft, savedRooms = Memory.rooms;
+    const cfMineral = Object.assign(new RoomObject(), { id: "cfMineral", mineralType: "O", mineralAmount: 3000, pos: new RoomPosition(10, 10, "ChainFeedRoom") });
+    const cfContainer = Object.assign(new StructureContainer(), { id: "cfContainer", structureType: STRUCTURE_CONTAINER, pos: new RoomPosition(10, 10, "ChainFeedRoom"), store: mineralStore({ O: 50 }, 1950) });
+    cfMineral.pos.findInRange = (type, range, opts) => {
+        let list = type === FIND_STRUCTURES ? [cfContainer] : [];
+        if (opts && typeof opts.filter === "function") list = list.filter(opts.filter);
+        return list;
+    };
+    const cfFactory = { id: "cfFactory", structureType: STRUCTURE_FACTORY, store: mineralStore({ energy: 600 }, 49400), pos: new RoomPosition(20, 20, "ChainFeedRoom") };
+    const cfStorage = { id: "cfStorage", store: mineralStore({ Z: 1500, energy: 40000 }, 900000) };
+    const cfRoom = { name: "ChainFeedRoom", storage: cfStorage, terminal: null, find: (type) => (type === FIND_MINERALS ? [cfMineral] : (type === FIND_STRUCTURES ? [cfFactory, cfContainer] : (type === FIND_MY_STRUCTURES ? [cfFactory] : []))) };
+    Memory.rooms = Object.assign({}, savedRooms, { ChainFeedRoom: { factoryProduct: "widgetA", factoryProductAuto: true, factoryEnergy: 600 } }); // as craftChain writes it
+    const pick = () => { Game.time++; return hauler.pickMineralJob(cfRoom); };
+    // no chain: the old order, mineral container first
+    Memory.craft = { active: {} };
+    let job = pick();
+    assert(job && job.kind === "mineralContainer" && !job.chain, "0111: without a running chain the mineral container still comes first (got " + (job && job.kind) + ")");
+    assert(hauler.pickChainFeedJob(cfRoom) === null, "0111: pickChainFeedJob() is null when no chain runs in the room");
+    // a chain runs in this room: the factory's missing input (Z in storage) is delivered first
+    Memory.craft = { active: { ChainFeedRoom: { product: "widgetA", state: "working" } } };
+    job = pick();
+    assert(job && job.kind === "factoryComponent" && job.resourceType === "Z" && job.to === cfFactory && job.from === cfStorage && job.chain === true,
+        "0111: while a chain runs, delivering its input to the factory beats draining the mineral container (got " + JSON.stringify(job && { k: job.kind, r: job.resourceType, chain: job.chain }) + ")");
+    // another room's chain does not change this room
+    Memory.craft = { active: { SomewhereElse: { product: "widgetA", state: "working" } } };
+    job = pick();
+    assert(job && job.kind === "mineralContainer", "0111: a chain in ANOTHER room does not reorder this room's jobs");
+    // input already there: nothing left to feed, so the chain does not block the rest of the cascade
+    Memory.craft = { active: { ChainFeedRoom: { product: "widgetA", state: "working" } } };
+    cfFactory.store = mineralStore({ energy: 600, Z: 20 }, 49380);
+    job = pick();
+    assert(job && job.kind === "mineralContainer", "0111: once the chain's inputs are in place, normal jobs resume (got " + (job && job.kind) + ")");
+    // the finished product is picked up ahead of everything else too
+    cfFactory.store = mineralStore({ energy: 600, Z: 20, widgetA: 40 }, 49340);
+    job = pick();
+    assert(job && job.kind === "factoryOutput" && job.resourceType === "widgetA" && job.chain === true, "0111: a running chain's product is collected before other mineral work (got " + (job && job.kind) + ")");
+    // leftovers in the factory are drained promptly while the chain runs (the end-of-chain flags are already cleared)
+    Memory.rooms.ChainFeedRoom = {};
+    cfFactory.store = mineralStore({ energy: 600, widgetA: 40 }, 49360);
+    job = pick();
+    assert(job && job.kind === "transientDrain" && job.chain === true, "0111: with the chain's flags cleared, what is left in the factory is drained first, not last (got " + (job && job.kind) + ")");
+    Memory.craft = savedCraft; Memory.rooms = savedRooms;
+}
+
+
+// --- ROADMAP 0111: several haulers may do non-energy work at once ------------------------
+{
+    const nel = require(path.join(PROJECT, "src/utils/nonEnergyLogistics"));
+    const savedCreeps = Game.creeps, savedSettings = Memory.settings, savedTime = Game.time;
+    Game.time += 16000000;
+    const mk = (name, extra) => ({ name, room: { name: "NelRoom" }, memory: Object.assign({ role: "hauler" }, extra || {}), store: { getUsedCapacity: () => 0 } });
+    const a = mk("nelA", { mineralJob: { kind: "mineralContainer", resourceType: "O" } }), b = mk("nelB"), c = mk("nelC");
+    const nelRoom = { name: "NelRoom" };
+    Game.creeps = { nelA: a, nelB: b, nelC: c };
+    Memory.settings = Object.assign({}, savedSettings);
+    assert(nel.claim(b) === true && nel.claim(c) === true && nel.isOwner(b) === true,
+        "0111: a hauler may take non-energy work while another already holds a job - there is no exclusive owner any more");
+    assert(nel.keepsEnergyHauler(nelRoom) === true, "0111: with 1 of 3 haulers on non-energy work, the tiers that outrank energy may still take another");
+    b.memory.mineralJob = { kind: "labReagent", resourceType: "H" };
+    assert(nel.keepsEnergyHauler(nelRoom) === false, "0111: with 2 of 3 haulers busy the last one is kept on energy (the pressured/chain tiers stand down)");
+    delete a.memory.mineralJob; delete b.memory.mineralJob;
+    Game.creeps = { nelA: a };
+    Game.time++; // census rebuilds its per-room lists once per tick
+    assert(nel.keepsEnergyHauler(nelRoom) === false, "0111: a room's only hauler is never pulled off energy by those tiers");
+    // a hard cap can still be asked for
+    a.memory.mineralJob = { kind: "mineralContainer", resourceType: "O" };
+    Game.creeps = { nelA: a, nelB: b, nelC: c };
+    Game.time++;
+    Memory.settings = Object.assign({}, savedSettings, { mineralHauler: { maxConcurrent: 1 } });
+    assert(nel.claim(b) === false, "0111: mineralHauler.maxConcurrent > 0 restores a hard cap");
+    Game.creeps = savedCreeps; Memory.settings = savedSettings; Game.time = savedTime;
+}
+{
+    // two different reagents feed two labs in parallel, never the same one twice
+    Game.time += 17000000;
+    const savedRooms = Memory.rooms, savedCreeps = Game.creeps, savedGet = Game.getObjectById;
+    const labs = {
+        ftLab1: { id: "ftLab1", structureType: STRUCTURE_LAB, store: mineralStore({}, 3000), pos: new RoomPosition(11, 11, "FeedTakenRoom") },
+        ftLab2: { id: "ftLab2", structureType: STRUCTURE_LAB, store: mineralStore({}, 3000), pos: new RoomPosition(12, 11, "FeedTakenRoom") },
+        ftLab3: { id: "ftLab3", structureType: STRUCTURE_LAB, store: mineralStore({}, 3000), pos: new RoomPosition(11, 12, "FeedTakenRoom") },
+    };
+    Game.getObjectById = (id) => labs[id] || savedGet.call(Game, id);
+    const ftRoom = { name: "FeedTakenRoom", storage: { id: "ftStorage", store: mineralStore({ H: 5000, O: 5000 }, 900000) }, terminal: null, find: () => [] };
+    Memory.rooms = Object.assign({}, savedRooms, { FeedTakenRoom: { labReaction: { a: "H", b: "O", product: "OH", output: "ftLab3", input1: "ftLab1", input2: "ftLab2" } } });
+    const hauler1 = { name: "ftH1", room: { name: "FeedTakenRoom" }, memory: { role: "hauler" }, store: { getUsedCapacity: () => 0 } };
+    const hauler2 = { name: "ftH2", room: { name: "FeedTakenRoom" }, memory: { role: "hauler" }, store: { getUsedCapacity: () => 0 } };
+    Game.creeps = { ftH1: hauler1, ftH2: hauler2 };
+    const pick = () => { Game.time++; return hauler.pickMineralJob(ftRoom); };
+    const first = pick();
+    assert(first && first.kind === "labReagent" && first.resourceType === "H" && first.to === labs.ftLab1, "0111: the first idle hauler gets the first reagent (got " + JSON.stringify(first && { k: first.kind, r: first.resourceType }) + ")");
+    hauler1.memory.mineralJob = { kind: "labReagent", resourceType: "H", fromId: "ftStorage", toId: "ftLab1", loaded: false };
+    const second = pick();
+    assert(second && second.kind === "labReagent" && second.resourceType === "O" && second.to === labs.ftLab2,
+        "0111: the next idle hauler takes the OTHER reagent instead of duplicating the first (got " + JSON.stringify(second && { k: second.kind, r: second.resourceType }) + ")");
+    hauler2.memory.mineralJob = { kind: "labReagent", resourceType: "O", fromId: "ftStorage", toId: "ftLab2", loaded: false };
+    assert(pick() === null, "0111: with both reagents already being carried there is nothing left to hand out");
+    delete hauler1.memory.mineralJob;
+    const again = pick();
+    assert(again && again.resourceType === "H", "0111: the job comes back once the hauler that held it is done");
+    Memory.rooms = savedRooms; Game.creeps = savedCreeps; Game.getObjectById = savedGet;
+}
+
+// --- ROADMAP 0111: one chain per structure KIND per room - factory and labs side by side ---
+{
+    for (const m of ["craftChain", "craftPlanner", "marketPricing", "marketFlip"]) delete require.cache[require.resolve(path.join(PROJECT, "src/utils/" + m))];
+    const craft = require(path.join(PROJECT, "src/utils/craftPlanner"));
+    const chainMod = require(path.join(PROJECT, "src/utils/craftChain"));
+    const market = require(path.join(PROJECT, "src/utils/market"));
+    const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
+    const labSlots = require(path.join(PROJECT, "src/utils/labSlots"));
+    const saved = { rooms: Game.rooms, market: Game.market, creeps: Game.creeps, settings: Memory.settings, samples: market.samples, snapshot: market.snapshot,
+        craft: Memory.craft, bucket: Game.cpu.bucket, time: Game.time, buy: terminalOps.buy, sell: terminalOps.sell, cancel: terminalOps.cancel, memRooms: Memory.rooms,
+        flip: Memory.marketFlip, ops: Memory.terminalOps, getObj: Game.getObjectById };
+    Game.cpu.bucket = 10000;
+    Game.time += 18000000;
+    const quotes = { Z: [100, 110], H: [10, 11], O: [10, 11], energy: [1, 1.1], widgetA: [5000, 5400], OH: [60, 70] };
+    market.samples = (rt) => (quotes[rt] ? priceSamples(quotes[rt][0], quotes[rt][1], 72, 1e9) : []);
+    market.snapshot = () => ({ resources: Object.keys(quotes).reduce((acc, rt) => { acc[rt] = { currentBuy: quotes[rt][0], currentSell: quotes[rt][1] }; return acc; }, {}) });
+    const factory = { id: "pf1", structureType: STRUCTURE_FACTORY, store: { widgetA: 0 }, effects: [] };
+    const mkLab = (slot) => ({ id: "pl" + slot, structureType: STRUCTURE_LAB, store: { OH: 0 }, mineralType: null, pos: { x: 10 + labSlots.OFFSETS[slot][1], y: 10 + labSlots.OFFSETS[slot][0] } });
+    const labs = [mkLab(1), mkLab(2), mkLab(3)];
+    const byId = {}; labs.forEach((l) => { byId[l.id] = l; });
+    Game.getObjectById = (id) => byId[id] || null;
+    const room = { name: "ParRoom", controller: { my: true }, storage: { store: { energy: 500000 } }, terminal: { store: {} }, find: () => [factory].concat(labs) };
+    let calls, nextOp;
+    terminalOps.buy = (r, rt, qty, limit) => { const id = "pb" + nextOp++; calls.buy.push({ rt, qty, id }); Memory.terminalOps.operations[id] = { id, state: "queued" }; return { ok: true, id }; };
+    terminalOps.sell = () => ({ ok: true, id: "ps" + nextOp++ });
+    terminalOps.cancel = (id) => { calls.cancel.push(id); if (Memory.terminalOps.operations[id]) Memory.terminalOps.operations[id].state = "cancelled"; return { ok: true }; };
+    const reset = (settings) => {
+        calls = { buy: [], cancel: [] }; nextOp = 1;
+        Game.rooms = { ParRoom: room };
+        Game.creeps = { h1: { room: { name: "ParRoom" }, memory: { role: "hauler" } } };
+        Game.market = { credits: 1e8 };
+        Memory.settings = Object.assign({}, saved.settings, { craft: Object.assign({ test: false }, settings || {}) });
+        Memory.rooms = {}; Memory.craft = undefined;
+        Memory.marketFlip = { lastScanTick: null, committedCredits: 0, active: {}, lastOpportunities: [], stats: { completed: 0, netProfit: 0, cancelled: 0, guardrailBlocked: 0 } };
+        Memory.terminalOps = { nextId: 1, operations: {}, seenIncoming: {}, events: [], terminalBalance: {} };
+        factory.store = { widgetA: 0 }; room.storage.store = { energy: 500000 };
+        labs.forEach((l) => { l.store = { OH: 0 }; l.mineralType = null; });
+        labSlots.resetCache(); craft.resetScan(); craft.resetLog();
+    };
+    const run = (settings) => { reset(settings); Game.time += 1000; craft.tick(); return Memory.craft; };
+    const step = (n) => { for (let i = 0; i < (n || 1); i++) { Game.time += 1; craft.tick(); } };
+    const completeBuys = () => calls.buy.forEach((b) => { const op = Memory.terminalOps.operations[b.id]; op.state = "completed"; op.dealtAmount = b.qty; });
+
+    // default: no global cap - the room's factory AND its labs each get a chain in the same scan
+    let mem = run();
+    const keys = Object.keys(mem.active);
+    const byKind = (kind) => keys.map((k) => mem.active[k]).find((c) => c.kinds.join() === kind);
+    assert(keys.length === 2 && byKind("factory") && byKind("lab") && byKind("factory").room === "ParRoom" && byKind("lab").room === "ParRoom",
+        "0111: one room runs a factory chain and a lab chain at the same time (got " + JSON.stringify(keys.map((k) => [k, mem.active[k].kinds, mem.active[k].product])) + ")");
+    assert(new Set(keys).size === 2 && keys.indexOf("ParRoom") >= 0 && keys.some((k) => /^ParRoom:/.test(k)) && keys.every((k) => mem.active[k].key === k),
+        "0111: the first chain of a room keeps the room name as its key, the second gets the kind appended");
+    assert(calls.buy.some((b) => b.rt === "Z") && calls.buy.some((b) => b.rt === "H") && calls.buy.some((b) => b.rt === "O"), "0111: each chain buys its own inputs");
+    assert(Memory.marketFlip.committedCredits > 0, "0111: both chains reserve credits in the shared budget");
+    // the same kind never runs twice in a room, however many scans pass
+    const buysAfterOpen = calls.buy.length;
+    craft.resetScan(); Game.time += 400; craft.tick();
+    craft.resetScan(); Game.time += 400; craft.tick();
+    assert(calls.buy.length === buysAfterOpen && Object.keys(Memory.craft.active).length === 2, "0111: a structure kind that already runs a chain is not given a second one");
+    // flags are per structure: finishing the factory step must not touch the lab reaction
+    completeBuys();
+    step(2);
+    const mr = () => Memory.rooms.ParRoom;
+    const fchain = byKind("factory"), lchain = byKind("lab");
+    assert(mr().factoryProduct === "widgetA" && mr().factoryProductAuto === true && mr().labReaction && mr().labReaction.product === "OH" && mr().labReactionAuto === true,
+        "0111: the factory and the labs are configured side by side (got " + JSON.stringify({ f: mr().factoryProduct, l: mr().labReaction && mr().labReaction.product }) + ")");
+    assert(mr().directToTerminal === undefined, "0111: chains no longer ask for the terminal shortcut, so two chains in one room share no single-valued flag");
+    factory.store.widgetA = fchain.queue[0].target;
+    step();
+    assert(fchain.state === "selling" && !mr().factoryProduct && !mr().factoryProductAuto && !mr().factoryEnergy,
+        "0111: finishing the factory step clears the factory's flags...");
+    assert(mr().labReaction && mr().labReaction.product === "OH" && mr().labReactionAuto === true && lchain.state === "working",
+        "0111: ...and leaves the lab chain's reaction exactly as it was (got " + JSON.stringify(mr().labReaction) + ")");
+    // aborting one chain frees only its own structure
+    chainMod.cancelRoom("ParRoom");
+    assert(Object.keys(Memory.craft.active).length === 0 && !mr().labReaction && Memory.marketFlip.committedCredits === 0,
+        "0111: craftCancel(room) aborts every chain of the room and frees all their credits");
+    // a manual pin blocks only its own structure kind
+    reset(); Memory.rooms = { ParRoom: { factoryProduct: "widgetA" } }; Game.time += 1000; craft.tick();
+    mem = Memory.craft;
+    assert(Object.keys(mem.active).length === 1 && Object.keys(mem.active).map((k) => mem.active[k].kinds.join())[0] === "lab" && Memory.rooms.ParRoom.factoryProductAuto === undefined,
+        "0111: a manual factory pin leaves the labs free to run a chain and stays untouched");
+    // only the factory is busy (the labs are pinned by hand, so no lab chain exists): a second chain for the SAME
+    // structure kind must not open, scan after scan - the room is not skipped, the per-kind rule has to hold it
+    reset(); Memory.rooms = { ParRoom: { labReaction: { a: "H", b: "O", product: "OH", output: "pl3", input1: "pl1", input2: "pl2" } } };
+    Game.time += 1000; craft.tick();
+    mem = Memory.craft;
+    assert(Object.keys(mem.active).length === 1 && mem.active.ParRoom && mem.active.ParRoom.kinds.join() === "factory", "0111: with the labs pinned, only a factory chain opens");
+    const buysSoFar = calls.buy.length;
+    craft.resetScan(); Game.time += 400; craft.tick();
+    craft.resetScan(); Game.time += 400; craft.tick();
+    assert(calls.buy.length === buysSoFar && Object.keys(Memory.craft.active).length === 1,
+        "0111: a second chain for the SAME structure kind never opens while the first runs, even though the room still has the other kind free (buys " + buysSoFar + " -> " + calls.buy.length + ")");
+    // the optional global cap still works when asked for
+    mem = run({ maxActive: 1 });
+    assert(Object.keys(mem.active).length === 1, "0111: craft.maxActive > 0 still caps the number of chains in total (got " + Object.keys(mem.active).length + ")");
+    // a chain stored before kinds/key existed is still understood (derived from its queue)
+    reset();
+    room.storage.store = { energy: 500000, widgetA: 10 };
+    // as the previous version stored it: no `key`, no `kinds`; waiting for a bid above its floor
+    Memory.craft = { active: { ParRoom: { id: "old", room: "ParRoom", product: "widgetA", qty: 10, produced: 10, state: "selling", stateTick: Game.time, sellStart: Game.time,
+        queue: [{ kind: "factory", product: "widgetA", started: true, base: 0, target: 10 }], qi: 1, buys: {}, est: { spend: 0, cash: 0, cost: 0, revenue: 0, profit: 0, floor: 1e9 }, holds: {}, reserved: 0 } } };
+    assert(chainMod.busyKinds("ParRoom").factory === true && chainMod.busyKinds("ParRoom").lab === false && chainMod.kindsOf(Memory.craft.active.ParRoom).join() === "factory",
+        "0111: a chain saved by the previous version still counts as occupying its structure");
+    Game.time += 1000; craft.tick();
+    assert(Object.keys(Memory.craft.active).some((k) => Memory.craft.active[k].kinds && Memory.craft.active[k].kinds.join() === "lab"),
+        "0111: the labs of a room whose factory runs an old-format chain still get their own chain");
+
+    terminalOps.buy = saved.buy; terminalOps.sell = saved.sell; terminalOps.cancel = saved.cancel; Game.getObjectById = saved.getObj;
+    market.samples = saved.samples; market.snapshot = saved.snapshot; Game.rooms = saved.rooms; Game.market = saved.market; Game.creeps = saved.creeps;
+    Memory.settings = saved.settings; Memory.craft = saved.craft; Memory.rooms = saved.memRooms; Memory.marketFlip = saved.flip; Memory.terminalOps = saved.ops;
+    Game.cpu.bucket = saved.bucket; Game.time = saved.time; labSlots.resetCache();
+}
+
+// --- ROADMAP 0111: a BUY parked in "waiting" keeps its stored reason current (and stays quiet) ---
+{
+    delete require.cache[require.resolve(path.join(PROJECT, "src/utils/terminalOps"))];
+    const ops = require(path.join(PROJECT, "src/utils/terminalOps"));
+    const market = require(path.join(PROJECT, "src/utils/market"));
+    const saved = { rooms: Game.rooms, market: Game.market, creeps: Game.creeps, ops: Memory.terminalOps, settings: Memory.settings, time: Game.time, snapshot: market.snapshot, log: console.log };
+    Game.time += 19000000;
+    market.snapshot = () => ({ resources: { power: { buyPrice: 10, sellPrice: 11, fairPrice: 10.5 }, energy: { fairPrice: 1 } } });
+    const room = {
+        name: "WaitRoom", controller: { my: true }, find: () => [],
+        storage: { id: "wst", store: { power: 0, energy: 1e5, getFreeCapacity: () => 1e6, getUsedCapacity: () => 1e5, getCapacity: () => 1e6 } },
+        terminal: { id: "wtm", cooldown: 0, store: { power: 0, energy: 5e4, getFreeCapacity: () => 1e5, getUsedCapacity: () => 5e4, getCapacity: () => 3e5 } },
+    };
+    let askPrice = 20;
+    Game.rooms = { WaitRoom: room }; Game.creeps = { h1: { room: { name: "WaitRoom" }, memory: { role: "hauler" }, store: { getUsedCapacity: () => 0 } } };
+    Game.market = { credits: 1e6, incomingTransactions: [], calcTransactionCost: () => 1, getAllOrders: () => [{ id: "a1", resourceType: "power", type: "sell", price: askPrice, remainingAmount: 1000, roomName: "FarRoom" }] };
+    Memory.settings = Object.assign({}, saved.settings);
+    Memory.terminalOps = { nextId: 1, operations: {}, seenIncoming: {}, events: [], terminalBalance: {} };
+    const made = ops.buy("WaitRoom", "power", 100, 5, false, true); // limit 5: nobody sells that cheap (asks start at 20)
+    const lines = [];
+    console.log = (...a) => { lines.push(a.join(" ")); };
+    for (let i = 0; i < 30; i++) { Game.time += 1; ops.tick(); }
+    const op = Memory.terminalOps.operations[made.id];
+    assert(made.ok && op.state === "waiting" && op.noCandidate && op.noCandidate.best.price === 20, "0111: a buy nobody can fill parks in waiting with its reason stored (got " + JSON.stringify(op.noCandidate) + ")");
+    // an operation that entered "waiting" with no stored reason (an older build) gets one
+    delete op.noCandidate;
+    for (let i = 0; i < 70; i++) { Game.time += 1; ops.tick(); }
+    assert(op.state === "waiting" && op.noCandidate && op.noCandidate.best.price === 20, "0111: a buy already in waiting gets its missing reason back (got " + JSON.stringify(op.noCandidate) + ")");
+    // and it follows the book while it waits, without printing again (the capture is off while asserting)
+    console.log = saved.log;
+    askPrice = 30;
+    const printedBefore = lines.length;
+    console.log = (...a) => { lines.push(a.join(" ")); };
+    for (let i = 0; i < 100; i++) { Game.time += 1; ops.tick(); }
+    console.log = saved.log;
+    assert(op.noCandidate.best.price === 30 && lines.length === printedBefore, "0111: the stored reason follows the book while the buy waits, and prints nothing more (price " + op.noCandidate.best.price + ", new lines " + JSON.stringify(lines.slice(printedBefore).map((l) => l.slice(0, 160))) + ")");
+    Game.rooms = saved.rooms; Game.market = saved.market; Game.creeps = saved.creeps; Memory.terminalOps = saved.ops; Memory.settings = saved.settings; Game.time = saved.time; market.snapshot = saved.snapshot;
+}
+
+
+// --- ROADMAP 0111: break-even purchase limits, shared inputs, idle-buy abort ---------------
+{
+    for (const m of ["craftChain", "craftPlanner", "marketPricing", "marketFlip"]) delete require.cache[require.resolve(path.join(PROJECT, "src/utils/" + m))];
+    const craft = require(path.join(PROJECT, "src/utils/craftPlanner"));
+    const market = require(path.join(PROJECT, "src/utils/market"));
+    const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
+    const saved = { rooms: Game.rooms, market: Game.market, creeps: Game.creeps, settings: Memory.settings, samples: market.samples, snapshot: market.snapshot,
+        craft: Memory.craft, bucket: Game.cpu.bucket, time: Game.time, buy: terminalOps.buy, sell: terminalOps.sell, cancel: terminalOps.cancel,
+        memRooms: Memory.rooms, flip: Memory.marketFlip, ops: Memory.terminalOps };
+    Game.cpu.bucket = 10000;
+    Game.time += 20000000;
+    const quotes = { Z: [100, 110], energy: [1, 1.1], widgetA: [5000, 5400] };
+    market.samples = (rt) => (quotes[rt] ? priceSamples(quotes[rt][0], quotes[rt][1], 72, 1e9) : []);
+    market.snapshot = () => ({ resources: Object.keys(quotes).reduce((acc, rt) => { acc[rt] = { currentBuy: quotes[rt][0], currentSell: quotes[rt][1] }; return acc; }, {}) });
+    const mkRoom = (name) => {
+        const factory = { id: "lf-" + name, structureType: STRUCTURE_FACTORY, store: { widgetA: 0 }, effects: [] };
+        return { name, controller: { my: true }, storage: { store: { energy: 500000 } }, terminal: { store: {} }, find: () => [factory], factory };
+    };
+    const roomA = mkRoom("LimRoom"), roomB = mkRoom("LimRoom2");
+    let calls, nextOp;
+    terminalOps.buy = (r, rt, qty, limit) => { const id = "lb" + nextOp++; calls.buy.push({ r, rt, qty, limit, id }); Memory.terminalOps.operations[id] = { id, state: "queued" }; return { ok: true, id }; };
+    terminalOps.sell = () => ({ ok: true, id: "ls" + nextOp++ });
+    terminalOps.cancel = (id) => { calls.cancel.push(id); if (Memory.terminalOps.operations[id]) Memory.terminalOps.operations[id].state = "cancelled"; return { ok: true }; };
+    const reset = (settings, bid, rooms) => {
+        calls = { buy: [], cancel: [] }; nextOp = 1;
+        quotes.widgetA = [bid === undefined ? 5000 : bid, bid === undefined ? 5400 : bid * 1.08];
+        const list = rooms || [roomA];
+        Game.rooms = {}; Game.creeps = {};
+        list.forEach((r, i) => { Game.rooms[r.name] = r; Game.creeps["lh" + i] = { room: { name: r.name }, memory: { role: "hauler" } }; });
+        Game.market = { credits: 1e8 };
+        Memory.settings = Object.assign({}, saved.settings, { craft: Object.assign({ test: false }, settings || {}) });
+        Memory.rooms = {}; Memory.craft = undefined;
+        Memory.marketFlip = { lastScanTick: null, committedCredits: 0, active: {}, lastOpportunities: [], stats: { completed: 0, netProfit: 0, cancelled: 0, guardrailBlocked: 0 } };
+        Memory.terminalOps = { nextId: 1, operations: {}, seenIncoming: {}, events: [], terminalBalance: {} };
+        list.forEach((r) => { r.factory.store = { widgetA: 0 }; r.storage.store = { energy: 500000 }; });
+        craft.resetScan(); craft.resetLog();
+    };
+    const run = (settings, bid, rooms) => { reset(settings, bid, rooms); Game.time += 1000; craft.tick(); return Memory.craft; };
+    const only = (mem) => mem.active[Object.keys(mem.active)[0]];
+
+    // thin profit: the limit rises by a share of the chain's break-even headroom, between the floor and the cap
+    let mem = run({}, 2500);
+    let chain = only(mem);
+    const cand = mem.candidates.find((c) => c.product === "widgetA");
+    const q = chain.buys.Z.qty, ask = 110;
+    const headroom = Math.max(0, cand.revenue / (1 + cand.margin) - cand.cost);
+    const expected = ask * 1.02 + headroom * 0.5 / 1 / q;
+    assert(chain && Math.abs(chain.buys.Z.limit - expected) < 0.5 && chain.buys.Z.limit > ask * 1.02 && chain.buys.Z.limit < ask * 1.5 && calls.buy[0].limit === chain.buys.Z.limit,
+        "0111: the purchase limit is ask+2% plus half the chain's break-even headroom (expected " + expected.toFixed(2) + ", got " + (chain && chain.buys.Z.limit) + ")");
+    assert(Math.abs(chain.reserved - (chain.est.spend + q * (chain.buys.Z.limit - ask))) < 250,
+        "0111 AC5: the reservation is the planned spend plus what the limit could add (" + chain.reserved + " vs " + (chain.est.spend + q * (chain.buys.Z.limit - ask)) + ")");
+    // the limit can never put the chain under its own margin: paying the limit on every unit keeps the ratio at or above it
+    const worstCost = cand.cost + q * (chain.buys.Z.limit - ask);
+    assert((cand.revenue - worstCost) / worstCost >= cand.margin - 1e-3,
+        "0111: buying at the limit still leaves the chain above its required margin (" + ((cand.revenue - worstCost) / worstCost).toFixed(4) + " >= " + cand.margin + ")");
+    // headroom use 0: back to ask + 2% exactly
+    mem = run({ buyHeadroomUse: 0 }, 2500);
+    assert(Math.abs(only(mem).buys.Z.limit - ask * 1.02) < 1e-9, "0111: craft.buyHeadroomUse 0 keeps the limit at ask + craft.buySlack");
+    // premium cap
+    mem = run({ maxBuyPremium: 0.03 }, 5000);
+    assert(only(mem).buys.Z.limit <= ask * 1.03 + 1e-9 && only(mem).buys.Z.limit >= ask * 1.02, "0111: craft.maxBuyPremium caps the limit however much headroom there is (got " + only(mem).buys.Z.limit + ")");
+    // ceilings: what the limits could add never pushes past maxCashAbsolute / maxChainRatio
+    for (const [label, settings] of [["maxCashAbsolute", { maxCashAbsolute: 60000 }], ["maxChainRatio", { maxChainRatio: 0.0006 }]]) {
+        mem = run(settings, 5000);
+        chain = only(mem);
+        const qz = chain.buys.Z.qty, slackCost = qz * ask * 0.02;
+        const used = qz * (chain.buys.Z.limit - ask) - slackCost; // what the limit adds beyond the fixed slack
+        const room = Math.max(0, 60000 - chain.est.spend - slackCost);
+        assert(used > 0 && used <= room + 1 && used < qz * ask * 0.25,
+            "0111: " + label + " clamps how far the limit can rise - it uses the room under the ceiling, not the premium cap (used " + used.toFixed(0) + ", room " + room.toFixed(0) + ")");
+        assert(chain.reserved <= 60000 + slackCost + 1, "0111 AC5: with " + label + " the reservation stays under the ceiling (reserved " + chain.reserved.toFixed(0) + ")");
+    }
+    // the planner leaves that room: the lot is sized below the ceiling, not at it
+    mem = run({ maxCashAbsolute: 60000, test: true }, 5000);
+    const sized = mem.candidates.find((c) => c.product === "widgetA");
+    assert(sized.spend <= 60000 / 1.15 + 1 && sized.spend > 60000 / 1.15 * 0.9, "0111: the lot is sized to ceiling / (1 + priceDriftReserve), leaving room for the limits (spend " + sized.spend + ")");
+    mem = run({ maxCashAbsolute: 60000, test: true, priceDriftReserve: 0 }, 5000);
+    assert(mem.candidates.find((c) => c.product === "widgetA").spend > 60000 * 0.9, "0111: craft.priceDriftReserve 0 sizes the lot to the whole ceiling again");
+
+    // two chains on the same input are not opened in the same scan, and the second waits for the first to stop buying it
+    mem = run({}, 5000, [roomA, roomB]);
+    assert(Object.keys(mem.active).length === 1 && mem.active.LimRoom && mem.discards["shared-input:Z"] > 0 && calls.buy.length === 1,
+        "0111: two candidates on the same input open one chain in a scan, the other waits (active " + Object.keys(mem.active) + ", discards " + JSON.stringify(mem.discards) + ")");
+    const firstOp = Memory.terminalOps.operations[calls.buy[0].id];
+    firstOp.state = "completed"; firstOp.dealtAmount = calls.buy[0].qty;
+    Game.time += 1; craft.tick();
+    assert(mem.active.LimRoom.state === "working", "0111: the first chain leaves 'buying' once its input arrives");
+    craft.resetScan(); Game.time += 400; craft.tick();
+    assert(Object.keys(Memory.craft.active).sort().join() === "LimRoom,LimRoom2" && calls.buy.length === 2,
+        "0111: with the input no longer being bought, the second chain opens on the next scan (active " + Object.keys(Memory.craft.active) + ")");
+    // a different input does not clash (a chain buying Z does not hold back one that buys something else)
+    reset({}, 5000, [roomA, roomB]);
+    Game.time += 1000;
+    Memory.craft = { active: { OtherRoom: { id: "x", room: "OtherRoom", key: "OtherRoom", kinds: ["factory"], product: "p", state: "buying", buys: { H: { opId: "none", qty: 1 } }, queue: [{ kind: "factory" }], est: { spend: 0, profit: 0 }, holds: {}, reserved: 0, openedTick: Game.time, stateTick: Game.time } } };
+    craft.resetScan(); craft.tick();
+    assert(Object.keys(Memory.craft.active).indexOf("LimRoom") >= 0, "0111: an input being bought for another product (H) does not hold back a chain that buys Z");
+
+    // idle abort: nothing traded at all for buyIdleAbortTicks releases the credits instead of waiting for the stall guard
+    mem = run({ buyIdleAbortTicks: 100 }, 5000);
+    chain = only(mem);
+    Memory.terminalOps.operations[calls.buy[0].id].state = "waiting";
+    Game.time += 50; craft.tick();
+    assert(Memory.craft.active.LimRoom && Memory.marketFlip.committedCredits > 0, "0111 P6: a buy with no trade yet is still waited on inside buyIdleAbortTicks");
+    Game.time += 80; craft.tick();
+    assert(!Memory.craft.active.LimRoom && Memory.craft.stats.aborted === 1 && Memory.marketFlip.committedCredits === 0 && calls.cancel.indexOf(calls.buy[0].id) >= 0,
+        "0111 P6: past buyIdleAbortTicks with nothing traded the chain aborts, cancels the order and frees every reserved credit");
+    // a buy that traded something is left to buyPatienceTicks instead (partial fill), never to the idle abort
+    mem = run({ buyIdleAbortTicks: 100, buyPatienceTicks: 5000 }, 5000);
+    Object.assign(Memory.terminalOps.operations[calls.buy[0].id], { state: "waiting", dealtAmount: 10 });
+    Game.time += 1; craft.tick();
+    Game.time += 300; craft.tick();
+    assert(Memory.craft.active.LimRoom && Memory.craft.stats.aborted === 0, "0111 P6: a buy that already traded is never aborted by the idle rule (that is the patience rule's case)");
+
+    terminalOps.buy = saved.buy; terminalOps.sell = saved.sell; terminalOps.cancel = saved.cancel;
+    market.samples = saved.samples; market.snapshot = saved.snapshot; Game.rooms = saved.rooms; Game.market = saved.market; Game.creeps = saved.creeps;
+    Memory.settings = saved.settings; Memory.craft = saved.craft; Memory.rooms = saved.memRooms; Memory.marketFlip = saved.flip; Memory.terminalOps = saved.ops;
+    Game.cpu.bucket = saved.bucket; Game.time = saved.time;
+}
+
+// --- ROADMAP 0111: the final reaction runs wide (every lab that reaches both inputs reacts) ---
+{
+    const labSlots = require(path.join(PROJECT, "src/utils/labSlots"));
+    const slots10 = labSlots.SLOT_NUMBERS.slice(), slots6 = [1, 2, 3, 4, 5, 6], slots3 = [1, 2, 3];
+    // finalOutputs: out first, never an input, every one reaches both inputs
+    const f10 = labSlots.finalOutputs(slots10, [1, 2], 3);
+    assert(f10.length === 8 && f10[0] === 3 && f10.indexOf(1) < 0 && f10.indexOf(2) < 0 && f10.every((s) => labSlots.reaches(s, 1, 2)) && f10.slice(1).join() === f10.slice(1).slice().sort((a, b) => a - b).join(),
+        "0111: on 10 labs with the centre pair as inputs the final reaction has 8 output labs, planned output first (got " + f10 + ")");
+    assert(labSlots.finalOutputs(slots6, [1, 2], 3).join() === "3,4,5,6", "0111: on 6 labs (RCL 7) the final reaction has 4 output labs");
+    assert(labSlots.finalOutputs(slots3, [1, 2], 3).join() === "3", "0111: on 3 labs (RCL 6) there is just the one output lab");
+    const fTree = labSlots.finalOutputs(slots10, [3, 6], 7);
+    assert(fTree[0] === 7 && fTree.every((s) => s === 7 || (labSlots.reaches(s, 3, 6) && s !== 3 && s !== 6)), "0111: for another input pair only the labs that reach BOTH inputs qualify (got " + fTree + ")");
+
+    // lab.js: every listed output lab reacts on its own cooldown; inputs and unlisted labs do not
+    const labMod = require(path.join(PROJECT, "src/structures/lab"));
+    const savedRooms = Memory.rooms, savedGet = Game.getObjectById;
+    const mkReactLab = (id) => ({ id, room: { name: "WideLabRoom" }, cooldown: 0, ran: 0, runReaction(a, b) { this.ran++; this.args = [a.id, b.id]; return OK; } });
+    const wl = { in1: mkReactLab("wl-in1"), in2: mkReactLab("wl-in2"), o1: mkReactLab("wl-o1"), o2: mkReactLab("wl-o2"), o3: mkReactLab("wl-o3"), other: mkReactLab("wl-other") };
+    Game.getObjectById = (id) => { const k = Object.keys(wl).find((n) => wl[n].id === id); return k ? wl[k] : savedGet.call(Game, id); };
+    Memory.rooms = Object.assign({}, savedRooms, { WideLabRoom: { labReaction: { a: "H", b: "O", product: "OH", output: "wl-o1", outputs: ["wl-o1", "wl-o2", "wl-o3"], input1: "wl-in1", input2: "wl-in2" } } });
+    wl.o2.cooldown = 7;
+    Object.keys(wl).forEach((k) => labMod.run(wl[k]));
+    assert(wl.o1.ran === 1 && wl.o3.ran === 1 && wl.o2.ran === 0 && wl.in1.ran === 0 && wl.in2.ran === 0 && wl.other.ran === 0 && wl.o1.args.join() === "wl-in1,wl-in2",
+        "0111: every output lab of a wide reaction reacts, the one on cooldown waits, inputs and unlisted labs stay idle (ran " + JSON.stringify(Object.keys(wl).map((k) => k + ":" + wl[k].ran)) + ")");
+    Memory.rooms.WideLabRoom.labReaction = { a: "H", b: "O", product: "OH", output: "wl-o1", input1: "wl-in1", input2: "wl-in2" };
+    Object.keys(wl).forEach((k) => { wl[k].ran = 0; wl[k].cooldown = 0; });
+    Object.keys(wl).forEach((k) => labMod.run(wl[k]));
+    assert(wl.o1.ran === 1 && wl.o2.ran === 0 && wl.o3.ran === 0, "0111: a reaction without an outputs list still runs on its single output lab (manual setLabReaction)");
+
+    // transientStock: product in ANY output lab is kept, in an unlisted lab it is drained
+    const ts = require(path.join(PROJECT, "src/utils/transientStock"));
+    const tsLab = (id, res) => Object.assign(new OwnedStructure(), { id, structureType: STRUCTURE_LAB, my: true, room: { name: "WideLabRoom" }, pos: new RoomPosition(5, 5, "WideLabRoom"), store: mineralStore(res, 1000) });
+    Memory.rooms.WideLabRoom.labReaction.outputs = ["wl-o1", "wl-o2", "wl-o3"];
+    assert(ts.excess(tsLab("wl-o2", { OH: 300 })).length === 0 && ts.excess(tsLab("wl-o3", { OH: 300 })).length === 0, "0111 AC6: the product is kept in every output lab of a wide reaction");
+    assert(ts.excess(tsLab("wl-other", { OH: 300 })).map((e) => e.resourceType).join() === "OH", "0111 AC7: the same product in a lab outside the reaction is drained");
+
+    // hauler: drain the FULLEST output lab; pressure reports the fullest one too
+    Game.time += 21000000;
+    wl.in1.store = mineralStore({ H: 1000 }, 2000); wl.in2.store = mineralStore({ O: 1000 }, 2000); // stocked inputs: no reagent job
+    const dl = { a: tsLab("wl-o1", { OH: 200 }), b: tsLab("wl-o2", { OH: 3200 }), c: tsLab("wl-o3", { OH: 50 }) };
+    Object.keys(dl).forEach((k) => { dl[k].mineralType = "OH"; wl[{ a: "o1", b: "o2", c: "o3" }[k]] = dl[k]; });
+    const drainRoom = { name: "WideLabRoom", storage: { store: mineralStore({}, 1e6) }, terminal: null, find: (type) => (type === FIND_STRUCTURES || type === FIND_MY_STRUCTURES ? [dl.a, dl.b, dl.c] : []) };
+    // a small amount is not worth the trip: below the drain floor (80% of the lab / a full load) nothing is fetched
+    dl.b.store = mineralStore({ OH: 300 }, 1000);
+    Game.time++;
+    const small = hauler.pickMineralJob(drainRoom);
+    assert(!small || small.kind !== "labOutput", "0111: a few units in an output lab are not fetched one trip at a time (got " + (small && small.kind) + ")");
+    dl.b.store = mineralStore({ OH: 3200 }, 1000);
+    Game.time++;
+    const drain = hauler.pickMineralJob(drainRoom);
+    assert(drain && drain.kind === "labOutput" && drain.from === dl.b && drain.resourceType === "OH", "0111: the hauler drains the fullest output lab first (got " + (drain && drain.from && drain.from.id) + ")");
+    Memory.rooms.WideLabRoom.labReaction.keep = true;
+    Game.time++;
+    const keptJob = hauler.pickMineralJob(drainRoom);
+    assert(!keptJob || keptJob.kind !== "labOutput", "0111: an in-place (keep) reaction is still never drained, wide or not (got " + (keptJob && keptJob.kind) + ")");
+    delete Memory.rooms.WideLabRoom.labReaction.keep;
+    const nel = require(path.join(PROJECT, "src/utils/nonEnergyLogistics"));
+    Game.time++;
+    const pressure = nel.outputs(drainRoom).find((o) => o.kind === "labOutput");
+    // mineralStore(res, 1000) reports capacity = free (1000) + used (3200) = 4200
+    assert(pressure && pressure.sourceId === "wl-o2" && Math.abs(pressure.ratio - 3200 / 4200) < 1e-9,
+        "0111: pressure on a wide reaction is measured on its fullest output lab (got " + JSON.stringify(pressure) + ")");
+    Memory.rooms = savedRooms; Game.getObjectById = savedGet;
+}
+{
+    // end to end: a chain on 10 labs runs its final step on 8 output labs, and the planner's T reflects it
+    for (const m of ["craftChain", "craftPlanner", "marketPricing", "marketFlip"]) delete require.cache[require.resolve(path.join(PROJECT, "src/utils/" + m))];
+    const craft = require(path.join(PROJECT, "src/utils/craftPlanner"));
+    const market = require(path.join(PROJECT, "src/utils/market"));
+    const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
+    const labSlots = require(path.join(PROJECT, "src/utils/labSlots"));
+    const saved = { rooms: Game.rooms, market: Game.market, creeps: Game.creeps, settings: Memory.settings, samples: market.samples, snapshot: market.snapshot,
+        craft: Memory.craft, bucket: Game.cpu.bucket, time: Game.time, buy: terminalOps.buy, sell: terminalOps.sell, memRooms: Memory.rooms, flip: Memory.marketFlip,
+        ops: Memory.terminalOps, getObj: Game.getObjectById };
+    Game.cpu.bucket = 10000;
+    Game.time += 22000000;
+    const quotes = { H: [10, 11], O: [10, 11], OH: [60, 70], energy: [1, 1.1] };
+    market.samples = (rt) => (quotes[rt] ? priceSamples(quotes[rt][0], quotes[rt][1], 72, 1e9) : []);
+    market.snapshot = () => ({ resources: Object.keys(quotes).reduce((acc, rt) => { acc[rt] = { currentBuy: quotes[rt][0], currentSell: quotes[rt][1] }; return acc; }, {}) });
+    const mkLab = (slot) => ({ id: "wd" + slot, structureType: STRUCTURE_LAB, store: {}, mineralType: null, pos: { x: 10 + labSlots.OFFSETS[slot][1], y: 10 + labSlots.OFFSETS[slot][0] }, room: { name: "WideChainRoom" } });
+    let labs = labSlots.SLOT_NUMBERS.map(mkLab);
+    const byId = () => { const m = {}; labs.forEach((l) => { m[l.id] = l; }); return m; };
+    let idx = byId();
+    Game.getObjectById = (id) => idx[id] || null;
+    const room = { name: "WideChainRoom", controller: { my: true }, storage: { store: { energy: 500000 } }, terminal: { store: {} }, find: () => labs };
+    const bought = [];
+    let nextOp = 1;
+    terminalOps.buy = (r, rt, qty) => { const id = "wb" + nextOp++; bought.push({ rt, qty, id }); Memory.terminalOps.operations[id] = { id, state: "queued" }; return { ok: true, id }; };
+    terminalOps.sell = () => ({ ok: true, id: "ws" + nextOp++ });
+    const setup = (settings, builtSlots) => {
+        bought.length = 0; nextOp = 1;
+        labs = (builtSlots || labSlots.SLOT_NUMBERS).map(mkLab); idx = byId();
+        Game.rooms = { WideChainRoom: room }; Game.creeps = { h1: { room: { name: "WideChainRoom" }, memory: { role: "hauler" } } };
+        Game.market = { credits: 1e8 };
+        Memory.settings = Object.assign({}, saved.settings, { craft: Object.assign({ test: false }, settings || {}) });
+        Memory.rooms = {}; Memory.craft = undefined;
+        Memory.marketFlip = { lastScanTick: null, committedCredits: 0, active: {}, lastOpportunities: [], stats: { completed: 0, netProfit: 0, cancelled: 0, guardrailBlocked: 0 } };
+        Memory.terminalOps = { nextId: 1, operations: {}, seenIncoming: {}, events: [], terminalBalance: {} };
+        labSlots.resetCache(); craft.resetScan(); craft.resetLog();
+        const mp = require(path.join(PROJECT, "src/utils/marketPricing")); mp.resetCaches();
+    };
+    const open = (settings, builtSlots) => { setup(settings, builtSlots); Game.time += 1000; craft.tick(); return Memory.craft.active.WideChainRoom; };
+    let chain = open();
+    const item = chain && chain.queue[0];
+    const expectedOutputs = labSlots.finalOutputs(labSlots.SLOT_NUMBERS, [1, 2], 3).map((slot) => "wd" + slot);
+    assert(chain && chain.product === "OH" && item.outputs.join() === expectedOutputs.join() && item.outputs.length === 8 && item.outputs.indexOf(item.input1) < 0 && item.outputs.indexOf(item.input2) < 0,
+        "0111: on 10 labs the chain's final step lists 8 output labs, none of them an input (got " + JSON.stringify(item && { in: [item.input1, item.input2], out: item.outputs }) + ")");
+    const wideT = Memory.craft.candidates.find((c) => c.product === "OH").T;
+    // run it: buys arrive, the reaction is set with the whole outputs list
+    bought.forEach((b) => { Memory.terminalOps.operations[b.id].state = "completed"; Memory.terminalOps.operations[b.id].dealtAmount = b.qty; });
+    Game.time += 1; craft.tick();
+    const reaction = Memory.rooms.WideChainRoom.labReaction;
+    assert(reaction && reaction.outputs && reaction.outputs.join() === expectedOutputs.join() && reaction.output === item.output && reaction.input1 === item.input1,
+        "0111: the reaction is set with all output labs (got " + JSON.stringify(reaction && reaction.outputs) + ")");
+    // an extra output lab still holding a foreign mineral holds the reaction back (it would block the product)
+    Memory.rooms.WideChainRoom.labReaction = undefined; delete Memory.rooms.WideChainRoom.labReactionAuto;
+    chain = Memory.craft.active.WideChainRoom; chain.queue[0].started = false;
+    const extra = idx[item.outputs[4]]; extra.mineralType = "G"; extra.store = { G: 40 };
+    Game.time += 1; craft.tick();
+    assert(!Memory.rooms.WideChainRoom.labReaction, "0111: a foreign mineral in ANY output lab holds the reaction back until it is drained");
+    extra.mineralType = null; extra.store = {};
+    Game.time += 1; craft.tick();
+    assert(Memory.rooms.WideChainRoom.labReaction && Memory.rooms.WideChainRoom.labReaction.outputs.length === 8, "0111: ...and it starts once every output lab is clear");
+    // the same chain without wide labs: one output lab, and a much longer T
+    open({ wideLabs: false });
+    const narrow = Memory.craft.active.WideChainRoom;
+    const narrowT = Memory.craft.candidates.find((c) => c.product === "OH").T;
+    assert(narrow.queue[0].outputs.length === 1 && narrow.queue[0].outputs[0] === narrow.queue[0].output, "0111: craft.wideLabs false keeps a single output lab");
+    assert(narrowT > wideT * 4, "0111: the planner's T reflects the real parallelism - 8 output labs are several times faster than 1 (T " + wideT + " vs " + narrowT + ")");
+    bought.forEach((b) => { Memory.terminalOps.operations[b.id].state = "completed"; Memory.terminalOps.operations[b.id].dealtAmount = b.qty; });
+    Game.time += 1; craft.tick();
+    assert(Memory.rooms.WideChainRoom.labReaction && !Memory.rooms.WideChainRoom.labReaction.outputs, "0111: with wide labs off the reaction has no outputs list (legacy shape)");
+    // RCL 6 (3 labs): nothing to widen
+    open({}, [1, 2, 3]);
+    assert(Memory.craft.active.WideChainRoom && Memory.craft.active.WideChainRoom.queue[0].outputs.length === 1, "0111: with 3 labs the final step has just its one output lab");
+
+    terminalOps.buy = saved.buy; terminalOps.sell = saved.sell; Game.getObjectById = saved.getObj;
+    market.samples = saved.samples; market.snapshot = saved.snapshot; Game.rooms = saved.rooms; Game.market = saved.market; Game.creeps = saved.creeps;
+    Memory.settings = saved.settings; Memory.craft = saved.craft; Memory.rooms = saved.memRooms; Memory.marketFlip = saved.flip; Memory.terminalOps = saved.ops;
+    Game.cpu.bucket = saved.bucket; Game.time = saved.time; labSlots.resetCache();
+}
+
+// --- ROADMAP 0111: the final product is sold as it comes out (partial sales) ---------------------
+{
+    for (const m of ["craftChain", "craftPlanner", "marketPricing", "marketFlip"]) delete require.cache[require.resolve(path.join(PROJECT, "src/utils/" + m))];
+    const craft = require(path.join(PROJECT, "src/utils/craftPlanner"));
+    const chainMod = require(path.join(PROJECT, "src/utils/craftChain"));
+    const market = require(path.join(PROJECT, "src/utils/market"));
+    const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
+    const saved = { rooms: Game.rooms, market: Game.market, creeps: Game.creeps, settings: Memory.settings, samples: market.samples, snapshot: market.snapshot,
+        craft: Memory.craft, bucket: Game.cpu.bucket, time: Game.time, buy: terminalOps.buy, sell: terminalOps.sell, cancel: terminalOps.cancel,
+        memRooms: Memory.rooms, flip: Memory.marketFlip, ops: Memory.terminalOps };
+    Game.cpu.bucket = 10000;
+    Game.time += 23000000;
+    const quotes = { Z: [100, 110], energy: [1, 1.1], widgetA: [5000, 5400] };
+    const live = {};
+    market.samples = (rt) => (quotes[rt] ? priceSamples(quotes[rt][0], quotes[rt][1], 72, 1e9) : []);
+    market.snapshot = () => ({ resources: Object.keys(quotes).reduce((acc, rt) => { acc[rt] = { currentBuy: live[rt] !== undefined ? live[rt] : quotes[rt][0], currentSell: quotes[rt][1] }; return acc; }, {}) });
+    const factory = { id: "psf", structureType: STRUCTURE_FACTORY, store: { widgetA: 0 }, effects: [] };
+    const room = { name: "PartRoom", controller: { my: true }, storage: { store: { energy: 500000 } }, terminal: { store: {} }, find: () => [factory] };
+    let calls, nextOp;
+    terminalOps.buy = (r, rt, qty, limit) => { const id = "pb" + nextOp++; calls.buy.push({ rt, qty, limit, id }); Memory.terminalOps.operations[id] = { id, state: "queued" }; return { ok: true, id }; };
+    terminalOps.sell = (r, rt, qty, floor, listing) => { const id = "pS" + nextOp++; calls.sell.push({ r, rt, qty, floor, listing, id }); Memory.terminalOps.operations[id] = { id, state: "queued" }; return { ok: true, id }; };
+    terminalOps.cancel = (id) => { calls.cancel.push(id); if (Memory.terminalOps.operations[id]) Memory.terminalOps.operations[id].state = "cancelled"; return { ok: true }; };
+    const step = (n) => { for (let i = 0; i < (n || 1); i++) { Game.time += 1; craft.tick(); } };
+    const workingChain = (settings, pre) => {
+        calls = { buy: [], sell: [], cancel: [] }; nextOp = 1; delete live.widgetA;
+        Game.rooms = { PartRoom: room }; Game.creeps = { h1: { room: { name: "PartRoom" }, memory: { role: "hauler" } } };
+        Game.market = { credits: 1e8 };
+        Memory.settings = Object.assign({}, saved.settings, { craft: Object.assign({ test: false }, settings || {}) });
+        Memory.rooms = {}; Memory.craft = undefined;
+        Memory.marketFlip = { lastScanTick: null, committedCredits: 0, active: {}, lastOpportunities: [], stats: { completed: 0, netProfit: 0, cancelled: 0, guardrailBlocked: 0 } };
+        Memory.terminalOps = { nextId: 1, operations: {}, seenIncoming: {}, events: [], terminalBalance: {} };
+        factory.store = { widgetA: 0 }; room.storage.store = { energy: 500000 };
+        if (pre) room.storage.store.widgetA = pre; // product that was already there before the chain
+        craft.resetScan(); craft.resetLog();
+        Game.time += 1000; craft.tick();
+        const chain = Memory.craft.active.PartRoom;
+        calls.buy.forEach((b) => { const op = Memory.terminalOps.operations[b.id]; op.state = "completed"; op.dealtAmount = b.qty; });
+        step();
+        return chain;
+    };
+    const finishOp = (id, dealt) => { const op = Memory.terminalOps.operations[id]; op.state = "completed"; op.dealtAmount = dealt; };
+
+    let chain = workingChain();
+    const item = chain.queue[0], target = item.target, floor = chainMod.saleFloor(chain);
+    const lot = Math.max(1, Math.ceil(target * 0.1));
+    assert(chain.state === "working" && Memory.rooms.PartRoom.directToTerminal === undefined,
+        "0111: the chain no longer asks for the terminal shortcut - terminalOps would sweep unclaimed terminal stock back to storage (flag " + Memory.rooms.PartRoom.directToTerminal + ")");
+    // product still in the factory is not sellable: it has to be carried to storage first
+    factory.store.widgetA = 3 * lot;
+    step();
+    assert(calls.sell.length === 0, "0111: product still in the factory is not sold (it is not in storage/terminal yet)");
+    room.storage.store.widgetA = lot - 1;
+    step();
+    assert(calls.sell.length === 0, "0111: less than the minimum lot (" + lot + ", 10% of the target) in storage is not worth an order");
+    room.storage.store.widgetA = lot + 2;
+    step();
+    assert(calls.sell.length === 1 && calls.sell[0].qty === lot + 2 && calls.sell[0].floor === floor && calls.sell[0].listing === false && calls.sell[0].rt === "widgetA" && chain.partialOpId === calls.sell[0].id,
+        "0111: once a lot is in storage it is sold at once - instant, at the break-even floor, never listed (got " + JSON.stringify(calls.sell[0]) + ")");
+    room.storage.store.widgetA += 3 * lot;
+    step(3);
+    assert(calls.sell.length === 1, "0111: only one partial order at a time (terminalOps takes a single sell per room and resource)");
+    // the order fills: stock drops, the chain remembers what it sold and opens the next one
+    finishOp(calls.sell[0].id, lot + 2);
+    room.storage.store.widgetA -= lot + 2;
+    Memory.terminalOps.events.push({ tick: Game.time, room: "PartRoom", kind: "sell", resourceType: "widgetA", amount: lot + 2, credits: 1000, transactionEnergy: 0 });
+    step();
+    assert(chain.sold === lot + 2 && chain.partialOpId === calls.sell[1].id && calls.sell.length === 2 && calls.sell[1].qty === 3 * lot,
+        "0111: the filled order is booked (sold " + chain.sold + ") and the next one takes what is in storage now (got qty " + (calls.sell[1] && calls.sell[1].qty) + ")");
+    // progress counts what was sold: made = stock - base + sold
+    const madeNow = factory.store.widgetA + room.storage.store.widgetA + chain.sold;
+    assert(madeNow === 3 * lot + 3 * lot + lot + 2 && chain.state === "working", "0111: units sold on the way still count as produced, so the item is not done early (" + madeNow + " < " + target + ")");
+    // production ends with an order still open: it is cancelled (trades kept) and the rest goes through the normal selling state
+    const stockBefore = factory.store.widgetA + room.storage.store.widgetA;
+    const add = target - chain.sold + 1 - stockBefore; // stock + sold reaches the target, stock ALONE stays below it
+    assert(add > 0 && stockBefore + add < target, "0111: scenario check - stock alone (" + (stockBefore + add) + ") is below the target (" + target + ") and only stock + sold reaches it");
+    room.storage.store.widgetA += add;
+    step();
+    assert(chain.state === "selling" && calls.cancel.indexOf(calls.sell[1].id) >= 0 && chain.partialOpId === null && chain.sold === lot + 2,
+        "0111: when production ends the open partial order is cancelled and the chain moves to selling (state " + chain.state + ", cancels " + JSON.stringify(calls.cancel) + ")");
+    const stockNow = factory.store.widgetA + room.storage.store.widgetA;
+    assert(chain.produced === stockNow + chain.sold, "0111: the total produced counts what was already sold (produced " + chain.produced + " = stock " + stockNow + " + sold " + chain.sold + ")");
+    room.storage.store.widgetA += factory.store.widgetA; factory.store.widgetA = 0; // carried to storage
+    step();
+    const finalSell = calls.sell[2];
+    assert(finalSell && finalSell.qty === chain.produced - chain.sold && finalSell.qty === room.storage.store.widgetA && finalSell.listing === false && finalSell.floor === chainMod.saleFloor(chain),
+        "0111: the final sale covers only what is left unsold (qty " + (finalSell && finalSell.qty) + " = produced " + chain.produced + " - sold " + chain.sold + ")");
+    // realized profit counts the partial sales too
+    finishOp(finalSell.id, finalSell.qty);
+    Memory.terminalOps.events.push({ tick: Game.time, room: "PartRoom", kind: "sell", resourceType: "widgetA", amount: finalSell.qty, credits: 5000, transactionEnergy: 0 });
+    Memory.terminalOps.events.push({ tick: chain.openedTick, room: "PartRoom", kind: "buy", resourceType: "Z", amount: 100, credits: -300, transactionEnergy: 0 });
+    const ownCost = chain.ownCost;
+    step();
+    const run = Memory.craft.ledger.runs[Memory.craft.ledger.runs.length - 1];
+    assert(!Memory.craft.active.PartRoom && run && run.profit === Math.round(1000 + 5000 - 300 - ownCost),
+        "0111: the ledger's realized profit includes the sales made while it was still producing (got " + (run && run.profit) + ", expected " + Math.round(6000 - 300 - ownCost) + ")");
+
+    // product that was already in storage before the chain is not the chain's to sell, partial or final
+    chain = workingChain({}, 7);
+    const preBase = chain.queue[0].base;
+    assert(preBase === 7, "0111: the baseline includes what was there before the chain (" + preBase + ")");
+    room.storage.store.widgetA = 7 + 3 * lot;
+    step();
+    assert(calls.sell.length === 1 && calls.sell[0].qty === 3 * lot, "0111: a partial sale takes only the chain's own production, not the 7 units that were already there (qty " + (calls.sell[0] && calls.sell[0].qty) + ")");
+    finishOp(calls.sell[0].id, 3 * lot);
+    room.storage.store.widgetA -= 3 * lot;
+    step();
+    room.storage.store.widgetA = target - 3 * lot + 7; // own production now complete: stock - base + sold = target
+    step();
+    assert(chain.state === "selling" && chain.produced === target, "0111: produced = stock - baseline + sold (" + chain.produced + " = " + target + ")");
+    step();
+    const lastSell = calls.sell[calls.sell.length - 1];
+    assert(lastSell.qty === target - 3 * lot, "0111: the final sale leaves the pre-existing units alone (qty " + lastSell.qty + " = " + (target - 3 * lot) + ")");
+
+    // never below the floor: with the bid under it no order is opened, however much is in storage
+    chain = workingChain();
+    live.widgetA = chainMod.saleFloor(chain) * 0.5;
+    factory.store.widgetA = 0; room.storage.store.widgetA = 5 * lot;
+    step(3);
+    assert(calls.sell.length === 0, "0111: with the bid below the break-even floor no partial order is opened");
+    live.widgetA = chainMod.saleFloor(chain) * 1.5;
+    step();
+    assert(calls.sell.length === 1, "0111: ...and it opens as soon as the bid is back at the floor");
+    // the floor is the REAL cost of the operation plus the sale margin: credits and energy
+    // fee of the purchases as traded, own stock, and the sale's own energy at the worst case
+    chain = workingChain();
+    Memory.terminalOps.events.push({ tick: chain.openedTick, room: "PartRoom", kind: "buy", resourceType: "Z", amount: 100, credits: -1000, transactionEnergy: 30 });
+    delete chain.buyCost;
+    const units = chain.qty;
+    const base = (1000 + (30 + units) * 1.1 + chain.ownCost) / units;
+    assert(Math.abs(chainMod.saleFloor(chain) - base * 1.01) < 1e-9,
+        "0111: the sale floor is the actual cost per unit (buys " + 1000 + ", fees, own stock) plus the 1% margin (got " + chainMod.saleFloor(chain) + ", expected " + base * 1.01 + ")");
+    assert(chainMod.saleFloor(chain) > base, "0111: the floor is above the plain break-even - a sale at the floor leaves a profit");
+    Memory.settings.craft.minSaleMargin = 0.05;
+    assert(Math.abs(chainMod.saleFloor(chain) - base * 1.05) < 1e-9, "0111: craft.minSaleMargin sets the margin on top of the cost");
+    Memory.settings.craft.minSaleMargin = 0.01;
+    Memory.terminalOps.events.push({ tick: chain.openedTick, room: "PartRoom", kind: "buy", resourceType: "Z", amount: 100, credits: -500, transactionEnergy: 0 });
+    chain.buyCost = undefined;
+    assert(chainMod.saleFloor(chain) > base * 1.01 + 400 / units, "0111: buying above the estimate raises the floor - the sale still covers what was really paid");
+    // switches
+    chain = workingChain({ partialSales: false });
+    room.storage.store.widgetA = 5 * lot;
+    step(3);
+    assert(calls.sell.length === 0, "0111: craft.partialSales false sells nothing until production is over");
+    chain = workingChain({ minPartialSellRatio: 0.5 });
+    room.storage.store.widgetA = 2 * lot;
+    step();
+    assert(calls.sell.length === 0, "0111: craft.minPartialSellRatio raises the minimum lot");
+    room.storage.store.widgetA = 6 * lot;
+    step();
+    assert(calls.sell.length === 1, "0111: ...and a lot above it is sold");
+    // an abort cancels the order in flight
+    chain = workingChain();
+    room.storage.store.widgetA = 2 * lot;
+    step();
+    const openId = chain.partialOpId;
+    assert(openId, "0111: a partial order is open");
+    chainMod.cancelRoom("PartRoom");
+    assert(calls.cancel.indexOf(openId) >= 0 && !Memory.craft.active.PartRoom && Memory.marketFlip.committedCredits === 0,
+        "0111: aborting a chain cancels its partial order too and frees the credits");
+    // a chain that never sold on the way behaves exactly as before
+    chain = workingChain({ partialSales: false });
+    factory.store.widgetA = target + 5; step();
+    assert(chain.state === "selling" && chain.produced === target + 5 && (chain.sold || 0) === 0, "0111: without partial sales the totals are unchanged (produced " + chain.produced + ", sold " + (chain.sold || 0) + ")");
+
+    terminalOps.buy = saved.buy; terminalOps.sell = saved.sell; terminalOps.cancel = saved.cancel;
+    market.samples = saved.samples; market.snapshot = saved.snapshot; Game.rooms = saved.rooms; Game.market = saved.market; Game.creeps = saved.creeps;
+    Memory.settings = saved.settings; Memory.craft = saved.craft; Memory.rooms = saved.memRooms; Memory.marketFlip = saved.flip; Memory.terminalOps = saved.ops;
+    Game.cpu.bucket = saved.bucket; Game.time = saved.time;
 }

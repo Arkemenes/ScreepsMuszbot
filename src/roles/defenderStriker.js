@@ -5,6 +5,7 @@ const config = require("../utils/config");
 const squad = require("../utils/squad");
 const { roomNeeds } = require("../rooms/needs");
 const names = require("../utils/names");
+const roomCache = require("../utils/roomCache");
 
 // RANGED_ATTACK half of the striker+medic pair (ROADMAP 0032 D2) - a
 // room spawns this (+ a defenderMedic) once it can afford a real pair
@@ -72,7 +73,7 @@ const defenderStriker = {
         const hostiles = mem.defenseActive ? getHostiles(creep.room) : [];
 
         if (!hostiles.length) {
-            const spawn = creep.room.find(FIND_MY_SPAWNS)[0];
+            const spawn = roomCache.mySpawns(creep.room)[0];
             if (spawn && creep.pos.getRangeTo(spawn) > 5) {
                 creep.moveTo(spawn, { reusePath: 20 });
             }
@@ -113,7 +114,7 @@ const defenderStriker = {
             // already on rampart and still reached (a gap), rampart
             // unreachable, or nowhere to run to - kite like the solo defender
             if (!combat.kiteAwayFrom(creep, hostiles)) {
-                const spawn = creep.room.find(FIND_MY_SPAWNS)[0];
+                const spawn = roomCache.mySpawns(creep.room)[0];
                 if (spawn) creep.moveTo(spawn, { reusePath: 5 });
             }
             return;
@@ -137,7 +138,7 @@ const defenderStriker = {
         const target = combat.pickTarget(creep.room);
         if (!target) return;
         const range = creep.pos.getRangeTo(target);
-        const spawn = creep.room.find(FIND_MY_SPAWNS)[0];
+        const spawn = roomCache.mySpawns(creep.room)[0];
         const wounded = target.hits < target.hitsMax;
         const withinMopUpRange =
             !spawn ||

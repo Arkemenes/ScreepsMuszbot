@@ -6,6 +6,18 @@ let depth = 0;
 // Call stack for self-time accounting (see wrapFunction below) - reset each
 // tick alongside `depth`.
 let callStack = [];
+// Undo actions for every method/accessor this module replaced, so disable() can put the
+// original functions back (ROADMAP 0113): leaving the wrappers installed after a
+// profile(N) kept every call going through the extra layer until the next global reset.
+const restorers = [];
+// Functions whose callers are worth knowing (ROADMAP 0118/0119): the call-count profile
+// says "Room.find 60/tick" but not who asks. For these the wrapper also records
+// `name<-caller<-caller` (the first two non-wrapper stack frames) in the heap, for the
+// length of the profile(N) session only. The stack capture costs real CPU PER CALL, so
+// list only functions called a few dozen times a tick: config.get (2600+/tick) made a
+// profile window drain the bucket (2026-10-03).
+const callerTargets = { "Room.find": true };
+let callers = {};
 
 function AlreadyWrappedError() {
     this.name = "AlreadyWrappedError";
@@ -74,6 +86,33 @@ function setupMemory(profileType, duration, filter) {
 
 function resetMemory() {
     Memory.profiler = null;
+    callers = {};
+}
+
+// First two stack frames that are not this module's wrapper, e.g.
+// "findClosestByPath<-pickLoad". Frame 0 is the "Error" line, 1 the wrapper itself.
+function callerChain() {
+    const limit = Error.stackTraceLimit;
+    Error.stackTraceLimit = 8; // our 3 frames + 2 callers + slack
+    const lines = new Error().stack.split("\n");
+    Error.stackTraceLimit = limit;
+    const names = [];
+    for (let i = 1; i < lines.length && names.length < 2; i++) {
+        const m = /^\s*at (?:async )?([^\s(]+)/.exec(lines[i]);
+        const fn = m ? m[1] : "?";
+        // our own frames (callerChain, recordCaller, the wrapper - V8 may prefix a
+        // receiver such as "Room.") are not callers
+        if (/(^|\.)(callerChain|recordCaller|wrappedFunction)$/.test(fn)) continue;
+        names.push(fn);
+    }
+    return names.join("<-");
+}
+
+function recordCaller(name, time) {
+    const key = name + "<-" + callerChain();
+    const entry = callers[key] || (callers[key] = { calls: 0, time: 0 });
+    entry.calls++;
+    entry.time += time;
 }
 
 function overloadCPUCalc() {
@@ -131,6 +170,7 @@ function wrapFunction(name, originalFunction) {
                 }
                 if (depth > 0 || !getFilter()) {
                     Profiler.record(name, totalTime, totalTime - frame.childTime);
+                    if (callerTargets[name]) recordCaller(name, totalTime);
                 }
                 if (nameMatchesFilter) {
                     depth--;
@@ -203,6 +243,9 @@ function profileObjectFunctions(object, label) {
                 functionName,
                 profileDescriptor
             );
+            restorers.push(() => {
+                Object.defineProperty(objectToWrap, functionName, descriptor);
+            });
             return;
         }
 
@@ -215,6 +258,9 @@ function profileObjectFunctions(object, label) {
             originalFunction,
             extendedLabel
         );
+        restorers.push(() => {
+            objectToWrap[functionName] = originalFunction;
+        });
     });
 
     return objectToWrap;
@@ -275,6 +321,15 @@ const Profiler = {
         }
         lines.push(footer);
         return lines.join("\n");
+    },
+
+    // Structured form of the report: one row per wrapped function.
+    rows() {
+        if (!Memory.profiler || !Memory.profiler.map) return [];
+        return Object.keys(Memory.profiler.map).map((name) => {
+            const f = Memory.profiler.map[name];
+            return { name, calls: f.calls, selfTime: f.selfTime || 0, totalTime: f.time };
+        });
     },
 
     lines() {
@@ -423,8 +478,34 @@ module.exports = {
     },
 
     enable() {
+        if (enabled) return;
         enabled = true;
         hookUpPrototypes();
+    },
+
+    // Puts back every original function enable()/registerObject() replaced; a later
+    // enable() wraps them again.
+    disable() {
+        while (restorers.length) restorers.pop()();
+        enabled = false;
+        depth = 0;
+        callStack.length = 0;
+    },
+
+    rows() {
+        return Profiler.rows();
+    },
+
+    // Callers of the callerTargets functions in the current session: rows of
+    // {name: "Room.find<-fn<-fn", calls, time}, most calls first.
+    callers() {
+        return Object.keys(callers)
+            .map((name) => ({ name, calls: callers[name].calls, time: callers[name].time }))
+            .sort((a, b) => b.calls - a.calls);
+    },
+
+    clearCallers() {
+        callers = {};
     },
 
     output: Profiler.output,
