@@ -5982,6 +5982,7 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
         let squadWalls = [];
         const squadRoom = {
             name: "SquadRoom",
+            getTerrain: () => ({ get: () => 0 }),
             find: (type, opts) => {
                 let list = type === FIND_STRUCTURES ? squadWalls : [];
                 if (opts && typeof opts.filter === "function") list = list.filter(opts.filter);
@@ -6045,6 +6046,14 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
         assert(squadMod.shapeFits(REG.lead, Memory.squads.sq2, "column", 3) === true,
             "shapeFits('column') is still true - single file threads between the same walls");
         squadWalls = [];
+        Game.time++;
+
+        // border tiles are never a valid squad slot (striker walked off the
+        // map while closing on an invader core hugging the exit)
+        REG.lead.pos = new RoomPosition(20, 1, "SquadRoom");
+        assert(squadMod.shapeFits(REG.lead, Memory.squads.sq2, "column", 1) === false,
+            "shapeFits() is false when the leader's next tile is an exit tile (y=0)");
+        REG.lead.pos = new RoomPosition(20, 20, "SquadRoom");
         Game.time++;
 
         // --- advance(): reforms a member that's out of its slot -----------
@@ -14275,13 +14284,20 @@ function priceSamples(bid, ask, n, vol) {
     assert(!Memory.craft.active.ChainRoom && calls.buy.length === 0 && Memory.craft.candidates.length > 0, "0111 AC12: craft.test never opens a chain even with a good candidate");
 
     // AC14: breakers
-    reset({ productLosses: 3, globalRuns: 10 });
+    reset({ breakers: false, productLosses: 3, globalRuns: 10 });
     const fake = { product: "widgetA", room: "ChainRoom", est: { profit: 100 } };
+    [-5, -5, -5, -5].forEach((p) => chainMod.recordRun(fake, p));
+    assert(!Memory.craft.suspended.widgetA && Memory.settings.craft.test === false,
+        "0111 AC14: with craft.breakers off, losses neither suspend a product nor force test mode");
+    Memory.craft.suspended.widgetA = Game.time + 1000;
+    Game.time += 1000; craft.tick();
+    assert(Memory.craft.discards.suspended === undefined, "0111 AC14: with craft.breakers off, a stale suspension is ignored by the planner");
+    reset({ breakers: true, productLosses: 3, globalRuns: 10 });
     chainMod.recordRun(fake, -5); chainMod.recordRun(fake, -5);
     assert(!Memory.craft.suspended.widgetA, "0111 AC14: two losses do not suspend a product");
     chainMod.recordRun(fake, -5);
     assert(Memory.craft.suspended.widgetA > Game.time, "0111 AC14: three losses in a row suspend the product for suspendTicks");
-    reset({ productLosses: 99, globalRuns: 4 });
+    reset({ breakers: true, productLosses: 99, globalRuns: 4 });
     [20, -5, -5, -5].forEach((p) => chainMod.recordRun(fake, p));
     assert(Memory.settings.craft.test === false, "0111 AC14: a global window with a positive total keeps live mode");
     chainMod.recordRun(fake, -50);

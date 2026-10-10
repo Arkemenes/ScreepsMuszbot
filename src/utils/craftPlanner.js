@@ -273,7 +273,7 @@ function scanRoom(room, snapshot, mem, found) {
         const why = viability(room, recipe);
         if (why) { discard(mem, product, room, why); return; }
         const suspendedUntil = mem.suspended[product];
-        if (suspendedUntil && Game.time < suspendedUntil) { discard(mem, product, room, "suspended"); return; }
+        if (config.get("craft.breakers", false) && suspendedUntil && Game.time < suspendedUntil) { discard(mem, product, room, "suspended"); return; }
         const sized = sizeLot(product, recipe, ctx, credits);
         if (!sized) { discard(mem, product, room, "credits"); return; }
         const verdict = sized.verdict;

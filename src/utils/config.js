@@ -75,7 +75,11 @@ const defaults = {
         // tempo (1 tick ~ 1 s): retenção de produto/insumo antes do fallback
         retentionTicks: 259200,
         suspendTicks: 86400,
-        // disjuntores: execuções negativas seguidas por produto / janela global
+        // disjuntores: execuções negativas seguidas por produto / janela global.
+        // Desligados por padrão (pedido do usuário, 2026-10-05): travaram uma
+        // flutuação temporária; o ledger continua registrando. true religa
+        // (Memory.settings.craft.breakers = true).
+        breakers: false,
         productLosses: 3,
         globalRuns: 10,
         // níveis de commodity habilitados (>= 1 exige operador, ver gate)

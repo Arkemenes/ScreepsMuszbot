@@ -463,6 +463,7 @@ function recordRun(chain, profit, extra) {
     if (entry.last.length > config.get("craft.productLosses", 3)) entry.last.shift();
     // breakers: N losses in a row suspend the product; a net-negative global
     // window puts the whole planner back into test mode
+    if (!config.get("craft.breakers", false)) return;
     const n = config.get("craft.productLosses", 3);
     if (entry.last.length >= n && entry.last.every((p) => p < 0)) {
         mem.suspended[chain.product] = Game.time + config.get("craft.suspendTicks", 86400);

@@ -67,8 +67,18 @@ function pruneDeadMembers(squadId) {
     return squad;
 }
 
+// Exit tiles (x/y 0 or 49) are never a valid squad position inside the
+// mission room: stepping on one teleports the creep to the next room and
+// breaks the formation (live case: a striker hugging the border while
+// closing on an invader core walked off the map).
+function isBorder(x, y) {
+    return x <= 0 || x >= 49 || y <= 0 || y >= 49;
+}
+
 function tileWalkable(room, x, y) {
     if (x < 0 || x > 49 || y < 0 || y > 49) return false;
+    if (isBorder(x, y)) return false;
+    if (room.getTerrain().get(x, y) === TERRAIN_MASK_WALL) return false;
     return combat.blockingMatrix(room).get(x, y) < 255;
 }
 
@@ -138,6 +148,12 @@ function leaderGoal(leader, squad) {
 
 function avoidMatrix(room, avoidList) {
     const base = combat.blockingMatrix(room).clone();
+    for (let i = 0; i < 50; i++) {
+        base.set(i, 0, 255);
+        base.set(i, 49, 255);
+        base.set(0, i, 255);
+        base.set(49, i, 255);
+    }
     for (const a of avoidList || []) {
         if (a.roomName === room.name && Game.time < a.until) base.set(a.x, a.y, 255);
     }
