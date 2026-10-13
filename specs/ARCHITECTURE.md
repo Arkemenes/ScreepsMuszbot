@@ -35,6 +35,72 @@ profiler só carrega quando `Memory.settings.profiler` está setado.
 
 ## Modules
 
+### Atribuição de CPU de movimento (0113 / ARK-116)
+
+Correção de CPU (0127/0124, 2026-10-13): fallback `wide-live` usa caches
+limitados de planos/fases no heap, com invalidação por receita e chaves de
+slots/produtos/janela. Membership de alvos consulta um recurso diretamente;
+reagentes reutilizam respostas só dentro de uma seleção de job, e combustível
+calcula limite opcional uma vez por previsão. Produção e confirmação
+continuam por tick. Perfil/benchmarks: `docs/cpu-regression-2026-10-13.md`.
+
+
+Spans inclusivos no medidor existente distinguem buscas completas de rota
+(`routing.realSearch`), buscas locais (`move.localSearch`), chamadas nativas
+de movimento (`move.native`) e as duas observações novas do intel
+(`intel.transitSafety`, `intel.keeperTransit`). Sem novas buscas/scans nem
+logs automáticos. O perfil live define os cortes; a meta <9 CPU ainda aguarda
+validação em jogo.
+
+
+### Diagnóstico de claim (0035 / ARK-109)
+
+`utils/claimDiagnostics.js` preserva um snapshot compacto em
+`Memory.claimTarget.lastSeen` e apenas um encerramento em `Memory.lastClaimResult`.
+O role registra posição/TTL/hits/fadiga/bucket, fase e retorno observado; `needs`
+registra desaparecimento antes de apagar a ordem; `remotes` registra cancelamento
+e expõe `claimStatus()`. Nenhum scan ou pathfinding novo. Erros de
+`claimController` mostram código/nome; `OK` significa intent aceito. A ausência
+do creep não atribui ataque nem expiração. Registros sobrevivem ao GC do creep.
+
+### Claim: travessias validadas e orçamento de busca (0064 / ARK-102)
+
+`computeRealRoute` busca qualquer entrada conectada ao interior do destino
+(centro, range 24). Além da sequência compacta de salas em `Memory`, mantém
+as coordenadas reais de cada entrada em `WeakMap` no heap. `moveToRoom` normal
+e nativo usam essas entradas e limitam os hops validados a duas salas e
+`routing.hopMaxOps` (20000). Após deserialização/reset do heap, recompõem as
+entradas uma vez; se a validação falhar, preservam o fallback legado sem repetir
+a reconstrução a cada tick. Nova busca completa aguarda
+`routing.realRouteMinBucket` (1000), retornando `ERR_BUSY` sem falso dead end.
+Isso corrige a seleção de uma saída central livre porém desconectada do caminho
+já validado, reproduzida offline após relato de claim para E5N41.
+
+### Segurança dinâmica de trânsito (ROADMAP 0129)
+
+Os callbacks de `moveTo` representam exclusão com uma `CostMatrix` inteira
+em 255 (template no heap, retorno clonado); o motor ignora `false` nessa API.
+Somente `PathFinder.roomCallback` usa `false` para excluir salas. Esta regra
+vale para scout/claimer, fallback, modo nativo e recuo.
+
+`utils/transitSafety.js` separa trânsito de diplomacia: a lista manual
+`routing.avoidPlayers` começa vazia; `rooms/intel.js`, dentro do guard de
+intel existente, coleta `EVENT_ATTACK` com dano positivo a creep próprio e
+autor aliado resolvido. Um snapshot de ids próprios via census, no heap,
+reconhece vítimas mortas no tick anterior enquanto há visão/evento disponível.
+`Memory.routingAggressors[autor] = {room, tick}` guarda somente a evidência;
+novos ataques renovam o prazo `routing.allyAttackAvoidTicks` (10000 ticks).
+Expiração permite tentar trânsito normal novamente, sem despachar probes.
+
+`routing.js` exclui propriedade/reserva conhecida desses autores em todos os
+callbacks e nas buscas de rota, inclusive destinos e modo nativo. A origem
+atual continua disponível para escape; recuos também respeitam o bloqueio.
+Uma chave da política invalida paths/rotas cacheadas após inclusão, liberação,
+expiração ou troca de propriedade observada. `avoidPlayer`, `allowPlayer` e
+`routeAvoidStatus` permitem controle/inspeção sem mudar aliados/alvos ofensivos.
+Sem visão, autor resolvido ou evidência da vítima, não se atribui uma morte.
+
+
 ### Craft flip - preço conservador, labs e factory transitórios (ROADMAP 0111)
 
 - `utils/marketPricing.js` é o modelo de preço/risco compartilhado (puro). Lê
@@ -92,6 +158,31 @@ profiler só carrega quando `Memory.settings.profiler` está setado.
   eventos saem no console como `[craft] ...`.
 
 ### Terminal operations and energy balancing (ROADMAP 0098/0097 done)
+
+**Reservas por direção (0130 / ARK-108).** Compras com `automaticPurchase`
+convivem com vendas/transferências do mesmo recurso; duas saídas e compras
+duplicadas continuam protegidas pelos locks. `resourcePolicy.commitments`
+desconta somente entradas pendentes vinculadas ao dono da cadeia/flip.
+Listings fixas integralmente financiadas preservam sua carga, ID e taxa mesmo
+quando há demanda futura de produção. `consumerAvailable` distribui as reservas
+de saída entre storage/terminal (incluindo ordens manuais não gerenciadas), e o
+hauler limita retiradas de minerais ao excedente, com ledger de intents no heap.
+`craftChain.open` verifica todos os locks antes de criar compras; recusas incluem
+a causa em `craftStatus` e no log. Não há cancelamento/relistagem automática para
+dar prioridade à fabricação; recebimentos e cooldown físico seguem em terminalOps.
+
+**Cotação de relay (ROADMAP 0125, transporte planejado).**
+`utils/terminalRouting.js` compara envio direto com origem → hub E2N46 → destino,
+incluindo frete do financiamento e a mensagem de 2 energia. `terminalRelayQuote`
+é registrado por `terminalOps` e documentado no `help`; não emite intents nem
+grava Memory. A quantidade é sempre a entrega desejada: energia embarca também
+o frete que o hub desconta. A seleção avalia o hub por padrão; `urgent: true` força direto.
+Empate, urgência crítica, rota indisponível ou
+limiares de economia não atingidos mantêm direto. Config em
+`Memory.settings.terminalRelay`; defaults de cotação habilitados, sem ativar
+transporte. Power ativo dos terminais próprios entra no custo. A fase B irá
+integrar o protocolo ao balanceamento não crítico e às operações de terminal.
+
 
 `utils/terminalOps.js` is already the single entry point for terminal work:
 it owns persisted operation metadata, console commands, hauler `terminalJob`s,
@@ -617,154 +708,54 @@ algoritmo de movimento novamente.
 
 ## Offline test
 
-`test/smoke.js` — stuba `Game` / `Memory` / constantes, roda `main.loop()` por
-~130 ticks em três fases (normal, sob ataque, planejador travado), mais checks
-unitários de `travel`, da fila de construção, de `takeCover`, do `hauler`,
-do `builder`, do `miner`, de `roomNeeds`, da prioridade de disputa por pilha
-(`reservations` — inclui pilha renovável vs. descartável), do `planStore`
-(round-trip, migração do formato antigo, sobrevive a um
-`Memory.settings = {...}` no console, colisão de segment id nunca devolve o
-plano de outra sala), do scoring de stamp (`findStampLocation`), do
-early-exit do `planCity` numa sala `planned`, do
-`prioritizeBuild`/`clearBuildPriority`, do rampart do container de mineral, de
-determinismo do planejador (mesmo estado inicial + ordem de `find()`
-embaralhada → mesmo plano), da lista de aliança, dos ramparts para aliados,
-da fila de assinatura do scout, do `help()` de console (existe, lista os
-comandos conhecidos) e do `hasDepositTarget` do miner (não minera com
-container cheio + nada pra receber o excedente), do builder sacando
-diretamente de um link de espera que a disputa de reserva negou (em vez de
-ficar parado), do hauler carregando do container de source mais **perto**
-que já passou de `MIN_CONTAINER_LOAD`, não do que tem mais energia guardada
-nem de um com pouca energia, do `traffic` (contador por tile, `hot`/`isHot`/
-`worthRepairing`) e das estradas guiadas por tráfego + o gate de borda do
-mapa (sem sala vizinha `my`/`remotes` não pavimenta até a saída; com,
-pavimenta a saída certa) e do hauler nunca entregando numa torre de defesa
-de source (`sourceDefense`, ROADMAP 0026), e do remote mining (ROADMAP
-0020: `remotes.eligible`/`active`/`pendingReserves`, os três comandos de
-console, o gate de `roomCallback`, e `reserver`/`remoteMiner`/`remoteHauler`
-não lançando nem viajando nem na sala alvo), e do `config.js` (override/
-default/path inexistente, hostil em sala própria com/sem override de
-`hostilePlayers` — ROADMAP 0012), e de exatamente 1 nuker + 1 observer no
-plano, ambos `minimalRCL` 8 (ROADMAP 0027), e do `utils/routing.js`
-(`isHighwayRoom`, `routeCostCallback`, custo de rota barateando highway/
-penalizando ou bloqueando sala com hostil, `findRoute` retornando `null` sem
-rota) + `planLayout`/`cancelLayout`/`layoutQueue` no console +
-`architect.planCity(room, {preview:true})` completando um plano numa sala
-não-própria sem nunca criar canteiro real + o scout indo até a sala pedida,
-largando o pedido quando o plano fica pronto, e desistindo (stall guard) se
-nunca terminar (ROADMAP 0028), do `listAlly()`, e do observer assumindo a
-exploração (ROADMAP 0029: `utils/observer.js` — alcance/cobertura;
-`structures/observer.js` — prioridade de layout pendente + dequeue, e
-exploração da sala menos vista recentemente dentro do alcance;
-`rooms/needs.js` sem scout de fundo com observer presente; scout pulando
-sala já coberta e se aposentando em vez de vagar), do `observe(roomName,
-ticks=10)` (ROADMAP 0030: default de ticks, prioridade abaixo de
-`planLayout` e acima da exploração, comportamento em/fora de alcance, e
-expiração mesmo fora de alcance), e da exploração ponderada por hostil
-(ROADMAP 0031: sala com mais `enemies` vence apesar de mais fresca,
-`militaryWeight=0` volta ao critério antigo, sala parada há muito tempo
-ainda vence eventualmente), da coordenação entre 2+ observers pra só uma
-observação por tick no total (ROADMAP 0056: um pedido de layout/`observe()`
-só alcançável por um observer fora de posição ainda é servido no mesmo tick
-mesmo que outro observer rode primeiro no loop do `main.js`; o segundo
-`run()` no mesmo tick é no-op; o guard reseta no tick seguinte; exploração
-ociosa considera a união dos quadrados de alcance dos dois; com 1 observer
-só, nada muda), e do `claimRoom()` recusando um alvo longe
-demais pro orçamento de vida de um corpo com `CLAIM` (ROADMAP 0033), já
-dono de outro jogador, sem controller, ou bloqueado por zona de novato/
-respawn (ROADMAP 0034), da missão `"claim"` esperando um hostil sumir da
-sala-alvo em vez de marchar pra dentro (ROADMAP 0057 — `utils/routing.js`'s
-`findRoute` nunca aplica `blockHostiles` à própria sala de destino, de
-propósito, pra não quebrar `"contest"`/0046; `roles/reserver.js` faz esse
-gate só pra `"claim"`, checando `remotes.hasHostiles(targetRoom)` antes de
-mover e caindo no mesmo stall guard de "sem rota segura" quando hostil),
-do `moveToRoom()` blacklistando uma sala-armadilha **intermediária** em vez
-de só repetir a mesma rota (ROADMAP 0058 — `isRouteFlapping` pega o padrão
-`[A,B,A,B]` de troca de sala, mesmo princípio do `isFlapping` do scout/0009
-mas em trilha própria; a sala é excluída de `findRoute` incondicionalmente,
-mesmo sem `blockHostiles`; cobre tanto `signRoom`/`planLayout` do scout
-quanto `reserve`/`claim`/`contest` do reserver, que passam pelo mesmo
-`moveToRoom()`), e da Fase 1 do combat overhaul (ROADMAP 0032:
-ordem do corpo do defender nas 3 faixas de energia, seleção de rampart
-crítico por ratio, `tower.run()` nunca lança sem `room.storage`), e do
-`utils/rampartRepair.js` (ROADMAP 0032 D4 follow-up — as 3 faixas
-crítico/saudável/só-com-sobra-de-energia, sem storage nunca lança, e o
-`builder.js` lendo a mesma função tanto no repair oportunista de alcance 3
-quanto no fallback de último recurso — as duas concordam sempre porque é
-o mesmo predicado), e de uma missão `claim`
-desistindo (não respawnando pra sempre) quando o claimer morre em
-trânsito sem nunca ter limpado `Memory.claimTarget` sozinho (ROADMAP
-0035), e da Fase 2 do combat overhaul (ROADMAP 0032: `needs.js` alterna
-`defender` solo vs. par `defenderStriker`+`defenderMedic` por
-`energyCapacityAvailable`, corpo dos dois roles, `combat.ensurePartner`
-fecha `memory.partnerId` nos dois lados, postura de tanque atrás de
-rampart própria — segura vs. foge, incluindo o caso de brecha —, mop-up
-fechando em alcance 1 num alvo ferido dentro do alcance vs. segurando
-`KITE_RANGE` num saudável, e o medic seguindo o parceiro), e da Fase 3
-(ROADMAP 0032: `targetEnemies` add/remove, `isWeakEnemyRoom` nos 4
-critérios de recusa + caso positivo, `raidRoom()` cobrindo O2 - sala
-neutra com invader core, sem checar `targetEnemies` - e O4 - sala fraca de
-um `targetEnemy` -, e `raider.run()` lutando creep hostil antes de
-estrutura, fechando distância até `KITE_RANGE`, atacando em alcance, e se
-aposentando/limpando `Memory.raidTarget` sem mais nada pra lutar), e da
-Fase 4 (ROADMAP 0032: `utils/squad.js` — poda de membro morto + promoção
-de novo líder, `formed`/`shapeFits` testando as duas formaturas (`block`
-barrado por parede de verdade cai pra `column`, que ainda cabe), reforma
-depois de um passo, lockstep de um tick completo (todo mundo no slot →
-`move(dir)` junto), decisão de recuo com média de hp abaixo do limiar
-**e** saída segura existindo vs. sem saída (luta até a morte), desfazer
-squad só ao chegar de fato em `squad.from` — não na primeira sala segura
-—, e o pipeline completo `raidSquad()` → `spawnPendingSquad` por membro
-faltante → `registerPending` promovendo pra `Memory.squads` só quando o
-último nasce → `squadDismantler` recusando rodar sem `squadId`/
-`pendingSquad`), e do D6/O3 (ROADMAP 0036: `isHostile()` reconhecendo um
-`targetEnemy` como hostil fora de sala própria mesmo desarmado/fora da
-whitelist de `hostilePlayers`; `isEnemyRemote`/`raidRemote()` nos 4
-critérios de recusa (sem reserva, dono em vez de remote, reservada por
-não-`targetEnemy`, hostil visto) + caso positivo; `raider` em modo
-`"harass"` atacando um alvo desarmado direto e se aposentando sem nunca
-tocar `FIND_HOSTILE_STRUCTURES`; `spawnData()` propagando `mission`; e
-`checkSafeMode()` nos cenários do gate revisado (ver "Bug real" no `spec.md`
-do 0036) — sem hostil em alcance, invader fraco contra spawn saudável **não**
-dispara (regressão do bug de produção), rush boostado dispara rápido mesmo
-com spawn saudável (boost lido do `BOOSTS` nativo), dano sustentado já
-baixando o hp real dispara, rampart própria saudável sob o spawn absorve e
-não dispara, já ativo é no-op, e `activateSafeMode()` errando sem nunca
-lançar), e do `pioneer` (ROADMAP
-0037: `pioneering.isSpawnless`/`spawnlessRooms`/`mothersFor` nos
-critérios de recusa (sala com spawn não conta, fora do raio de
-`pioneer.maxDistance`, sala-alvo com hostil visto) + caso positivo —
-incluindo **duas** salas-mãe em alcance da mesma sala-alvo, cada uma
-listada, cada uma querendo seus próprios `maxConcurrent` sem compartilhar
-teto com a outra (ROADMAP 0037 follow-up: "cada sala próxima envia 2
-pioneers") —, `pioneersWanted`/`nextTarget` respeitando `maxConcurrent`
-por par mãe-alvo e o gate de `defenseActive` da sala-mãe, e
-`pioneer.run()` completo — retirar sem
-missão, retirar com spawn já pronto na sala-alvo, carregar na sala-mãe
-(pilha longe vs. adjacente), viajar só depois de cheio, viagem redonda de
-volta pra casa se esvaziar antes do spawn terminar, esperar o
-`architect.js` colocar o site, ir até ele, e construir), e do
-`pioneerStatus()` (registrado em `global`, roda sem lançar, relata a sala
-spawnless pelo nome), e de `roomNeeds(motherRoom).pioneer` batendo com
-`pioneer.wanted()`/`spawn()` (ROADMAP 0037 follow-up — pega de volta o bug
-real descrito na nota abaixo do `needs.js`, caso `compute()` volte a
-esquecer um campo no `return`), e do pioneer virando `bootstrap` (em vez
-de se aposentar) assim que a sala-alvo tem spawn de verdade — memory
-`targetRoom`/`home` limpa, `role` trocado, `bootstrap.run()` delegado na
-hora, e de `reservations.js`'s rank de pioneer (ROADMAP 0037 follow-up):
-ganha de hauler e de builder num drop contestado, num drop/tombstone/ruína
-e num container que só cede o quanto falta, ganha de hauler **mesmo com a
-sala estável** (diferença chave do rank hauler/bootstrap, que só ganha de
-builder enquanto a sala não está estável), e dois pioneers concorrendo
-dividem por nome como qualquer par do mesmo rank. 374 assertions.
+**Pesquisa de labs (ROADMAP 0128).** O harness docs/lab-production-simulation.cjs --search mantém beam64/100k, busca exata pequena/200k e replay. Receitas, resultados e tabelas estão em docs/lab-search/, docs/lab-search-results.json e docs/lab-search-report.md. Runner e resultados completos ficam fora do bundle; o motor físico puro foi extraído para utils/labPlanModel.js e agora também avalia candidatos no jogo. test/labResearchCases.js preserva a reprodução das referências.
 
-### Política estrutural de pathing
+**Política de labs (ROADMAP 0127, ARK-98).** utils/labPolicyData.js publica 596 planos e índices dos 1.950 cenários, gerados por docs/lab-search/generate-policy.cjs. utils/labPolicy.js cacheia catálogo/geometria e generators de avaliação limitada no heap. utils/labPolicyRuntime.js executa targets individuais com papéis locais, buffers, logística observada e confirmação de intents pelo cooldown no tick seguinte. craftChain mantém item lab compacto e migra sufixos legados após a onda iniciada; craftPlanner avança políticas a cada tick e usa estimativa avaliada ou referência conservadora identificada. labReactions centraliza snapshot/reservas, quota e limites de entrega; structures/lab delega; hauler drena conflitos e limita buffers/cargas. Memory guarda IDs/saldos/cursores/observações, nunca catálogo ou objetos de jogo. craftStatus expõe escolha, espera, avaliação e logística. Modos wide/waves e reações manuais são preservados; pipelines exigem logística medida ou override. Documentação: docs/lab-policy.md; testes: test/labPolicyCases.js.
 
-`utils/move.js` mantém a matriz de movimento intra-room, onde estruturas
-comuns bloqueiam a tile. `utils/routing.js` usa uma matriz própria no pathing
-multiroom: walls e ramparts privadas conhecidas são impassáveis, enquanto
-ramparts públicas de outros players continuam válidas. Ambas as matrizes são
-cacheadas no heap e só usam estruturas de salas com visão.
-# HistÃ³rico temporal de mercado (atualizaÃ§Ã£o)
+### Hauler: drops sob containers (ROADMAP 0126)
 
-`utils/market.js` mantÃ©m o book atual e o cache de cÃ¡lculo no heap, mas grava snapshots temporais compactos em `RawMemory.segments[9]` via `utils/marketHistoryStore.js`. O segmento 9 Ã© reservado para o mercado e ativado por `planStore.activate()` junto dos segmentos de planos; os planos continuam comeÃ§ando no segmento 10. ApÃ³s global reset/deploy, o histÃ³rico Ã© reidratado antes do cÃ¡lculo de `sampleCount`. Segmento ausente ou corrompido vira histÃ³rico vazio sem abortar o tick.
+`roles/hauler.js` exclui energia caída na posição de qualquer container nas
+duas faixas de pickup. O limite da primeira faixa continua estrito: estimativa
+maior que `hauler.bigDropLoad` (500 por padrão). Um Set de posições é montado
+lazy por sala/tick em `derived`, a partir de `roomCache.structuresByType`.
+O fast gate de grandes drops ignora essas pilhas, preservando picks cacheados
+de links; pickups cacheados são revalidados contra o índice. Sem nova coleta
+de estruturas, sem `lookForAt` e sem Memory. A ordem restante é preservada.
+
+## Estoque de uso e mercado oportunista (0124 / ARK-32)
+
+Compras de reposição (`policy: swing`) compartilham o recurso com operações de consumo; as entradas pendentes reduzem o déficit e a capacidade reservada. Outras saídas do mesmo recurso mantêm exclusividade. O executor serializa intents físicos por terminal/tick, desconta energia carregada por outras operações e associa recebimentos pelo pedido/tick ou descrição da transferência. Deals podem ser confirmados pela transação exata quando o consumo concorrente mascara o delta físico.
+
+O guard `market` roda antes dos consumidores de mercado. `market.historyReady()` exige histórico hidratado e snapshot disponível; swing bloqueia referências parciais com `history-loading` e inicia a cadência apenas após prontidão. A conclusão da hidratação força o recálculo do resumo temporal no mesmo tick.
+
+`global.swingReference(resourceType, kind = "buy")` expõe a referência atual, contagens totais/válidas, mínimo e idade sem aguardar o scan. Bloqueios de referência em `swingStatus()` carregam esses diagnósticos; a contagem total de `marketPrice()` pode incluir preços ausentes.
+
+`utils/resourcePolicy` centraliza alvos por sala, destinos, déficit, capacidade útil do terminal e reservas por quantidade. Energia de consumo (100k no storage) e combustível do terminal (30k padrão) são separados; materiais não usados ficam no terminal, com 15% de folga e overflow temporário no storage. Haulers e receipts usam a mesma política, inclusive para loot e produtos de processamento.
+
+`utils/marketAccounting` calcula créditos livres após piso global de 100k e compromissos de flip/craft, compras pendentes e ordens legadas. Custos aceitos no tick ficam em heap até o estado de créditos refletir os intents. `craftPlanner` desconta reservas compartilhadas; cancelamentos de craft retêm insumos, intermediários e produtos durante a janela stranded.
+
+`utils/swingTrade` consulta o orderBook compartilhado e referências históricas de marketPricing (30 amostras durante validação; alvo final 48, idade máxima 7200 ticks). Balanceamento interno precede compra; custo efetivo considera frete e ganho líquido de energia. Compra abaixo de 99% sellPrice e venda acima de 101% buyPrice; recursos de uso não são liquidados. Começa com `swing.test=true`; `swingStatus(roomName?)` lê candidatos e bloqueios persistidos, sem enfileirar negócios no modo simulado.
+
+`terminalOps` mantém a API anterior e aceita options com `effectiveLimit` e `policy:"swing"`. Antes de deal/listagem, revalida preço, frete, crédito, reservas e capacidade; confirms e receipts mantêm contabilidade parcial. Ordens swing cobram 5% na criação, preservam preço e expiram em 1209600 ticks. `Memory.swing.noRelist` retém saldo por sala/recurso após expiração; vendas imediatas continuam permitidas. Ordens existentes sem operação gerenciada também reservam saldo. A chamada em main passa por `guard` e shedding.
+
+`marketHistoryFlush()` persiste as temporalSnapshots já hidratadas em `utils/market`, permitindo migração imediata sem esperar a próxima coleta. Não consulta o orderBook nem altera o período de amostragem; bloqueia gravação antes da mesclagem do histórico persistido.
+
+O coletor de market possui gate próprio `market.minBucket=500`, independente do shedding geral. `main` sempre chama scan via guard; abaixo do piso ele retorna sem coleta. Amostras históricas vencidas bypassam a cadência atual do book ao recuperar o bucket. O histórico persiste `scheduledTick` opcional junto ao tick real; essa âncora mantém os próximos vencimentos no horário original inclusive após reset. Múltiplos slots perdidos são coalescidos em uma observação real, sem preenchimento artificial.
+
+### Reserva dinâmica de energia do terminal (0124 / ARK-32)
+
+`utils/terminalFuel` centraliza a energia protegida: carga de saída e frete já carregado, mais o frete ainda não coberto das próximas duas transações executáveis e margem de 20%. Quotes publicados por `terminalOps` e observações elegíveis de `swingTrade` expiram em 300 ticks; listings e operações em settlement não projetam um novo frete. Intents aceitos continuam protegidos até o engine aplicá-los. Transferências usam o custo recalculado. Reposição de energia tem prioridade no forecast e no executor.
+
+Sem operações elegíveis, a reserva preventiva é zero. Quando o storage tem menos de 10% do alvo de energia, a margem fica em zero e vendas automáticas com frete superior a 10% do estoque livre de compromissos aguardam. Compromissos existentes continuam protegidos. `resourcePolicy`, abastecimento e retirada de haulers, receipts e executor compartilham a política; o executor exige o frete exato, sem somar novamente a reserva inteira. Haulers em trânsito são descontados da necessidade, e jobs são revalidados antes da coleta/descarga. O excesso só retorna ao storage quando supera 25% da reserva, evitando pequenas viagens inversas.
+
+Configuração em `Memory.settings.terminalFuel`; `enabled:false` preserva o piso legado de `logistics.terminalReserveRatio`. Diagnóstico: `terminalFuelStatus(roomName?)`. O mercado continua em simulação por padrão no código; nenhuma configuração de execução existente em Memory é sobrescrita.
+
+### Claim: trânsito SK (0131)
+
+ARK-115: routing usa restrictionKey (bans) e checa segurança das salas reais da rota/path, evitando invalidar todos os viajantes por intel distante do observer. Buscas completas têm teto default20000 ops e limite adaptado ao tick; no máximo uma por tick. Tentativas falhas têm backoff50, cache no heap por ID/nome estável e retenção1500 ticks. Reconstrução reaproveita validação do mesmo tick. Rotas validadas continuam com bucket baixo; espera sem orçamento retorna ERR_BUSY. claimStatus inclui routePlan compacto com motivo, tick, CPU, maxOps e próxima tentativa. A estimativa ops/CPU é configurável; não é garantia de tempo de execução de PathFinder nem medição de ganho real.
+
+utils/nativePath centraliza a leitura do próximo passo de _move.path: primeiro x/y do primeiro passo, depois direções. Resolve o passo pela posição atual, sem cache adicional, e rejeita paths de outra sala/posição. routing, move, traffic e keeperTransit compartilham o leitor para evitar comandos que confundem coordenadas com direções (ARK-113).
+
+Invader Core isolado não exclui sala do trânsito; routingStructureMatrix bloqueia somente seu tile. O filtro de creeps hostis e proprietário continua ativo (ARK-112).
+
+utils/keeperTransit mantém geometria de lairs/recursos e máscaras no heap, classifica keepers versus outros hostis e solicita visão pela fila existente de observer. rooms/intel atualiza o cache com roomCache/getHostiles. Apenas claim ativa a opção em roles/reserver; utils/routing aplica a máscara em planejamento, execução, fallback e recuo, preservando bans. Versão escalar revalida rota após nova informação/expiração; movimento do keeper não dispara busca completa. Próximo passo perigoso é invalidado e escape aparece como evading_keeper em claimStatus. Configuração em Memory.settings.claim; sem novo gate de spawn.

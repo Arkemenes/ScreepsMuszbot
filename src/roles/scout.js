@@ -2,6 +2,7 @@ const { takeCover, silenceAttackAlerts } = require("../utils/combat");
 const census = require("../utils/census");
 const { roomNeeds } = require("../rooms/needs");
 const routing = require("../utils/routing");
+const nativePath = require("../utils/nativePath");
 const config = require("../utils/config");
 const observer = require("../utils/observer");
 const names = require("../utils/names");
@@ -50,8 +51,8 @@ global.scoutTrace = function (enabled) {
 
     const creep = scouts[0];
     if (enabled === "step") {
-        const path = creep.memory._move && creep.memory._move.path;
-        const direction = path && Number(path[0]);
+        const step = nativePath.nextStep(creep);
+        const direction = step && step.direction;
         if (direction < TOP || direction > TOP_LEFT) {
             console.log("[scoutTrace] no cached direction to probe");
             return;
@@ -237,7 +238,7 @@ var scout = {
             const travelRoom =
                 sourceRoom && !creep.memory._signSourceReached ? sourceRoom : signRoom;
             if (creep.room.name !== signRoom) {
-                const travelPhase = sourceRoom && creep.room.name !== sourceRoom
+                const travelPhase = sourceRoom && !creep.memory._signSourceReached
                     ? "from:" + sourceRoom
                     : "to:" + signRoom;
                 if (creep.memory.signTravelTarget !== travelPhase) {

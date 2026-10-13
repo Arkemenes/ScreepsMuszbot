@@ -3,6 +3,7 @@
 // Cached per tick per room.
 
 const census = require("../utils/census");
+const claimDiagnostics = require("../utils/claimDiagnostics");
 const roomCache = require("../utils/roomCache");
 const { hasLinkNetwork } = require("../utils/energy");
 const remotes = require("./remotes");
@@ -508,9 +509,10 @@ function compute(room) {
         if (hasLiveClaimer) {
             claimPending = 0;
         } else if (Memory.claimTarget.creepSeen) {
+                claimDiagnostics.abandon(Memory.claimTarget);
             console.log(
                 `[remotes] claim on ${Memory.claimTarget.room} abandoned - the ` +
-                    `claimer died before reaching/claiming the controller (from ${name})`
+                    `claimer disappeared before reaching/claiming the controller (from ${name}); cause unconfirmed`
             );
             delete Memory.claimTarget;
         } else {

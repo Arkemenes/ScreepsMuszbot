@@ -1,6 +1,8 @@
 const { getHostiles } = require("../utils/hostiles");
 const roomCache = require("../utils/roomCache");
 const cpuMeter = require("../utils/cpuMeter");
+const transitSafety = require("../utils/transitSafety");
+const keeperTransit = require("../utils/keeperTransit");
 
 const STALE_COUNTERS = [
     "numberOfDefenders", "numberOfUpgraders", "numberOfBuilders", "numberOfMiners",
@@ -58,8 +60,10 @@ function getIntel(room) {
         mem.controllerLevel = controller ? controller.level : undefined;
     });
 
+    cpuMeter.span("intel.transitSafety", () => transitSafety.observeRoom(room));
     const hostiles = cpuMeter.span("intel.hostiles", () => getHostiles(room));
     mem.enemies = hostiles.length;
+    cpuMeter.span("intel.keeperTransit", () => keeperTransit.observe(room, hostiles));
     if (room.controller && room.controller.my) {
         mem.defenseActive = hostiles.length > 0;
     }

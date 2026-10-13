@@ -37,6 +37,7 @@ const constants = {
     STRUCTURE_FACTORY: "factory", STRUCTURE_OBSERVER: "observer",
     STRUCTURE_POWER_SPAWN: "powerSpawn", STRUCTURE_EXTRACTOR: "extractor",
     STRUCTURE_CONTROLLER: "controller", STRUCTURE_POWER_BANK: "powerBank",
+    STRUCTURE_KEEPER_LAIR: "keeperLair",
     STRUCTURE_INVADER_CORE: "invaderCore",
     RESOURCE_ENERGY: "energy", RESOURCE_POWER: "power",
     RESOURCES_ALL: ["energy", "power", "pixel"],
@@ -267,6 +268,8 @@ require(path.join(PROJECT, "src/utils/config")).defaults.stats.publishInterval =
 // the fixture drives these state machines tick by tick: production runs them on a grid
 // (craft.tickInterval 10, terminalOps.tickInterval 5) - own test below
 require(path.join(PROJECT, "src/utils/config")).defaults.craft.tickInterval = 1;
+// Legacy fixtures retain their original planner; 0127 has its own live policy cases.
+require(path.join(PROJECT, "src/utils/config")).defaults.craft.labPolicy = false;
 require(path.join(PROJECT, "src/utils/config")).defaults.terminalOps.tickInterval = 1;
 
 // --- world --------------------------------------------------------------
@@ -455,6 +458,14 @@ try {
 } catch (e) { threw = e; }
 
 console.log = origLog;
+
+function isNativeRoomBlocked(matrix) {
+    if (!(matrix instanceof PathFinder.CostMatrix)) return false;
+    for (let x = 0; x < 50; x++) {
+        for (let y = 0; y < 50; y++) if (matrix.get(x, y) !== 255) return false;
+    }
+    return true;
+}
 
 function assert(cond, msg) {
     if (!cond) { console.error("FAIL: " + msg); process.exitCode = 1; }
@@ -2206,6 +2217,8 @@ function withFindLookup(pos, lists) {
 // drain the terminal below logistics.terminalReserveRatio (10%) of its own
 // capacity, even when the ledger says more is withdrawable in theory -----
 {
+    const savedFuelSettings = Memory.settings.terminalFuel;
+    Memory.settings.terminalFuel = { enabled: false };
     const floorTerm = Object.assign(new Structure(), {
         id: "termfloor", structureType: STRUCTURE_TERMINAL, room,
         pos: new RoomPosition(24, 24, "W1N1"), store: store(1200, 10000), // 12% full, floor is 10% (1000)
@@ -2237,6 +2250,7 @@ function withFindLookup(pos, lists) {
         "at the terminal reserve floor: nothing is withdrawable (ROADMAP 0054, got " +
             hAtFloor._from + ")");
 
+    Memory.settings.terminalFuel = savedFuelSettings;
     delete Memory.rooms.W1N1.terminalLedger;
     room.terminal = null;
 }
@@ -5186,11 +5200,17 @@ delete Game.creeps.Sc2;
     scout.run(sourceScout);
     assert(routedTo[1] === "W3N3",
         "signRoom scout travels to the destination after reaching the source");
+    const signDestinationSince = sourceScout.memory.signTravelSince;
+    sourceScout.memory._routeAvoid = ["WBlockedRoom"];
     sourceScout.room = Object.assign({}, room, { name: "W2N3" });
     Game.time++;
     scout.run(sourceScout);
     assert(routedTo[2] === "W3N3",
         "signRoom scout keeps travelling to the destination after leaving the source");
+    assert(sourceScout.memory.signTravelTarget === "to:W3N3" &&
+        sourceScout.memory.signTravelSince === signDestinationSince &&
+        sourceScout.memory._routeAvoid[0] === "WBlockedRoom",
+        "0129: leaving the sign source preserves destination phase timeout and route state");
     sourceScout.room = targetRoom;
     sourceScout.pos = new RoomPosition(20, 20, "W3N3");
     Game.time++;
@@ -6279,7 +6299,7 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
     // "not blocked" (!== false), not "identical object" any more.
     assert(rsvMoveOpts.costCallback("W1N1", rsvCm) !== false,
         "the reserver's costCallback always allows its own current room");
-    assert(rsvMoveOpts.costCallback("SomeUnrelatedRoom", rsvCm) === false,
+    assert(isNativeRoomBlocked(rsvMoveOpts.costCallback("SomeUnrelatedRoom", rsvCm)),
         "the reserver's costCallback blocks a room outside the computed route");
 
     let rmMinerMoveOpts = null;
@@ -6310,7 +6330,7 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
     // ROADMAP 0077 - see the reserver's own W1N1 assertion above.
     assert(rmMinerMoveOpts.costCallback("W1N1", rmMinerCm) !== false,
         "remoteMiner's costCallback always allows its own home room");
-    assert(rmMinerMoveOpts.costCallback("SomeUnrelatedRoom", rmMinerCm) === false,
+    assert(isNativeRoomBlocked(rmMinerMoveOpts.costCallback("SomeUnrelatedRoom", rmMinerCm)),
         "remoteMiner's costCallback blocks a room that's neither mine, reserved, nor the target " +
             "(AC4 - same guarantee remotes.roomCallback used to give directly)");
 
@@ -6338,7 +6358,7 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
     // ROADMAP 0077 - see the reserver's own W1N1 assertion above.
     assert(rmHaulerMoveOpts.costCallback("W1N1", rmHaulerCm) !== false,
         "remoteHauler's costCallback always allows its own home room");
-    assert(rmHaulerMoveOpts.costCallback("SomeUnrelatedRoom", rmHaulerCm) === false,
+    assert(isNativeRoomBlocked(rmHaulerMoveOpts.costCallback("SomeUnrelatedRoom", rmHaulerCm)),
         "remoteHauler's costCallback blocks a room that's neither mine, reserved, nor the target " +
             "(AC4 - same guarantee remotes.roomCallback used to give directly)");
 
@@ -6562,7 +6582,7 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
         "routeCostCallback allows a room on the chosen route");
     assert(routingCb("E10N20", routingCm) === routingCm,
         "routeCostCallback always allows the destination");
-    assert(routingCb("E15N15", routingCm) === false,
+    assert(isNativeRoomBlocked(routingCb("E15N15", routingCm)),
         "routeCostCallback blocks a room that's neither current, destination, nor on the route");
 
     // ROADMAP 0061 (researched from screeps-cartographer's findRoute
@@ -6587,7 +6607,7 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
         "W1N1", "E10N20",
         { blockHostiles: true }
     );
-    assert(slackHostileCb("E11N10Hostile", routingCm) === false,
+    assert(isNativeRoomBlocked(slackHostileCb("E11N10Hostile", routingCm)),
         "routeCostCallback's slack never adds a known-hostile neighbor under blockHostiles");
     delete Memory.rooms["E10N10x"];
     delete Memory.rooms["E11N10Hostile"];
@@ -6596,7 +6616,7 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
         [{ exit: 1, room: "E10N10NoIntel" }, { exit: 1, room: "E10N20" }],
         "W1N1", "E10N20"
     );
-    assert(noIntelCb("E10N9", routingCm) === false,
+    assert(isNativeRoomBlocked(noIntelCb("E10N9", routingCm)),
         "routeCostCallback adds no slack for a hop with no exits intel yet");
 
     // ROADMAP 0064 live follow-up: avoidCostCallback - the blocklist twin
@@ -6608,7 +6628,7 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
     // validated sequence, stays fully open
     {
         const avoidCb = routing.avoidCostCallback(["WAvoidedRoom"], {});
-        assert(avoidCb("WAvoidedRoom", routingCm) === false,
+    assert(isNativeRoomBlocked(avoidCb("WAvoidedRoom", routingCm)),
             "avoidCostCallback excludes a room in the avoid list outright");
         assert(avoidCb("WTotallyUnrelatedRoom", routingCm) === routingCm,
             "avoidCostCallback leaves every other room open, unlike routeCostCallback's " +
@@ -6617,7 +6637,7 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
 
         Memory.rooms.WAvoidHostile = { enemies: 1 };
         const avoidHostileCb = routing.avoidCostCallback([], { blockHostiles: true });
-        assert(avoidHostileCb("WAvoidHostile", routingCm) === false,
+    assert(isNativeRoomBlocked(avoidHostileCb("WAvoidHostile", routingCm)),
             "avoidCostCallback also excludes a known-hostile room under blockHostiles");
         assert(routing.avoidCostCallback([], {})("WAvoidHostile", routingCm) === routingCm,
             "but not without blockHostiles - matches routeCostCallback's own gating");
@@ -7099,7 +7119,7 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
             const cm = new PathFinder.CostMatrix();
             assert(seenCostCallback("WCache2", cm) === cm,
                 "the cached real route's next hop is allowed");
-            assert(seenCostCallback("WSomeUnrelatedRoom", cm) === false,
+    assert(isNativeRoomBlocked(seenCostCallback("WSomeUnrelatedRoom", cm)),
                 "a validated hop excludes rooms outside the current room and next hop");
             PathFinder.search = realSearch;
             Game.map.findRoute = realFindRouteRR;
@@ -7124,9 +7144,9 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
             };
             routing.moveToRoom(blockCreep, "W9N9", { range: 20, realRoute: true });
             const cm2 = new PathFinder.CostMatrix();
-            assert(seenCostCallback2("WBlockedRoom", cm2) === false,
+    assert(isNativeRoomBlocked(seenCostCallback2("WBlockedRoom", cm2)),
                 "opts.avoid still excludes a room outright under the blocklist-based callback");
-            assert(seenCostCallback2("WAnyOtherRoom", cm2) === false,
+    assert(isNativeRoomBlocked(seenCostCallback2("WAnyOtherRoom", cm2)),
                 "a validated hop still excludes unrelated rooms");
             PathFinder.search = realSearch;
         }
@@ -7166,7 +7186,7 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
                 "_realRoute stays cached across the deviation instead of being deleted"
             );
             const cm3 = new PathFinder.CostMatrix();
-            assert(seenCostCallback3("WSomeRoomNeverInTheRoute", cm3) === false,
+    assert(isNativeRoomBlocked(seenCostCallback3("WSomeRoomNeverInTheRoute", cm3)),
                 "a deviation does not reopen arbitrary rooms during a validated hop");
             PathFinder.search = realSearch;
             Game.map.findRoute = realFindRouteRR;
@@ -7759,13 +7779,13 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
                 [{ exit: 1, room: "WMazeRoom" }, { exit: 1, room: "W9N9" }],
                 "WMazeHub", "W9N9", {}
             );
-            assert(cb("WMazeRoom", cm) === false,
+    assert(isNativeRoomBlocked(cb("WMazeRoom", cm)),
                 "routeCostCallback excludes a shared dead end even though findRoute() itself " +
                     "picked it as part of the route (AC3)");
         }
         {
             const cbAvoid = routing.avoidCostCallback([], {});
-            assert(cbAvoid("WMazeRoom", new PathFinder.CostMatrix()) === false,
+    assert(isNativeRoomBlocked(cbAvoid("WMazeRoom", new PathFinder.CostMatrix())),
                 "avoidCostCallback excludes a shared dead end too (AC3)");
         }
 
@@ -10948,6 +10968,11 @@ function mineralStore(resources, freeCap) {
     global.setLabReaction("LabRoom", "H", "O");
     const reaction = Memory.rooms.LabRoom.labReaction;
     const outputLab = labRoomStructs.find((l) => l.id === reaction.output);
+    const reagentA = labRoomStructs.find((l) => l.id === reaction.input1);
+    const reagentB = labRoomStructs.find((l) => l.id === reaction.input2);
+    reagentA.mineralType = "H"; reagentA.store = mineralStore({ H: 100 }, 2900);
+    reagentB.mineralType = "O"; reagentB.store = mineralStore({ O: 100 }, 2900);
+    outputLab.mineralType = null; outputLab.store = mineralStore({}, 3000);
     const inputLabs = labRoomStructs.filter((l) => l.id !== reaction.output);
 
     labMod.run(inputLabs[0]);
@@ -11909,6 +11934,12 @@ origLog("\nMemory:", memStr.length, "bytes  |  rooms.W1N1 keys:",
     Game.rooms = oldRooms; Game.myRooms = oldMyRooms; Memory.energyBalancing = oldBalancing;
 }
 // ROADMAP 0098 regression coverage for the execution and recovery states.
+// These fixtures explicitly exercise zero-fuel-reserve legacy operation paths.
+const legacyTerminalSettings = Memory.settings;
+Memory.settings = Object.assign({}, Memory.settings, {
+    terminalOps: Object.assign({}, Memory.settings && Memory.settings.terminalOps, { tickInterval: 1 }),
+    logistics: Object.assign({}, Memory.settings && Memory.settings.logistics, { terminalReserveRatio: 0 }),
+});
 {
     const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
     const makeStore = (energy, capacity) => ({ [RESOURCE_ENERGY]: energy, getFreeCapacity: () => capacity - energy, getUsedCapacity: () => energy, getCapacity: () => capacity });
@@ -11957,9 +11988,10 @@ origLog("\nMemory:", memStr.length, "bytes  |  rooms.W1N1 keys:",
     // the terminal's real store (see the settling regression at the end).
     terminalStore[RESOURCE_ENERGY] -= 20; Game.time++;
     Memory.terminalOps.operations.buyTest = { id: "buyTest", kind: "buy", sourceRoom: "W7N5", resourceType: RESOURCE_ENERGY, amount: 100, remaining: 100, loadedAmount: 0, limit: 2, energyFairPrice: 0, state: "queued", sentAmount: 0, createdTick: Game.time, updatedTick: Game.time };
+    Memory.terminalOps.nextId++; // Match create(): invalidate the heap index when inserting an operation.
     terminalOps.tick();
     assert(Memory.terminalOps.operations.sellTest.dealtAmount === 20, "0098 a SELL books its sale only once the terminal's store confirms the goods left");
-    assert(Memory.terminalOps.operations.buyTest.state === "settling" && dealAmount === 100, "0098 BUY deal waits in settling before touching any bookkeeping");
+    assert(Memory.terminalOps.operations.buyTest.state === "settling" && dealAmount === 100, "0098 BUY deal waits in settling before touching any bookkeeping: " + JSON.stringify(Memory.terminalOps.operations.buyTest));
     terminalStore[RESOURCE_ENERGY] += 100; Game.time++;
     terminalOps.tick();
     assert(Memory.terminalOps.operations.buyTest.state === "awaitingReceipt", "0098 BUY deal transitions to receipt handling");
@@ -13078,6 +13110,7 @@ function flipHistoryFromBook() {
     };
 }
 // --- ROADMAP 0110: market flip (instant arbitrage) ----------------------
+Memory.settings = legacyTerminalSettings;
 function marketFlipModule() {
     // marketPricing binds to whichever market.js instance was current when it
     // loaded (an earlier test reloads market.js), so reload it with the flip.
@@ -13356,11 +13389,11 @@ function resetMarketFlipState() {
     marketFlip.tick();
     const oppO = Memory.marketFlip.lastOpportunities.find((o) => o.resourceType === "O");
     const oppZ = Memory.marketFlip.lastOpportunities.find((o) => o.resourceType === "Z");
-    // cap1 = 0.05 * 1,000,000 = 50000 credits / buyPrice 10 = 5000 units
-    // cap2 = 0.05 * (1,000,000 - 50000) = 47500 credits / buyPrice 10 = 4750 units
-    assert(oppO && oppO.quantity === 5000, "0110 AC8: the first (most profitable) flip uses 5% of the tick's original balance (got " + JSON.stringify(oppO) + ")");
-    assert(oppZ && oppZ.quantity === 4750, "0110 AC8: the second flip uses 5% of what remained after the first, not the original balance (got " + JSON.stringify(oppZ) + ")");
-    assert(buyCalls === 2 && Memory.marketFlip.committedCredits === 5000 * 10 + 4750 * 10, "0110 AC8: both flips open, committedCredits reflects both reservations");
+    // cap1 = 5% of 900k above the 100k global floor = 4500 units
+    // cap2 = 5% of the remaining 855k = 4275 units
+    assert(oppO && oppO.quantity === 4500, "0110 AC8: the first (most profitable) flip uses 5% of the tick's original balance (got " + JSON.stringify(oppO) + ")");
+    assert(oppZ && oppZ.quantity === 4275, "0110 AC8: the second flip uses 5% of what remained after the first, not the original balance (got " + JSON.stringify(oppZ) + ")");
+    assert(buyCalls === 2 && Memory.marketFlip.committedCredits === 4500 * 10 + 4275 * 10, "0110 AC8: both flips open, committedCredits reflects both reservations");
     Game.rooms = oldRooms; Game.market = oldMarket; Memory.settings = oldSettings; market.snapshot = oldSnapshot; terminalOps.buy = oldBuy;
 }
 // AC9: a flip stuck past maxHoldingTicks is cancelled - releases the
@@ -14410,7 +14443,7 @@ function priceSamples(bid, ask, n, vol) {
     Game.time++;
     const roomA = chainRoomFor("DirectA"), roomB = chainRoomFor("DirectB");
     const jobA = hauler.pickMineralJob(roomA), jobB = hauler.pickMineralJob(roomB);
-    assert(jobA && jobA.kind === "factoryOutput" && jobA.to === roomA.storage, "0111: without the flag a factory product still goes to storage (got " + (jobA && jobA.kind) + ")");
+    assert(jobA && jobA.kind === "factoryOutput" && jobA.to === roomA.terminal, "0124: unused factory product goes to terminal without requiring directToTerminal (got " + (jobA && jobA.kind) + ")");
     assert(jobB && jobB.kind === "factoryOutput" && jobB.to === roomB.terminal, "0111: with directToTerminal the final product goes straight to the terminal (got " + (jobB && jobB.kind) + ")");
     Memory.rooms = savedMemRooms;
 }
@@ -14821,7 +14854,7 @@ function priceSamples(bid, ask, n, vol) {
     c = widget(run({}, flipEntry({ state: "selling", openedTick: Game.time - 5000, sellStartTick: Game.time + 1000 - 10 })));
     assert(c && c.buys.Z > 0 && !c.owns.Z, "0111: a flip that only just started selling keeps its lock, however old the buy is");
     c = widget(run({}, flipEntry({ state: "selling", openedTick: Game.time - 5000, sellStartTick: Game.time - 500 })));
-    assert(c && c.owns.Z > 0 && !c.buys.Z, "0111: a flip that failed to sell within the lock window leaves its material as plain stock (got " + JSON.stringify(c && c.owns) + ")");
+    assert(c && c.buys.Z > 0 && !c.owns.Z, "0124: an active flip retains its quantity after the old short lock window (got " + JSON.stringify(c && c.owns) + ")");
     c = widget(run({ flipLockTicks: 5000 }, flipEntry({ state: "selling", openedTick: Game.time - 5000, sellStartTick: Game.time - 500 })));
     assert(c && c.buys.Z > 0 && !c.owns.Z, "0111: craft.flipLockTicks sets the window");
     // the flip records when it starts selling
@@ -14898,8 +14931,8 @@ function priceSamples(bid, ask, n, vol) {
     assert(op.state === "completed" && /outro caminho/.test(op.error || ""), "0111: a buy whose goods already left the terminal completes instead of waiting forever (state " + op.state + ", error " + op.error + ")");
     // goods still sitting in the terminal: the normal receipt flow owns it, the buy must not be closed early
     op = run(mkRoom(1500), 40);
-    assert(op.state === "awaitingReceipt", "0111: a buy whose goods are still in the terminal is left to the receipt flow (state " + op.state + ")");
-    assert(Object.values(Memory.terminalOps.operations).some((o) => o.kind === "receipt" && o.parentId === "terminal-1"), "0111: that receipt is linked to the buy so it can close it");
+    assert(op.state === "completed" && op.receivedAmount === 1500, "0124: an existing buy completes with unused goods retained in terminal (state " + op.state + ")");
+    assert(!Object.values(Memory.terminalOps.operations).some((o) => o.kind === "receipt" && o.resourceType === "power" && o.state !== "completed"), "0124: retained stock does not mint an unload receipt");
     // the window is configurable
     Game.rooms = { OrphanRoom: mkRoom(0) }; Game.creeps = {}; Game.market = { credits: 1e6, incomingTransactions: [] };
     Memory.settings = Object.assign({}, saved.settings, { terminalOps: { orphanBuyConfirmTicks: 3 } });
@@ -15488,8 +15521,10 @@ function priceSamples(bid, ask, n, vol) {
     // lab.js: every listed output lab reacts on its own cooldown; inputs and unlisted labs do not
     const labMod = require(path.join(PROJECT, "src/structures/lab"));
     const savedRooms = Memory.rooms, savedGet = Game.getObjectById;
-    const mkReactLab = (id) => ({ id, room: { name: "WideLabRoom" }, cooldown: 0, ran: 0, runReaction(a, b) { this.ran++; this.args = [a.id, b.id]; return OK; } });
+    const mkReactLab = (id) => ({ id, room: { name: "WideLabRoom" }, cooldown: 0, ran: 0, store: {}, runReaction(a, b) { this.ran++; this.args = [a.id, b.id]; return OK; } });
     const wl = { in1: mkReactLab("wl-in1"), in2: mkReactLab("wl-in2"), o1: mkReactLab("wl-o1"), o2: mkReactLab("wl-o2"), o3: mkReactLab("wl-o3"), other: mkReactLab("wl-other") };
+    wl.in1.mineralType = "H"; wl.in1.store.H = 100;
+    wl.in2.mineralType = "O"; wl.in2.store.O = 100;
     Game.getObjectById = (id) => { const k = Object.keys(wl).find((n) => wl[n].id === id); return k ? wl[k] : savedGet.call(Game, id); };
     Memory.rooms = Object.assign({}, savedRooms, { WideLabRoom: { labReaction: { a: "H", b: "O", product: "OH", output: "wl-o1", outputs: ["wl-o1", "wl-o2", "wl-o3"], input1: "wl-in1", input2: "wl-in2" } } });
     wl.o2.cooldown = 7;
@@ -15498,6 +15533,7 @@ function priceSamples(bid, ask, n, vol) {
         "0111: every output lab of a wide reaction reacts, the one on cooldown waits, inputs and unlisted labs stay idle (ran " + JSON.stringify(Object.keys(wl).map((k) => k + ":" + wl[k].ran)) + ")");
     Memory.rooms.WideLabRoom.labReaction = { a: "H", b: "O", product: "OH", output: "wl-o1", input1: "wl-in1", input2: "wl-in2" };
     Object.keys(wl).forEach((k) => { wl[k].ran = 0; wl[k].cooldown = 0; });
+    Game.time++; // shared reservations reset on a new tick
     Object.keys(wl).forEach((k) => labMod.run(wl[k]));
     assert(wl.o1.ran === 1 && wl.o2.ran === 0 && wl.o3.ran === 0, "0111: a reaction without an outputs list still runs on its single output lab (manual setLabReaction)");
 
@@ -15783,3 +15819,160 @@ function priceSamples(bid, ask, n, vol) {
     Memory.settings = saved.settings; Memory.craft = saved.craft; Memory.rooms = saved.memRooms; Memory.marketFlip = saved.flip; Memory.terminalOps = saved.ops;
     Game.cpu.bucket = saved.bucket; Game.time = saved.time;
 }
+
+// 0125: compare equal delivered quantities, never perform an intent.
+{
+    const routing = require(path.join(PROJECT, "src/utils/terminalRouting"));
+    const saved = { settings: Memory.settings, resources: RESOURCES_ALL, rooms: Game.rooms };
+    Memory.settings = {};
+    RESOURCES_ALL = ["energy", "Z"];
+    const source = "W1N1", hub = "E2N46", target = "W9N9";
+    const cost = (n, from, to) => Math.ceil(n * (from === source && to === target ? 0.5 : from === hub ? 0.5 : 0.1));
+    const opts = { calcTransactionCost: cost };
+    try {
+        let q = routing.quote(source, target, "Z", 100, opts);
+        assert(q.ok && q.route === "relay" && q.direct.freight === 50 && q.relay.freight === 40 && q.relay.fundingAmount === 27 && q.relay.fundingFreight === 3 && q.savingsEnergy === 10, "0125: mineral quote includes funding freight and message");
+        q = routing.quote(source, target, "energy", 100, opts);
+        assert(q.ok && q.route === "relay" && q.relay.cargoAmount === 127 && q.relay.deliveredAmount === 100 && q.relay.fundingAmount === 0 && q.relay.fundingFreight === 0 && q.direct.totalEnergy === 150 && q.relay.totalEnergy === 140, "0125: energy quote compares equal delivered amounts");
+        q = routing.quote(source, target, "Z", 101, opts);
+        assert(q.direct.freight === 51 && q.relay.hubFreight === 26 && q.relay.fundingAmount === 28 && q.relay.originFreight === 11 && q.relay.fundingFreight === 3 && q.relay.freight === 42, "0125: rounding includes every leg");
+        const tieCost = (n, from, to) => from === source && to === target ? 40 : cost(n, from, to);
+        const worseCost = (n, from, to) => from === source && to === target ? 39 : cost(n, from, to);
+        assert(routing.quote(source, target, "Z", 100, { calcTransactionCost: tieCost }).route === "direct" && routing.quote(source, target, "Z", 100, { calcTransactionCost: worseCost }).route === "direct", "0125: equal or worse freight stays direct");
+        q = routing.quote(source, target, "energy", 100, Object.assign({}, opts, { critical: true }));
+        const urgent = routing.quote(source, target, "energy", 100, Object.assign({}, opts, { urgent: true }));
+        assert(urgent.route === "direct" && urgent.reason === "urgent-direct" && routing.quote(source, target, "energy", 100, opts).route === "relay", "0125: relay is automatic unless explicitly urgent");
+        assert(q.route === "direct" && q.economic && q.reason === "critical-direct" && routing.quote(source, target, "energy", 100, Object.assign({}, opts, { urgency: "critical" })).route === "direct", "0125: critical transfer stays direct");
+        assert(routing.quote(source, target, "Z", 100, Object.assign({}, opts, { relayAvailable: false })).route === "direct", "0125: unavailable relay stays direct");
+        assert(routing.quote(source, target, "Z", 100, Object.assign({}, opts, { minSavingsEnergy: 11 })).route === "direct" && routing.quote(source, target, "Z", 100, Object.assign({}, opts, { minSavingsRatio: 0.21 })).route === "direct" && routing.quote(source, target, "Z", 100, Object.assign({}, opts, { sourceMultiplier: 0.5 })).route === "direct", "0125: savings thresholds and powered sender are respected");
+        Memory.settings.terminalRelay = { minSavingsEnergy: 11 };
+        assert(routing.quote(source, target, "Z", 100, opts).route === "direct", "0125: Memory settings override quote defaults");
+        Memory.settings = {};
+        const invalid = [0, -1, 1.5, NaN, Number.MAX_SAFE_INTEGER + 1];
+        assert(invalid.every(n => !routing.quote(source, target, "Z", n, opts).ok) && !routing.quote("invalid", target, "Z", 100, opts).ok && !routing.quote(source, target, "pixel", 100, opts).ok && !routing.quote(source, target, "Z", 100, { calcTransactionCost: () => NaN }).ok && !routing.quote(source, target, "Z", 100, { calcTransactionCost: () => { throw new Error("offline"); } }).ok, "0125: invalid cost fails closed without sending");
+        const zero = routing.quote(source, target, "Z", 100, { calcTransactionCost: () => 0 });
+        assert(zero.route === "direct" && zero.savingsRatio === 0 && zero.relay.freight === 2, "0125: zero direct freight keeps the fixed message overhead");
+        assert(routing.quote(hub, target, "Z", 100, opts).reason === "hub-endpoint" && routing.quote(source, hub, "Z", 100, opts).route === "direct", "0125: hub endpoints cannot loop through relay");
+        let fundingFrom = null;
+        routing.quote(source, target, "Z", 100, Object.assign({}, opts, { fundingRoom: "W2N2", calcTransactionCost: (n, from, to) => { if (n === 27 && to === hub) fundingFrom = from; return cost(n, from, to); } }));
+        assert(fundingFrom === "W2N2", "0125: separate funding room is included in freight");
+        const previousPower = global.PWR_OPERATE_TERMINAL, previousInfo = global.POWER_INFO;
+        global.PWR_OPERATE_TERMINAL = 99; global.POWER_INFO = { 99: { effect: [0.9, 0.8, 0.7, 0.6, 0.5] } };
+        Game.rooms = { [source]: { terminal: { effects: [{ effect: 99, level: 5, ticksRemaining: 20 }] } } };
+        q = routing.quote(source, target, "Z", 100, opts);
+        assert(q.direct.freight === 25 && q.relay.originFreight === 5 && q.relay.fundingFreight === 2 && q.route === "direct", "0125: active operate terminal power affects both source sends");
+        Game.rooms[source].terminal.effects[0].ticksRemaining = 0;
+        assert(routing.quote(source, target, "Z", 100, opts).route === "relay", "0125: expired power does not reduce freight");
+        if (previousPower === undefined) delete global.PWR_OPERATE_TERMINAL; else global.PWR_OPERATE_TERMINAL = previousPower;
+        if (previousInfo === undefined) delete global.POWER_INFO; else global.POWER_INFO = previousInfo;
+        const before = JSON.stringify(Memory);
+        let sends = 0;
+        Game.rooms = { [source]: { terminal: { send: () => { sends++; } } } };
+        q = global.terminalRelayQuote(source, target, "energy", 100, opts);
+        assert(q.ok && sends === 0 && JSON.stringify(Memory) === before, "0125: quote is read only and registered in the console");
+        // Verify the self-funded lot leaves exactly A deliverable, not A-its-fee.
+        let equivalent = true;
+        for (let n = 1; n <= 200; n++) {
+            const energy = routing.quote(source, target, "energy", n, opts);
+            const canDeliver = energy.relay.cargoAmount - n >= Math.ceil(cost(n, hub, target) / 2) + 2;
+            const cannotDeliverMore = energy.relay.cargoAmount - (n + 1) < Math.ceil(cost(n + 1, hub, target) / 2) + 2;
+            equivalent = equivalent && canDeliver && cannotDeliverMore;
+        }
+        assert(equivalent, "0125: self funded amount delivers exactly the requested energy across rounding boundaries");
+    } finally {
+        Memory.settings = saved.settings; RESOURCES_ALL = saved.resources; Game.rooms = saved.rooms;
+    }
+}
+
+// 0126: avoid walking to overflow already covered by a container.
+{
+    const haul = require(path.join(PROJECT, "src/roles/hauler"));
+    const saved = { time: Game.time, creeps: Game.creeps, get: Game.getObjectById, settings: Memory.settings, mem: Memory.rooms.W8N8 };
+    const name = "W8N8", objects = {}, calls = {};
+    let containers = [], drops = [], links = [], searches = 0;
+    const pos = (x, y) => new RoomPosition(x, y, name);
+    const source = { id: "126-source", pos: pos(10, 10) };
+    const sourceBox = { id: "126-box", structureType: STRUCTURE_CONTAINER, pos: pos(10, 11), store: store(2000, 2000) };
+    const receiving = { id: "126-link", structureType: STRUCTURE_LINK, pos: pos(20, 20), store: store(800, 800), isCollector: () => false };
+    const localRoom = { name, storage: null, terminal: null, find: type => {
+        calls[type] = (calls[type] || 0) + 1;
+        if (type === FIND_STRUCTURES) return containers.concat(links);
+        if (type === FIND_MY_STRUCTURES) return links;
+        if (type === FIND_DROPPED_RESOURCES) return drops;
+        if (type === FIND_SOURCES) return [source];
+        return [];
+    } };
+    const pile = (id, amount, x = 10, y = 11) => {
+        const value = { id, resourceType: RESOURCE_ENERGY, amount, pos: pos(x, y) };
+        objects[id] = value; return value;
+    };
+    const picker = suffix => ({ name: "H126-" + suffix, room: localRoom, memory: {}, store: store(0, 1000), pos: {
+        getRangeTo: () => 0,
+        findClosestByPath: (list, opts) => {
+            searches++;
+            const candidates = list === FIND_DROPPED_RESOURCES ? drops : list;
+            return candidates.find(value => !opts || !opts.filter || opts.filter(value)) || null;
+        },
+        findClosestByRange: list => list[0] || null,
+    } });
+    const next = () => { Game.time++; searches = 0; for (const type of Object.keys(calls)) delete calls[type]; };
+    try {
+        Game.time += 1000; Game.creeps = {}; Memory.settings = {}; Memory.rooms[name] = {};
+        Game.getObjectById = id => objects[id] || saved.get(id);
+        objects[receiving.id] = receiving; objects[sourceBox.id] = sourceBox;
+        containers = [sourceBox]; links = [receiving]; drops = [pile("126-overflow", 5000)];
+        const firstHauler = picker("overflow");
+        Game.creeps[firstHauler.name] = firstHauler; // Keep it alive for the target-cache GC.
+        let picked = haul.pickLoad(firstHauler);
+        assert(picked && picked.id === receiving.id && picked.dest === "storage", "0126: overflow under a source container yields to the receiving link");
+        const cachedLink = picked;
+        next();
+        picked = haul.pickLoad(firstHauler);
+        assert(picked === cachedLink && searches === 0, "0126: a covered overflow does not invalidate a cached link (same=" + (picked === cachedLink) + ", searches=" + searches + ", pick=" + JSON.stringify(picked) + ")");
+        next();
+        drops = [pile("126-exact500", 500, 12, 12)];
+        const at500 = haul.pickLoad(picker("500"));
+        next(); drops[0].amount = 501;
+        const above500 = haul.pickLoad(picker("501"));
+        assert(at500 && at500.id === receiving.id && above500 && above500.id === "126-exact500" && above500.tier === "bigDrop", "0126: only uncovered drops above 500 enter the first tier");
+        next();
+        const otherBox = { id: "126-other", structureType: STRUCTURE_CONTAINER, pos: pos(30, 30), store: store(0, 2000) };
+        objects[otherBox.id] = otherBox;
+        containers = [sourceBox, otherBox]; links = []; drops = [pile("126-small-covered", 300, 30, 30)];
+        picked = haul.pickLoad(picker("small"));
+        assert(picked && picked.id === sourceBox.id && picked.act === "withdraw", "0126: small drops under any container are excluded");
+        next(); containers = []; links = [receiving]; drops = [pile("126-cache-drop", 300, 30, 30)];
+        const changing = picker("changing");
+        Game.creeps[changing.name] = changing;
+        picked = haul.pickLoad(changing);
+        assert(picked && picked.id === "126-cache-drop", "0126: uncovered small pickup can enter the target cache");
+        next(); containers = [sourceBox, otherBox];
+        picked = haul.pickLoad(changing);
+        assert(picked && picked.id === receiving.id && picked.dest === "storage", "0126: a cached pickup covered by a container is reselected");
+        next(); drops = [pile("126-shared-covered", 5000)];
+        haul.pickLoad(picker("shared1")); haul.pickLoad(picker("shared2"));
+        assert(calls[FIND_STRUCTURES] === 1 && calls[FIND_DROPPED_RESOURCES] === 1, "0126: container positions are shared by haulers within a tick");
+        next(); containers = [];
+        picked = haul.pickLoad(picker("removed"));
+        assert(picked && picked.id === "126-shared-covered" && picked.tier === "bigDrop", "0126: container position index refreshes next tick");
+    } finally {
+        Game.time = saved.time; Game.creeps = saved.creeps; Game.getObjectById = saved.get; Memory.settings = saved.settings;
+        if (saved.mem === undefined) delete Memory.rooms[name]; else Memory.rooms[name] = saved.mem;
+    }
+}
+
+// ROADMAP 0124: usage stock and opportunistic market integration.
+require("./marketHistoryCases")(PROJECT, assert);
+require("./terminalFuelCases")(PROJECT, assert);
+require("./stockPolicyCases")(PROJECT, assert);
+// ROADMAP 0128: offline lab strategy search, physical-model regressions.
+require("./labResearchCases")(PROJECT, assert);
+require("./labPolicyCases")(PROJECT, assert);
+require("./transitSafetyCases")(PROJECT, assert);
+require("./claimRouteCases")(PROJECT, assert);
+require("./claimDiagnosticsCases")(PROJECT, assert);
+require("./keeperTransitCases")(PROJECT, assert);
+require("./nativePathCases")(PROJECT, assert);
+require("./routingBudgetCases")(PROJECT, assert);
+require("./movementCpuCases")(PROJECT, assert);
+require("./economyCpuCases")(PROJECT, assert);

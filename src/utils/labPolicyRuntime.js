@@ -1,0 +1,334 @@
+"use strict";
+
+const config = require("./config");
+const policy = require("./labPolicy");
+const model = require("./labPlanModel");
+const labSlots = require("./labSlots");
+const labReactions = require("./labReactions");
+const census = require("./census");
+const layoutCache = new Map();
+function bindings(built, desired, products, map) {
+    const key = built.join(",") + ":" + desired.join(",") + ":" + products.map((p) => p + map[p].inputs.join(",")).join(";");
+    if (layoutCache.has(key)) return layoutCache.get(key);
+    const geometry = model.trios(built), sources = built.map(() => []);
+    const pairs = desired.map((p, out) => {
+        if (!products.includes(p)) return [];
+        const result = geometry.filter((g) => g.out === out && desired[g.a] === map[p].inputs[0] && desired[g.b] === map[p].inputs[1]);
+        result.forEach((g) => { for (const i of [g.a, g.b]) if (!sources[i].includes(p)) sources[i].push(p); });
+        return result;
+    });
+    const value = { pairs, sources };
+    layoutCache.set(key, value);
+    if (layoutCache.size > 256) layoutCache.delete(layoutCache.keys().next().value);
+    return value;
+}
+
+function resolve(room) {
+    const all = labSlots.resolve(room);
+    if (!all) return null;
+    const mem = Memory.rooms && Memory.rooms[room.name] || {};
+    const reserved = mem.labBoostReservations || {};
+    const built = all.built.filter((slot) => {
+        const lab = Game.getObjectById(all.ids[slot]);
+        return lab && (!lab.isActive || lab.isActive()) && !reserved[lab.id] &&
+            !(mem.labLoad && !mem.labLoadAuto && mem.labLoad[lab.id]);
+    });
+    return built.length < 3 ? null : { built, ids: all.ids };
+}
+function profile(room) {
+    if (!Memory.rooms) Memory.rooms = {};
+    if (!Memory.rooms[room.name]) Memory.rooms[room.name] = {};
+    const mem = Memory.rooms[room.name];
+    if (!mem.labLogistics) mem.labLogistics = { samples: 0, movement: 0, switchSamples: 0, switchTicks: 0 };
+    const measured = mem.labLogistics;
+    const override = config.get("craft.policyBandwidth", 0);
+    const d = config.get("craft.policySwitchDelay", null);
+    const bandwidth = override === "instant" ? null : override > 0 ? override :
+        Math.max(1, Math.round(measured.samples ? measured.movement / measured.samples : config.get("craft.policyInitialBandwidth", 4)));
+    const delay = d !== null ? Math.max(0, d) : Math.min(200, Math.round(measured.switchSamples ?
+        measured.switchTicks / measured.switchSamples : config.get("craft.policyInitialDelay", 50)));
+    return { bandwidth, delay, buffer: config.get("craft.policyBuffer", 500),
+        refillRatio: Math.max(0.1, Math.min(1, config.get("craft.policyRefillRatio", 0.5))),
+        allowPipeline: config.get("craft.policyAllowUnmeasuredPipeline", false) ||
+            (override === "instant" || override > 0) && d !== null ||
+            measured.samples >= config.get("craft.policyLogisticsSamples", 100) && measured.movement > 0 };
+}
+function remaining(item, state, p) { return Math.max(0, (item.targets[p] || 0) - (state.produced[p] || 0)); }
+function phaseRemaining(state, p) { return Math.max(0, (state.quota[p] || 0) - (state.produced[p] || 0)); }
+function snapshot(room, chain, item, resolved, state) {
+    const logistics = profile(room), map = policy.recipeMap(), need = {};
+    const targets = Object.fromEntries(item.order.map((p) => [p, state ? remaining(item, state, p) : item.targets[p]]));
+    item.order.forEach((p) => { for (const r of map[p].inputs) need[r] = (need[r] || 0) + targets[p]; });
+    // Other chains/manual reservations remain unavailable; our own purchases are usable.
+    const commitments = config.get("stockPolicy.enabled", true) ? require("./resourcePolicy").commitments(room, chain.id) : {};
+    const stock = {};
+    const carriers = census.creepsByRole(room.name, "hauler").filter((creep) => {
+        const job = creep.memory.mineralJob;
+        return job && (job.policy || job.chain && ["labReagent", "labOutput"].includes(job.kind));
+    });
+    Object.keys(need).forEach((r) => {
+        const total = (room.storage && room.storage.store[r] || 0) + (room.terminal && room.terminal.store[r] || 0) +
+            carriers.reduce((sum, creep) => sum + (creep.store[r] || 0), 0);
+        stock[r] = Math.min(need[r], Math.max(0, total - (commitments[r] || 0)));
+    });
+    const labs = resolved.built.map((slot, i) => {
+        const lab = Game.getObjectById(resolved.ids[slot]);
+        return { role: lab.mineralType || state && state.roles[i] || null,
+            amount: lab.mineralType ? lab.store[lab.mineralType] || 0 : 0, next: lab.cooldown || 0, ready: 0,
+            refilling: !!(state && state.refilling && state.refilling[i]) };
+    });
+    return { product: item.product, qty: Math.max(5, ...Object.values(targets)), targets,
+        built: resolved.built, stock, labs, ...logistics };
+}
+function confirm(room, chain, item, state, labs) {
+    const map = policy.recipeMap(), adjustments = labs.map(() => ({}));
+    const byId = new Map(labs.map((l, i) => [l.id, i]));
+    const pending = [];
+    for (const intent of state.pending || []) {
+        if (intent.tick >= Game.time) { pending.push(intent); continue; }
+        const out = Game.getObjectById(intent.out);
+        // Policy suspends for powers. An observed new cooldown proves the engine
+        // applied the reaction, even when consumers/haulers moved the output.
+        const elapsed = Game.time - intent.tick;
+        const expected = map[intent.product].cooldown - elapsed;
+        if (expected <= 0 || out && (out.effects || []).some((e) => e.ticksRemaining > 0)) {
+            state.uncertain = true;
+            continue;
+        }
+        const success = out && expected > 0 && out.cooldown === expected;
+        if (!success) { state.rejected = (state.rejected || 0) + 1; continue; }
+        state.produced[intent.product] = (state.produced[intent.product] || 0) + 5;
+        function change(id, resource, amount) {
+            if (!byId.has(id)) return;
+            const delta = adjustments[byId.get(id)]; delta[resource] = (delta[resource] || 0) + amount;
+        }
+        change(intent.out, intent.product, 5);
+        intent.inputs.forEach((id, i) => change(id, map[intent.product].inputs[i], -5));
+        chain.stateTick = Game.time;
+    }
+    state.pending = pending;
+    if (state.observation && state.observation.tick === Game.time - 1 && state.observation.demand &&
+        state.observation.ids.join(",") === labs.map((lab) => lab.id).join(",")) {
+        const moved = labs.reduce((sum, lab, i) => {
+            const before = state.observation.amounts[i] || 0;
+            const now = lab.mineralType ? lab.store[lab.mineralType] || 0 : 0;
+            const predicted = { ...adjustments[i] };
+            const previousType = state.observation.types[i];
+            if (previousType) predicted[previousType] = (predicted[previousType] || 0) + before;
+            if (lab.mineralType) predicted[lab.mineralType] = (predicted[lab.mineralType] || 0) - now;
+            return sum + Object.values(predicted).reduce((n, amount) => n + Math.abs(amount), 0);
+        }, 0);
+        const stats = Memory.rooms[room.name].labLogistics;
+        // Keep a bounded rolling observation horizon, including waiting ticks.
+        if (stats.samples >= config.get("craft.policyLogisticsWindow", 500)) { stats.samples /= 2; stats.movement /= 2; }
+        stats.samples++; stats.movement += moved;
+        if (moved) chain.stateTick = Game.time;
+    }
+}
+function clear(room) {
+    const mem = Memory.rooms[room.name];
+    if (mem.labReactionAuto) { delete mem.labReaction; delete mem.labReactions; delete mem.labReactionAuto; }
+    delete mem.labPolicyInputs;
+    delete mem.labPolicyHold;
+    delete mem.labPolicyDesired;
+}
+function enter(item, state, plan, labs, logistics) {
+    const phase = plan.phases[state.phase];
+    const amount = phase.amount || plan.window || Math.max(...Object.values(item.targets));
+    state.quota = Object.fromEntries(phase.products.map((p) => [p,
+        Math.min(item.targets[p] || 0, (state.produced[p] || 0) + amount)]));
+    const virtual = labs.map((lab, i) => ({ role: lab.mineralType || state.roles[i] || null,
+        amount: lab.mineralType ? lab.store[lab.mineralType] || 0 : 0,
+        next: Game.time + (lab.cooldown || 0), ready: Game.time }));
+    state.desired = plan.adaptive ? model.layoutFor(phase, virtual, state.quota, state.produced,
+        policy.recipeMap(), Game.time, logistics.bandwidth == null ? Infinity : logistics.bandwidth, logistics.delay) : phase.layout.slice();
+    state.phaseSince = Game.time;
+}
+function assignments(room, chain, item, state, plan, resolved, labs) {
+    const map = policy.recipeMap(), phase = plan.phases[state.phase], geometry = model.trios(resolved.built);
+    let binding = bindings(resolved.built, state.desired, phase.products, map);
+    const consumers = (i) => binding.sources[i].filter((p) => phaseRemaining(state, p));
+    if (plan.reassign) for (let i = 0; i < labs.length; i++) {
+        const old = state.desired[i];
+        if (phaseRemaining(state, old) || consumers(i).length) continue;
+        const choices = phase.products.filter((p) => phaseRemaining(state, p) && geometry.some((g) => g.out === i &&
+            state.desired[g.a] === map[p].inputs[0] && state.desired[g.b] === map[p].inputs[1]));
+        choices.sort((a, b) => phaseRemaining(state, b) * map[b].cooldown /
+            Math.max(1, state.desired.filter((r) => r === b).length) - phaseRemaining(state, a) * map[a].cooldown /
+            Math.max(1, state.desired.filter((r) => r === a).length) || a.localeCompare(b));
+        if (choices.length) {
+            state.desired[i] = choices[0];
+            binding = bindings(resolved.built, state.desired, phase.products, map);
+        }
+    }
+    const inputs = {}, holds = {}, reactions = [], reasons = {};
+    const incoming = new Set(census.creepsByRole(room.name, "hauler").map((creep) => creep.memory.mineralJob)
+        .filter((job) => job && job.policy && job.kind === "labReagent").map((job) => job.toId));
+    let changing = false, demand = false;
+    labs.forEach((lab, i) => {
+        const desired = state.desired[i];
+        if (state.roles[i] !== desired || lab.mineralType && lab.mineralType !== desired) {
+            state.refilling[i] = false;
+            if (!state.switching[i]) state.switching[i] = { tick: Game.time,
+                amount: lab.mineralType ? lab.store[lab.mineralType] || 0 : 0, tracked: !!state.roles[i] };
+            if (lab.mineralType && lab.mineralType !== desired && lab.store[lab.mineralType]) {
+                changing = true; demand = true; reasons[lab.id] = "switch"; return;
+            }
+            state.roles[i] = desired;
+            if (!state.switching[i].emptyAt) state.switching[i].emptyAt = Game.time;
+        }
+        if (state.switching[i] && (!desired || phase.products.includes(desired) || lab.mineralType === desired && lab.store[desired] >= 5)) {
+            const stats = Memory.rooms[room.name].labLogistics;
+            const start = state.switching[i];
+            if (start.tracked) {
+                if (stats.switchSamples >= 100) { stats.switchSamples /= 2; stats.switchTicks /= 2; }
+                const b = profile(room).bandwidth;
+                const units = phase.products.includes(desired) ? 0 : lab.store[desired] || 0;
+                // Transport is already charged by B; D estimates only residual
+                // role preparation. Producer cooldown is not a switch delay.
+                stats.switchSamples++;
+                stats.switchTicks += Math.max(0, Game.time - (start.emptyAt || start.tick) - (b == null ? 0 : units / b));
+            }
+            state.switching[i] = 0;
+        }
+        if (!desired) return;
+        const use = consumers(i), keep = (phase.keep || []).includes(desired) || use.length;
+        if (keep) holds[lab.id] = desired;
+        if (use.length) {
+            const need = use.reduce((sum, p) => sum + phaseRemaining(state, p), 0);
+            const target = Math.floor(Math.min(3000, need, profile(room).buffer /
+                state.desired.filter((r) => r === desired).length));
+            const amount = lab.store[desired] || 0;
+            if (amount < Math.min(target, Math.max(5, Math.floor(target * profile(room).refillRatio)))) state.refilling[i] = true;
+            if (amount >= target) state.refilling[i] = false;
+            inputs[lab.id] = [desired, target, !!state.refilling[i]];
+            if (state.refilling[i] && ((room.storage && room.storage.store[desired] || 0) +
+                (room.terminal && room.terminal.store[desired] || 0) > 0 || incoming.has(lab.id))) demand = true;
+        } else if (lab.mineralType && lab.store[lab.mineralType] >= labReactions.drainThreshold(room, lab) && !keep) demand = true;
+    });
+    const barrier = phase.barrier && changing || phase.notBefore != null && Game.time < state.selectedTick + phase.notBefore;
+    for (let i = 0; i < labs.length; i++) {
+        const lab = labs[i], p = state.desired[i];
+        if (!phase.products.includes(p) || !phaseRemaining(state, p)) continue;
+        if (barrier || state.roles[i] !== p || lab.mineralType && lab.mineralType !== p) { reasons[lab.id] = "switch"; continue; }
+        const pairs = binding.pairs[i].filter((g) => state.roles[g.a] === map[p].inputs[0] &&
+            state.roles[g.b] === map[p].inputs[1] && state.desired[g.a] === state.roles[g.a] && state.desired[g.b] === state.roles[g.b]);
+        pairs.sort((a, b) => Math.min(labs[b.a].store[map[p].inputs[0]] || 0, labs[b.b].store[map[p].inputs[1]] || 0) -
+            Math.min(labs[a.a].store[map[p].inputs[0]] || 0, labs[a.b].store[map[p].inputs[1]] || 0) || a.a - b.a || a.b - b.b);
+        if (!pairs.length) { reasons[lab.id] = "unavailable"; continue; }
+        const pair = pairs[0];
+        const reason = lab.cooldown ? "cooldown" : (lab.store[p] || 0) > 2995 ? "capacity" :
+            (labs[pair.a].store[map[p].inputs[0]] || 0) < 5 || (labs[pair.b].store[map[p].inputs[1]] || 0) < 5 ? "input" : "ready";
+        reasons[lab.id] = reason;
+        reactions.push({ a: map[p].inputs[0], b: map[p].inputs[1], product: p,
+            input1: labs[pair.a].id, input2: labs[pair.b].id, output: lab.id,
+            keep: (phase.keep || []).includes(p) || consumers(i).length > 0,
+            owner: chain.key || chain.room, remaining: phaseRemaining(state, p) });
+    }
+    const mem = Memory.rooms[room.name];
+    delete mem.labReaction;
+    mem.labReactions = reactions; mem.labReactionAuto = true;
+    mem.labPolicyInputs = inputs;
+    mem.labPolicyHold = holds;
+    mem.labPolicyDesired = Object.fromEntries(labs.map((lab, i) => [lab.id, state.desired[i]]));
+    chain.holds = holds;
+    state.wait = reasons;
+    state.observation = { tick: Game.time, demand,
+        ids: labs.map((lab) => lab.id), types: labs.map((lab) => lab.mineralType),
+        amounts: labs.map((lab) => lab.mineralType ? lab.store[lab.mineralType] || 0 : 0) };
+}
+function tick(room, chain, item) {
+    const mem = Memory.rooms[room.name];
+    if ((mem.labReaction || (mem.labReactions || []).length) && !mem.labReactionAuto) return false;
+    const resolved = resolve(room);
+    if (!resolved) {
+        reconcile(room, chain, item);
+        if (item.run) item.run.wait = { room: "unavailable" };
+        clear(room); chain.holds = {};
+        return false;
+    }
+    const labs = resolved.built.map((slot) => Game.getObjectById(resolved.ids[slot]));
+    const logistics = profile(room);
+    if (!item.run) item.run = { catalogue: policy.dataVersion, refilling: labs.map(() => false), produced: Object.fromEntries(item.order.map((p) => [p, 0])),
+        pending: [], phase: 0, round: 0, roles: labs.map((lab) => lab.mineralType || null), switching: labs.map(() => 0), started: Game.time };
+    const state = item.run;
+    if (!state.refilling) state.refilling = labs.map(() => false);
+    confirm(room, chain, item, state, labs);
+    if (state.uncertain) { clear(room); state.wait = { room: "confirmation-lost" }; return false; }
+    const signature = resolved.built.map((slot) => resolved.ids[slot]).join(",");
+    if (state.geometry !== signature) {
+        clear(room); state.geometry = signature; state.planId = null; state.evalKey = null;
+        chain.holds = {};
+        state.phase = 0; state.roles = labs.map((lab) => lab.mineralType || null); state.switching = labs.map(() => 0); state.refilling = labs.map(() => false);
+    }
+    if (labs.some((lab) => (lab.effects || []).some((effect) => effect.ticksRemaining > 0))) {
+        clear(room); state.wait = { room: "powers" }; return false;
+    }
+    if (!state.planId) {
+        clear(room);
+        // Freeze existing mineral buffers while evaluating this snapshot.
+        mem.labPolicyHold = Object.fromEntries(labs.filter((lab) => lab.mineralType)
+            .map((lab) => [lab.id, lab.mineralType]));
+        if (!state.evalKey || !policy.poll(state.evalKey))
+            state.evalKey = policy.request(item, snapshot(room, chain, item, resolved, state), logistics.allowPipeline);
+        const result = policy.poll(state.evalKey);
+        state.evaluation = result.status;
+        state.wait = { room: "planning" };
+        if (!result.best && !result.expired && result.status === "evaluating") return false;
+        state.planId = result.best ? result.best.id : "wide-live";
+        state.estimate = result.best ? result.best.ticks : null;
+        state.selection = result.best ? result.best.name : "wide-live-fallback";
+        state.limits = result.failures;
+        state.selectedLogistics = [logistics.bandwidth, logistics.delay, logistics.allowPipeline];
+        state.selectedTick = Game.time;
+        state.enter = true; state.phase = 0;
+    }
+    const plan = policy.planFor(state.planId, item, resolved.built);
+    if (!plan) { clear(room); state.planId = null; state.evalKey = null; return false; }
+    if (state.evalKey) {
+        const evaluation = policy.poll(state.evalKey);
+        if (evaluation) {
+            state.evaluation = evaluation.status;
+            state.betterCandidate = evaluation.best && evaluation.best.id !== state.planId &&
+                (state.estimate == null || evaluation.best.ticks + config.get("craft.policyPlanningTicks", 100) < state.estimate);
+        } else { state.evalKey = null; state.betterCandidate = false; }
+    }
+    // A tick boundary with every intent settled is safe even inside a long
+    // phase. Keep confirmed balances and re-evaluate the remaining work, so an
+    // early wide fallback need not lock the entire lot into the old plan.
+    if (!state.pending.length && state.betterCandidate && state.evaluation === "complete" &&
+        Game.time - state.selectedTick >= config.get("craft.policyReplanTicks", 500)) {
+        clear(room); state.planId = null; state.evalKey = null; state.phase = 0; state.enter = true;
+        return false;
+    }
+    if (!item.started) { item.started = true; item.startTick = Game.time; }
+    if (state.enter) { enter(item, state, plan, labs, logistics); state.enter = false; }
+    const phase = plan.phases[state.phase];
+    if (!state.pending.length && phase.products.every((p) => !phaseRemaining(state, p))) {
+        state.phase++;
+        if (state.phase >= plan.phases.length) {
+            state.phase = 0; state.round++;
+            if (item.order.every((p) => !remaining(item, state, p))) { clear(room); chain.holds = {}; state.done = true; return true; }
+            const previous = state.selectedLogistics || [];
+            const changed = !policy.enabled() || state.betterCandidate || previous[2] !== logistics.allowPipeline ||
+                previous[0] !== logistics.bandwidth && (previous[0] == null || logistics.bandwidth == null ||
+                    Math.max(previous[0], logistics.bandwidth) / Math.max(1, Math.min(previous[0], logistics.bandwidth)) >= 1.5) ||
+                Math.abs(previous[1] - logistics.delay) >= 10;
+            if (changed && (!policy.enabled() || Game.time - state.selectedTick >= config.get("craft.policyReplanTicks", 500))) {
+                clear(room); state.planId = null; state.evalKey = null; state.enter = true; return false;
+            }
+        }
+        state.enter = true;
+        enter(item, state, plan, labs, logistics); state.enter = false;
+    }
+    assignments(room, chain, item, state, plan, resolved, labs);
+    return true;
+}
+function reconcile(room, chain, item) {
+    if (!item.run) return;
+    profile(room);
+    const ids = (item.run.geometry || "").split(",").filter(Boolean);
+    const labs = ids.map((id) => Game.getObjectById(id)).filter(Boolean);
+    confirm(room, chain, item, item.run, labs);
+}
+module.exports = { tick, snapshot, profile, resolve, clear, reconcile };

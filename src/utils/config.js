@@ -13,6 +13,7 @@ const defaults = {
         // the order book on the same tick (utils/orderBook shares the fetch)
         currentInterval: 120,
         snapshotInterval: 3600,
+        minBucket: 500,
         snapshotWindowTicks: 604800,
         snapshotWeightCap: 0.01,
     },
@@ -175,6 +176,24 @@ const defaults = {
         // centre pair, one after the other through storage; "auto" = the planner takes the
         // faster by estimate, and "wide" only when it is wideMinGain (20%) faster
         labStrategy: "auto",
+        // Research catalogue + bounded live evaluation. Never claims global optimality.
+        labPolicy: true,
+        policyCandidates: 8,
+        policyWorkPerTick: 1000,
+        policyCpuPerTick: 1,
+        policyMaxIterations: 50000,
+        policyPlanningTicks: 100,
+        policyCacheEntries: 64,
+        policyBuffer: 500,
+        policyRefillRatio: 0.5,
+        policyBandwidth: 0, // 0 = observed; "instant" = explicit offline-style override
+        policySwitchDelay: null, // null = observed model cost, not an artificial wait
+        policyInitialBandwidth: 4,
+        policyInitialDelay: 50,
+        policyAllowUnmeasuredPipeline: false,
+        policyLogisticsSamples: 100,
+        policyLogisticsWindow: 500,
+        policyReplanTicks: 500,
         wideMinGain: 0.2,
         // log automático no console (candidatos, etapas, vendas, abortos)
         log: true,
@@ -300,6 +319,15 @@ const defaults = {
         // energy piling up), not to tick-to-tick noise.
         cooldown: 30000,
     },
+    terminalFuel: {
+        enabled: true,
+        transactions: 2,
+        margin: 0.2,
+        quoteMaxAge: 300,
+        scarceStorageRatio: 0.1,
+        scarceOptionalRatio: 0.1,
+        releaseRatio: 0.25,
+    },
     logistics: {
         // ROADMAP 0054: utils/resourceTiers.js's single reserve floor - a
         // fraction of the room's storage capacity kept off-limits to every
@@ -346,6 +374,7 @@ const defaults = {
         // fraction of its own capacity - a floor on TOP of the ledger's own
         // "what's withdrawable in theory" bookkeeping (ROADMAP 0043), not a
         // replacement for it.
+        // Legacy fallback when terminalFuel.enabled is false.
         terminalReserveRatio: 0.1,
         // ROADMAP 0097: normal rebalancing and its hard per-transfer cap.
         balanceEnabled: true,
@@ -361,6 +390,31 @@ const defaults = {
         // avoids burning the collector's cooldown on a transfer that only
         // tops off a couple energy on an already-full target.
         linkReceiveFillRatio: 0.95,
+    },
+    terminalRelay: {
+        // Economic quotes are enabled; transport is planned in ROADMAP 0125.
+        enabled: true,
+        hub: "E2N46",
+        freightMultiplier: 0.5,
+        messageEnergy: 2,
+        minSavingsEnergy: 0,
+        minSavingsRatio: 0,
+    },
+    stockPolicy: {
+        enabled: true,
+        targets: { energy: 100000 },
+        rooms: {},
+        terminalFreeRatio: 0.15,
+        creditReserve: 100000,
+    },
+    swing: {
+        enabled: true,
+        test: true,
+        scanInterval: 120,
+        margin: 0.01,
+        minSamples: 30, // Temporary validation threshold; restore 48 after validation.
+        maxSampleAge: 7200,
+        listingLifetime: 1209600,
     },
     terminalOps: {
         // operations' state machines run every N ticks (a terminal cooldown is 10)
@@ -484,6 +538,10 @@ const defaults = {
         reserveHealthyTicks: 3000,
     },
     routing: {
+        // Unsafe transit is learned dynamically, without changing diplomacy.
+        avoidPlayers: [],
+        learnAllyAttacks: true,
+        allyAttackAvoidTicks: 10000,
         // extra room-level route cost (utils/routing) added per hostile
         // room crossed - on top of blocking it outright for creeps that opt
         // in (the reserver)
@@ -555,7 +613,16 @@ const defaults = {
         // the 2000 default since a multi-room trip covers far more tiles
         // than a same-room search ever would.
         realRouteMaxRooms: 64,
-        realRouteMaxOps: 200000,
+        realRouteMaxOps: 20000,
+        realRouteRetryTicks: 50,
+        realRouteCacheTicks: 1500,
+        realRouteCpuReserve: 5,
+        realRouteMinCpu: 5,
+        realRouteCpuBudget: 10,
+        realRouteOpsPerCpu: 1000,
+        // Delay full-trip planning until reserves recover; validated hops stay small.
+        realRouteMinBucket: 1000,
+        hopMaxOps: 20000,
         // ROADMAP 0064 live follow-up: the native creep.moveTo() calls
         // moveToRoom() actually executes movement with never got this -
         // they silently used the engine's own default (2000), regardless of
@@ -616,6 +683,11 @@ const defaults = {
         militaryWeight: 1,
     },
     claim: {
+        // Claim can share a scout corridor through SK, while avoiding keeper zones.
+        keeperTransit: true,
+        keeperAvoidRange: 6,
+        keeperIntelMaxAge: 200,
+        keeperObserveTicks: 20,
         // rough travel-time estimate for claimRoom()'s reachability check:
         // room-hops (rooms/remotes.roomDistance) * this. A creep with any
         // CLAIM part is capped at CREEP_CLAIM_LIFE_TIME (600) total, not

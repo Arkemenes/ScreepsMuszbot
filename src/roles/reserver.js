@@ -11,6 +11,8 @@ const remotes = require("../rooms/remotes");
 const routing = require("../utils/routing");
 const names = require("../utils/names");
 const config = require("../utils/config");
+const claimDiagnostics = require("../utils/claimDiagnostics");
+const keeperTransit = require("../utils/keeperTransit");
 const { silenceAttackAlerts } = require("../utils/combat");
 
 // CLAIM parts beyond this don't help - extra buffer for "reserve" missions
@@ -48,6 +50,12 @@ var reserver = {
         if (mission === "claim" && Memory.claimTarget) {
             Memory.claimTarget.creepSeen = true;
         }
+        claimDiagnostics.observe(creep, creep.room.name === targetRoomName ? "at_target" : "travelling");
+        const allowSourceKeepers = mission === "claim" && config.get("claim.keeperTransit", true);
+        if (allowSourceKeepers && keeperTransit.evade(creep)) {
+            claimDiagnostics.observe(creep, "evading_keeper");
+            return;
+        }
 
         if (creep.room.name !== targetRoomName) {
             // claim: blockHostiles below already refuses to CROSS a room
@@ -77,11 +85,20 @@ var reserver = {
                 // needing a detour - proving the fix isn't claim-specific;
                 // now the default for every moveToRoom() caller (ROADMAP
                 // 0075), so the explicit flag is gone.
-                routing.moveToRoom(creep, targetRoomName, {
+                const moveStatus = routing.moveToRoom(creep, targetRoomName, {
                     range: 20,
                     reusePath: 30,
                     blockHostiles: true,
+                    allowSourceKeepers,
                 });
+                const phase = moveStatus === ERR_BUSY
+                    ? "waiting_cpu" : moveStatus === ERR_NO_PATH ? "no_route" : "travelling";
+                claimDiagnostics.observe(creep, phase, moveStatus);
+                if (mission === "claim" && Memory.claimTarget && Memory.claimTarget.lastSeen) {
+                    Memory.claimTarget.lastSeen.routePlan = routing.planningStatus(creep);
+                }
+            } else {
+                claimDiagnostics.observe(creep, "waiting_hostile_target");
             }
 
             // stall guard (constitution): blockHostiles correctly refuses to
@@ -112,7 +129,10 @@ var reserver = {
         const controller = creep.room.controller;
         if (!controller) {
             // nothing to reserve/claim here - the target was a dead end
-            if (mission === "claim") delete Memory.claimTarget;
+            if (mission === "claim") {
+                claimDiagnostics.finish(creep, "no_controller");
+                delete Memory.claimTarget;
+            }
             creep.suicide();
             return;
         }
@@ -120,9 +140,11 @@ var reserver = {
         if (mission === "claim") {
             const status = creep.claimController(controller);
             if (status === ERR_NOT_IN_RANGE) {
-                creep.moveTo(controller, { range: 1, reusePath: 20 });
+                const moveStatus = creep.moveTo(controller, { range: 1, reusePath: 20 });
+                claimDiagnostics.observe(creep, "controller_out_of_range", status, moveStatus);
                 return;
             }
+            claimDiagnostics.finish(creep, status === OK ? "claim_accepted" : "claimController_failed", status);
             // OK, or an unrecoverable error (GCL full, already owned, ...) -
             // the mission is over either way
             delete Memory.claimTarget;

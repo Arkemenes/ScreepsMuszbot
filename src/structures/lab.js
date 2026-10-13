@@ -12,17 +12,7 @@ const lab = {
         // ROADMAP 0111: a "wide" reaction lists several output labs (reaction.outputs);
         // each reacts on its own cooldown. ROADMAP 0115: a room may run several reactions
         // at once, each in labs of its own - this lab acts for the one it is an output of.
-        const reaction = labReactions
-            .list(structure.room.name)
-            .find((r) => labReactions.outputsOf(r).indexOf(structure.id) >= 0);
-        if (!reaction) return;
-
-        const input1 = Game.getObjectById(reaction.input1);
-        const input2 = Game.getObjectById(reaction.input2);
-        if (!input1 || !input2) return;
-        if (structure.cooldown > 0) return;
-
-        structure.runReaction(input1, input2);
+        labReactions.execute(structure);
     },
 };
 

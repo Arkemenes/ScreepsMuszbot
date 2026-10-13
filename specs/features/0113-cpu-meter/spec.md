@@ -6,6 +6,20 @@
 
 ## Problem
 
+### Investigação de regressão — ARK-116 (2026-10-12)
+
+Média relatada subiu de 7–8 para 16–18 CPU entre 11/10 e 12/10.
+A meta é recuperar média abaixo de 9 CPU, comprovada em jogo. Antes de
+atribuir a regressão a scout/claimer, medir os módulos existentes e separar
+`routing.realSearch`, `move.localSearch`, `move.native`,
+`intel.transitSafety` e `intel.keeperTransit` nos spans existentes.
+As medidas incluem callbacks/matrizes das buscas, preservam retornos e
+exceções, e não acrescentam buscas, scans, logs automáticos ou dados por
+creep na Memory. Spans são inclusivos: não somar seu custo novamente aos
+módulos/roles. Testes offline comprovam atribuição e reutilização do cache;
+a redução real de CPU permanece pendente de perfil live antes/depois.
+
+
 O CPU do shard3 ficou perto do limite (20) e achar o gasto exigiu rodar `cpuTop` e
 `profile(100)` na mão. Hoje há dois mecanismos separados: o medidor do `guard()` em
 `main.js` (por subsistema, só leitura no console) e o `utils/profiler.js` (por função,

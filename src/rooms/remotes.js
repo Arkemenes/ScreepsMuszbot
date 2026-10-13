@@ -8,6 +8,7 @@
 // mining, not a parallel goal.
 
 const config = require("../utils/config");
+const claimDiagnostics = require("../utils/claimDiagnostics");
 const { isAlly } = require("../utils/hostiles");
 // Tunables (defaults + Memory.settings override path) live in utils/config:
 // remotes.reserveHealthyTicks, remotes.maxDistance, remotes.maxPerRoom.
@@ -340,8 +341,15 @@ global.cancelClaim = function () {
         console.log("[remotes] no claim pending");
         return;
     }
+    claimDiagnostics.cancel(Memory.claimTarget);
     console.log(`[remotes] claim on ${Memory.claimTarget.room} cancelled`);
     delete Memory.claimTarget;
+};
+
+global.claimStatus = function () {
+    const result = claimDiagnostics.status();
+    console.log(`[claimStatus] ${JSON.stringify(result)}`);
+    return result;
 };
 
 module.exports = {

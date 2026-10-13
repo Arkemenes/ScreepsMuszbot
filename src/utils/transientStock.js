@@ -55,6 +55,7 @@ function energyNeed(structure) {
 function allowedMineral(structure, resourceType) {
     const mem = roomMemory(structure);
     if (structure.structureType === STRUCTURE_LAB) {
+        if (mem.labPolicyHold && mem.labPolicyHold[structure.id] === resourceType) return true;
         const labs = mem.labLoad && mem.labLoad[structure.id];
         if (labs && labs.indexOf(resourceType) >= 0) return true;
         // ROADMAP 0115: every running reaction counts; a lab belongs to at most one of them

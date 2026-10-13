@@ -11,18 +11,80 @@ const config = require("./config");
 const roomCache = require("./roomCache");
 const traffic = require("./traffic");
 const excuseMe = require("./excuseMe");
+const transitSafety = require("./transitSafety");
+const keeperTransit = require("./keeperTransit");
+const nativePath = require("./nativePath");
+const cpuMeter = require("./cpuMeter");
 const scoutTraceHistory = {};
+// Derived crossing positions belong in the heap, never in serialized Memory.
+const realRouteEntries = new WeakMap();
+const checkedRouteEntries = new WeakSet();
+const planningAttempts = new Map();
+const planningReasons = new WeakMap();
+let planningTick = -1;
+let planningCleanupTick = -1;
+
+function planningId(creep) {
+    // Game objects are reconstructed each tick; identify live creeps by ID.
+    return creep.id || creep.name || creep;
+}
+
+function planningGate(creep, toRoomName, opts) {
+    if (Game.time < planningCleanupTick || Game.time - planningCleanupTick >= 50) {
+        const keepTicks = config.get("routing.realRouteCacheTicks", 1500);
+        for (const [id, entry] of planningAttempts) {
+            if (Game.time < entry.tick || Game.time - entry.tick > keepTicks) planningAttempts.delete(id);
+        }
+        planningCleanupTick = Game.time;
+    }
+    const key = JSON.stringify([creep.room.name, toRoomName, creep.memory._routeAvoid || [],
+        !!opts.blockHostiles, !!opts.allowSourceKeepers, transitSafety.restrictionKey(),
+        opts.allowSourceKeepers ? keeperTransit.policyKey() : "off"]);
+    const attempt = planningAttempts.get(planningId(creep));
+    const cpu = Game.cpu;
+    if (cpu && cpu.bucket < config.get("routing.realRouteMinBucket", 1000)) return { key, reason: "bucket" };
+    if (attempt && attempt.key === key && attempt.allowRoom === opts.allowRoom &&
+        Game.time >= attempt.tick && Game.time < attempt.nextRetryTick) {
+        return { key, cached: true, attempt, reason: "retry_backoff" };
+    }
+    if (cpu && Number.isFinite(cpu.tickLimit) && planningTick === Game.time) {
+        return { key, reason: "tick_search_limit" };
+    }
+    let maxOps = config.get("routing.realRouteMaxOps", 20000);
+    if (cpu && Number.isFinite(cpu.tickLimit) && typeof cpu.getUsed === "function") {
+        const spare = cpu.tickLimit - cpu.getUsed() - config.get("routing.realRouteCpuReserve", 5);
+        if (spare < config.get("routing.realRouteMinCpu", 5)) return { key, reason: "tick_cpu" };
+        const budget = Math.min(spare, config.get("routing.realRouteCpuBudget", 10));
+        maxOps = Math.min(maxOps, Math.max(1, Math.floor(budget * config.get("routing.realRouteOpsPerCpu", 1000))));
+    }
+    return { key, maxOps };
+}
+
+function planningStatus(creep) {
+    const attempt = planningAttempts.get(planningId(creep));
+    return { reason: planningReasons.get(creep), lastSearchTick: attempt && attempt.tick,
+        maxOps: attempt && attempt.maxOps, cpu: attempt && attempt.cpu,
+        nextRetryTick: attempt && attempt.nextRetryTick };
+}
+
+let blockedRoomMatrix;
+function nativeBlockedRoomMatrix() {
+    // moveTo's costCallback ignores false; only roomCallback accepts it.
+    // Keep the template in heap and isolate it from caller/engine mutations.
+    if (!blockedRoomMatrix) {
+        blockedRoomMatrix = new PathFinder.CostMatrix();
+        for (let x = 0; x < 50; x++) {
+            for (let y = 0; y < 50; y++) blockedRoomMatrix.set(x, y, 255);
+        }
+    }
+    return blockedRoomMatrix.clone();
+}
 
 function requestCrossRoomClearance(creep) {
     if (!creep.room || typeof creep.room.lookForAt !== "function") return false;
-    const path = creep.memory._move && creep.memory._move.path;
-    const direction = path && Number(path[0]);
-    const dx = [0, 0, 1, 1, 1, 0, -1, -1, -1];
-    const dy = [0, -1, -1, 0, 1, 1, 1, 0, -1];
-    if (direction < TOP || direction > TOP_LEFT) return false;
-    const x = creep.pos.x + dx[direction];
-    const y = creep.pos.y + dy[direction];
-    if (x < 0 || x > 49 || y < 0 || y > 49) return false;
+    const step = nativePath.nextStep(creep);
+    if (!step) return false;
+    const { x, y, direction } = step;
     const blocker = creep.room
         .lookForAt(LOOK_CREEPS, x, y)
         .find((other) => other.my && other.id !== creep.id);
@@ -32,23 +94,18 @@ function requestCrossRoomClearance(creep) {
 }
 
 function followCachedStep(creep) {
-    const path = creep.memory._move && creep.memory._move.path;
-    const direction = path && Number(path[0]);
-    if (direction < TOP || direction > TOP_LEFT) return false;
+    const step = nativePath.nextStep(creep);
+    if (!step) return false;
+    const direction = step.direction;
     const result = creep.move(direction);
     traceScoutMove(creep, "cached-step", null, result, { direction });
     return true;
 }
 
 function scoutTraceNextStep(creep) {
-    const path = creep.memory._move && creep.memory._move.path;
-    const direction = path && Number(path[0]);
-    const dx = [0, 0, 1, 1, 1, 0, -1, -1, -1];
-    const dy = [0, -1, -1, 0, 1, 1, 1, 0, -1];
-    if (!direction || !dx[direction] && !dy[direction]) return null;
-    const x = creep.pos.x + dx[direction];
-    const y = creep.pos.y + dy[direction];
-    if (x < 0 || x > 49 || y < 0 || y > 49) return null;
+    const step = nativePath.nextStep(creep);
+    if (!step) return null;
+    const { x, y, direction } = step;
     return {
         pos: creep.room.name + ":" + x + "," + y,
         direction,
@@ -216,8 +273,12 @@ function nudgeAwayFromBorder(creep) {
 // from the ownership half (same call isForeignOwned already makes) - their
 // own interior obstacles are the separate, narrower problem ROADMAP 0061's
 // terrain-slack handles.
-function isDangerousRoom(roomName) {
-    return remotes.hasHostiles(roomName) || remotes.isForeignOwned(roomName);
+function isDangerousRoom(roomName, opts) {
+    if (remotes.isForeignOwned(roomName)) return true;
+    if (opts && opts.allowSourceKeepers && keeperTransit.isKeeperRoom(roomName)) {
+        return !keeperTransit.canTransit(roomName);
+    }
+    return remotes.hasHostiles(roomName);
 }
 
 // ROADMAP 0077/0083 - multi-room routing needs a narrower structure policy
@@ -243,6 +304,7 @@ function routingStructureMatrix(room, roadCost) {
             matrix.set(structure.pos.x, structure.pos.y, roadCost);
         } else if (
             structure.structureType === STRUCTURE_WALL ||
+            structure.structureType === STRUCTURE_INVADER_CORE ||
             (structure.structureType === STRUCTURE_RAMPART &&
                 !structure.my && !structure.isPublic)
         ) {
@@ -285,6 +347,14 @@ function bodyTravelCosts(body, carriedAmount) {
 function knownStructureMatrix(roomName, roadCost) {
     const room = Game.rooms[roomName];
     return room ? routingStructureMatrix(room, roadCost === undefined ? 1 : roadCost) : null;
+}
+
+function travelMatrix(roomName, roadCost, opts, fallback) {
+    const base = knownStructureMatrix(roomName, roadCost) || fallback;
+    if (opts && opts.allowSourceKeepers && keeperTransit.isKeeperRoom(roomName)) {
+        return keeperTransit.matrix(roomName, base) || nativeBlockedRoomMatrix();
+    }
+    return base;
 }
 
 // ROADMAP 0076 - a room retreatFrom() below CONFIRMS as a genuine dead end
@@ -366,16 +436,18 @@ global.clearRouteDeadEnd = function (roomName) {
 // Game.map.findRoute finds nothing under those constraints.
 function findRoute(fromRoomName, toRoomName, opts) {
     opts = opts || {};
+    if (toRoomName !== fromRoomName && transitSafety.isBlockedRoom(toRoomName)) return null;
     const avoid = opts.avoid || [];
     const hostilePenalty = config.get("routing.hostilePenalty", 10);
     const nonHighwayPenalty = config.get("routing.nonHighwayPenalty", 2);
     const route = Game.map.findRoute(fromRoomName, toRoomName, {
         routeCallback: (roomName) => {
+            if (roomName !== fromRoomName && transitSafety.isBlockedRoom(roomName)) return Infinity;
             if (avoid.indexOf(roomName) !== -1) return Infinity;
             if (isKnownDeadEnd(roomName)) return Infinity;
             if (opts.allowRoom && !opts.allowRoom(roomName)) return Infinity;
             if (roomName === toRoomName) return 1;
-            const dangerous = isDangerousRoom(roomName);
+            const dangerous = isDangerousRoom(roomName, opts);
             if (dangerous && opts.blockHostiles) return Infinity;
             let cost = 1;
             if (dangerous) cost += hostilePenalty;
@@ -414,7 +486,7 @@ function routeCostCallback(route, currentRoomName, toRoomName, opts) {
             if (!exits) continue;
             for (const neighbor of Object.values(exits)) {
                 if (avoid.indexOf(neighbor) !== -1) continue;
-                if (opts.blockHostiles && isDangerousRoom(neighbor)) continue;
+                if (opts.blockHostiles && isDangerousRoom(neighbor, opts)) continue;
                 // ROADMAP 0075 - see findRoute()'s own allowRoom comment.
                 if (opts.allowRoom && !opts.allowRoom(neighbor)) continue;
                 if (isKnownDeadEnd(neighbor)) continue;
@@ -426,8 +498,10 @@ function routeCostCallback(route, currentRoomName, toRoomName, opts) {
     // allowlist already accepted gets known-structure obstacles layered in
     // when it's currently in vision, instead of the bare terrain-only
     // matrix the engine handed in.
-    return (roomName, matrix) =>
-        allowed.has(roomName) ? knownStructureMatrix(roomName, costs.roadCost) || matrix : false;
+    return (roomName, matrix) => {
+        if (roomName !== currentRoomName && transitSafety.isBlockedRoom(roomName)) return nativeBlockedRoomMatrix();
+        return allowed.has(roomName) ? travelMatrix(roomName, costs.roadCost, opts, matrix) : nativeBlockedRoomMatrix();
+    };
 }
 
 // ROADMAP 0064 live follow-up - the actual root cause, found with a raw
@@ -468,14 +542,15 @@ function avoidCostCallback(avoid, opts) {
     avoid = avoid || [];
     const costs = bodyTravelCosts(opts.body, opts.carriedAmount) || { roadCost: 1 };
     return (roomName, matrix) => {
-        if (avoid.indexOf(roomName) !== -1) return false;
-        if (opts.blockHostiles && isDangerousRoom(roomName)) return false;
+        if (roomName !== opts.currentRoomName && transitSafety.isBlockedRoom(roomName)) return nativeBlockedRoomMatrix();
+        if (avoid.indexOf(roomName) !== -1) return nativeBlockedRoomMatrix();
+        if (opts.blockHostiles && isDangerousRoom(roomName, opts)) return nativeBlockedRoomMatrix();
         // ROADMAP 0075 - see findRoute()'s own allowRoom comment.
-        if (opts.allowRoom && !opts.allowRoom(roomName)) return false;
+        if (opts.allowRoom && !opts.allowRoom(roomName)) return nativeBlockedRoomMatrix();
         // ROADMAP 0076 - see isKnownDeadEnd()'s own comment.
-        if (isKnownDeadEnd(roomName)) return false;
+        if (isKnownDeadEnd(roomName)) return nativeBlockedRoomMatrix();
         // ROADMAP 0077 - see knownStructureMatrix()'s own comment.
-        return knownStructureMatrix(roomName, costs.roadCost) || matrix;
+        return travelMatrix(roomName, costs.roadCost, opts, matrix);
     };
 }
 
@@ -483,13 +558,14 @@ function hopCostCallback(currentRoomName, targetRoomName, opts) {
     opts = opts || {};
     const costs = bodyTravelCosts(opts.body, opts.carriedAmount) || { roadCost: 1 };
     return (roomName, matrix) => {
-        if (roomName !== currentRoomName && roomName !== targetRoomName) return false;
-        if (opts.blockHostiles && isDangerousRoom(roomName) && roomName !== targetRoomName) {
-            return false;
+        if (roomName !== currentRoomName && transitSafety.isBlockedRoom(roomName)) return nativeBlockedRoomMatrix();
+        if (roomName !== currentRoomName && roomName !== targetRoomName) return nativeBlockedRoomMatrix();
+        if (opts.blockHostiles && isDangerousRoom(roomName, opts) && roomName !== targetRoomName) {
+            return nativeBlockedRoomMatrix();
         }
-        if (opts.allowRoom && !opts.allowRoom(roomName)) return false;
-        if (isKnownDeadEnd(roomName)) return false;
-        return knownStructureMatrix(roomName, costs.roadCost) || matrix;
+        if (opts.allowRoom && !opts.allowRoom(roomName)) return nativeBlockedRoomMatrix();
+        if (isKnownDeadEnd(roomName)) return nativeBlockedRoomMatrix();
+        return travelMatrix(roomName, costs.roadCost, opts, matrix);
     };
 }
 
@@ -523,25 +599,33 @@ function hopCostCallback(currentRoomName, targetRoomName, opts) {
 // the only source of truth, always safe to ignore and fall back to
 // findRoute()/the reactive backtrack (ROADMAP 0063).
 function computeRealRoute(fromPos, toRoomName, opts) {
+    return cpuMeter.span("routing.realSearch", () => searchRealRoute(fromPos, toRoomName, opts));
+}
+
+function searchRealRoute(fromPos, toRoomName, opts) {
     opts = opts || {};
+    if (toRoomName !== fromPos.roomName && transitSafety.isBlockedRoom(toRoomName)) return null;
     const avoid = opts.avoid || [];
     const costs = bodyTravelCosts(opts.body, opts.carriedAmount) || {
         roadCost: 1,
         plainCost: 1,
         swampCost: 5,
     };
-    const targetPos = hopEntryPosition(fromPos.roomName, toRoomName);
+    // Reach the room through any connected entrance, rather than demanding
+    // one arbitrarily selected border tile that may sit in a sealed pocket.
+    const targetPos = new RoomPosition(25, 25, toRoomName);
     const result = PathFinder.search(
         fromPos,
-        { pos: targetPos, range: 0 },
+        { pos: targetPos, range: 24 },
         {
             plainCost: costs.plainCost,
             swampCost: costs.swampCost,
             maxRooms: config.get("routing.realRouteMaxRooms", 64),
-            maxOps: config.get("routing.realRouteMaxOps", 200000),
+            maxOps: Math.min(config.get("routing.realRouteMaxOps", 20000), opts.routeMaxOps || Infinity),
             roomCallback: (roomName) => {
+                if (roomName !== fromPos.roomName && transitSafety.isBlockedRoom(roomName)) return false;
                 if (avoid.indexOf(roomName) !== -1) return false;
-                if (opts.blockHostiles && isDangerousRoom(roomName)) return false;
+                if (opts.blockHostiles && isDangerousRoom(roomName, opts)) return false;
                 // ROADMAP 0075 - see findRoute()'s own allowRoom comment.
                 if (opts.allowRoom && !opts.allowRoom(roomName)) return false;
                 // ROADMAP 0076 - see isKnownDeadEnd()'s own comment.
@@ -549,16 +633,20 @@ function computeRealRoute(fromPos, toRoomName, opts) {
                 // ROADMAP 0077 - see knownStructureMatrix()'s own comment:
                 // undefined (the implicit fall-through) keeps the prior
                 // terrain-only behavior for a room with no vision this tick.
-                return knownStructureMatrix(roomName, costs.roadCost) || undefined;
+                return travelMatrix(roomName, costs.roadCost, opts) || undefined;
             },
         }
     );
     if (!result || result.incomplete || !result.path.length) return null;
 
     const rooms = [];
+    const entries = [];
     for (const pos of result.path) {
         if (pos.roomName === fromPos.roomName) continue;
-        if (rooms[rooms.length - 1] !== pos.roomName) rooms.push(pos.roomName);
+        if (rooms[rooms.length - 1] !== pos.roomName) {
+            rooms.push(pos.roomName);
+            entries.push({ x: pos.x, y: pos.y, roomName: pos.roomName });
+        }
     }
     if (!rooms.length) return null;
 
@@ -566,7 +654,22 @@ function computeRealRoute(fromPos, toRoomName, opts) {
     // hop plan after collapsing tiles. Never hand moveToRoom() a non-adjacent
     // first hop; fall back to the room-graph route instead.
     if (!isValidRoomTrace(fromPos.roomName, rooms)) return null;
+    realRouteEntries.set(rooms, entries);
     return rooms;
+}
+
+function validatedEntry(creep, nextRoom) {
+    const rooms = creep.memory._realRoute;
+    const entries = rooms && realRouteEntries.get(rooms);
+    if (!entries) return null;
+    const current = rooms.indexOf(creep.room.name);
+    const index = current + 1;
+    // A deviation outside the validated sequence needs the normal fallback.
+    if (current === -1 && creep.room.name !== creep.memory._realRouteFrom) return null;
+    const entry = entries[index];
+    return entry && entry.roomName === nextRoom
+        ? new RoomPosition(entry.x, entry.y, entry.roomName)
+        : null;
 }
 
 function isValidRoomTrace(fromRoomName, rooms) {
@@ -853,18 +956,38 @@ function retreatWithoutBlame(creep) {
 // that's already adjacent buys nothing - opts out explicitly instead.
 function tryComputeRealRoute(creep, toRoomName, opts) {
     if (opts.realRoute === false) return;
+    const gate = planningGate(creep, toRoomName, opts);
+    planningReasons.set(creep, gate.reason);
+    if (gate.cached && gate.attempt.route) {
+        // Reuse validation performed this tick, including its heap waypoints.
+        creep.memory._realRoute = gate.attempt.route;
+        creep.memory._realRouteDest = toRoomName;
+        creep.memory._realRouteFrom = creep.room.name;
+        planningReasons.set(creep, "cached_validation");
+        return true;
+    }
+    if (gate.reason) return;
+    planningTick = Game.time;
+    const usedBefore = Game.cpu && typeof Game.cpu.getUsed === "function" ? Game.cpu.getUsed() : undefined;
     const avoid = creep.memory._routeAvoid || [];
     const real = computeRealRoute(
         creep.pos,
         toRoomName,
         Object.assign({}, opts, {
             avoid,
+            routeMaxOps: gate.maxOps,
             body: creep.body,
             carriedAmount: creep.store && creep.store.getUsedCapacity
                 ? creep.store.getUsedCapacity()
                 : 0,
         })
     );
+    const usedAfter = usedBefore !== undefined ? Game.cpu.getUsed() : undefined;
+    planningAttempts.set(planningId(creep), { key: gate.key, allowRoom: opts.allowRoom, tick: Game.time,
+        route: real,
+        nextRetryTick: Game.time + (real ? 1 : config.get("routing.realRouteRetryTicks", 50)),
+        maxOps: gate.maxOps, cpu: usedBefore !== undefined ? Math.max(0, usedAfter - usedBefore) : undefined });
+    planningReasons.set(creep, real ? "validated" : "incomplete");
     if (real) {
         creep.memory._realRoute = real;
         creep.memory._realRouteDest = toRoomName;
@@ -889,8 +1012,73 @@ function tryComputeRealRoute(creep, toRoomName, opts) {
 // story - see opts.realRoute below (ROADMAP 0064, default-on since ROADMAP
 // 0075 - opt OUT with `realRoute: false` instead) and tryComputeRealRoute()
 // above, bounded by the number of dead ends actually found either way.
+function moveRetreat(creep, moveOpts) {
+    const target = creep.memory._routeRetreatTo;
+    if (target !== creep.room.name && transitSafety.isBlockedRoom(target)) {
+        delete creep.memory._routeRetreatTo;
+        delete creep.memory._move;
+        return ERR_NO_PATH;
+    }
+    return creep.moveTo(new RoomPosition(25, 25, target), Object.assign({}, moveOpts, {
+        costCallback: avoidCostCallback([], { currentRoomName: creep.room.name, body: creep.body,
+            allowSourceKeepers: moveOpts.allowSourceKeepers, blockHostiles: moveOpts.blockHostiles }),
+    }));
+}
+
 function moveToRoom(creep, toRoomName, opts) {
     opts = opts || {};
+    planningReasons.delete(creep);
+    // A new incident, its expiry, or new ownership intel makes native reusePath unsafe.
+    const transitKey = transitSafety.restrictionKey();
+    const nativeDest = creep.memory._move && creep.memory._move.dest;
+    const cachedRooms = (creep.memory._realRoute || []).concat(
+        nativeDest && (nativeDest.roomName || nativeDest.room));
+    const cachedUnsafe = cachedRooms.some((roomName) => roomName && roomName !== creep.room.name &&
+        (transitSafety.isBlockedRoom(roomName) || (opts.blockHostiles && isDangerousRoom(roomName, opts))));
+    const policyChanged = creep.memory._routeTransitKey !== undefined &&
+        creep.memory._routeTransitKey !== transitKey;
+    if (opts.allowSourceKeepers) {
+        const visible = Game.rooms[creep.room.name];
+        if (visible) keeperTransit.observe(visible);
+        keeperTransit.invalidateNextStep(creep);
+    }
+    const keeperKey = opts.allowSourceKeepers ? keeperTransit.policyKey() : "off";
+    const keeperChanged = opts.allowSourceKeepers !== undefined && creep.memory._routeKeeperKey !== keeperKey;
+    // Initial adoption must preserve a legitimate ongoing retreat when no ban affects it.
+    if (creep.memory._routeTransitKey === undefined) delete creep.memory._move;
+    if (policyChanged || cachedUnsafe || keeperChanged) {
+        if (cachedUnsafe) planningAttempts.delete(planningId(creep));
+        for (const key of ["_move", "_realRoute", "_realRouteDest", "_realRouteFrom",
+            "_routeStackDest", "_routeRetreatTo", "_routeProgressKey", "_routeProgressPos",
+            "_routeNoProgressTicks", "_routeNoPathTicks", "_routeTrail"]) delete creep.memory[key];
+    }
+    creep.memory._routeTransitKey = transitKey;
+    if (opts.allowSourceKeepers !== undefined) creep.memory._routeKeeperKey = keeperKey;
+    if (toRoomName !== creep.room.name && transitSafety.isBlockedRoom(toRoomName)) return ERR_NO_PATH;
+    const cachedRoute = creep.memory._realRouteDest === toRoomName && creep.memory._realRoute;
+    const restoreEntries = cachedRoute && (opts.nativeRoute || creep.memory._routeStackDest === toRoomName) && !realRouteEntries.has(cachedRoute) &&
+        !checkedRouteEntries.has(cachedRoute);
+    const needsPlanning = restoreEntries || !creep.memory._realRoute ||
+        creep.memory._realRouteDest !== toRoomName ||
+        creep.memory._routeRetreatTo === creep.room.name;
+    if (opts.realRoute !== false && needsPlanning) {
+        const gate = planningGate(creep, toRoomName, opts);
+        planningReasons.set(creep, gate.reason);
+        if (gate.reason && !gate.cached) {
+            // Preserve initialization/retreat completion until CPU is available.
+            return ERR_BUSY;
+        }
+    }
+    if (restoreEntries && opts.realRoute !== false) {
+        // Rebuild derived waypoints once after a heap reset. If validation
+        // fails, retain the old room trace for the existing fallback.
+        const restored = tryComputeRealRoute(creep, toRoomName, opts);
+        if (restored !== undefined) checkedRouteEntries.add(cachedRoute);
+    }
+    if (opts.realRoute !== false && needsPlanning && !restoreEntries && !opts.nativeRoute &&
+        creep.memory._routeStackDest === toRoomName && creep.memory._routeRetreatTo !== creep.room.name) {
+        tryComputeRealRoute(creep, toRoomName, opts);
+    }
     traceScoutMove(creep, "route-enter", null, undefined, {
         destination: toRoomName,
         nativeRoute: !!opts.nativeRoute,
@@ -899,6 +1087,8 @@ function moveToRoom(creep, toRoomName, opts) {
     const moveOpts = {
         range: 20,
         reusePath: opts.reusePath === undefined ? 20 : opts.reusePath,
+        allowSourceKeepers: opts.allowSourceKeepers,
+        blockHostiles: opts.blockHostiles,
     };
 
     if (opts.nativeRoute) {
@@ -918,6 +1108,7 @@ function moveToRoom(creep, toRoomName, opts) {
                 ).map((room) => ({ room }));
             })()
             : findRoute(creep.room.name, toRoomName, opts);
+        if (!route && creep.room.name !== toRoomName) return ERR_NO_PATH;
         const nextRoom = route && route.length ? route[0].room : toRoomName;
         const cachedDest = creep.memory._move && creep.memory._move.dest;
         const cachedRoom = cachedDest && (cachedDest.roomName || cachedDest.room);
@@ -932,12 +1123,13 @@ function moveToRoom(creep, toRoomName, opts) {
                 ? creep.store.getUsedCapacity()
                 : 0,
         });
-        const targetPos = hopEntryPosition(creep.room.name, nextRoom);
+        const entry = validatedEntry(creep, nextRoom);
+        const targetPos = entry || hopEntryPosition(creep.room.name, nextRoom);
         traceScoutMove(creep, "native-before", targetPos);
         const status = creep.moveTo(targetPos, {
-            range,
+            range: entry ? 0 : range,
             reusePath: moveOpts.reusePath,
-            maxOps: config.get("routing.moveMaxOps", 20000),
+            maxOps: config.get("routing.hopMaxOps", 20000),
             maxRooms: 2,
             plainCost: costs.plainCost,
             swampCost: costs.swampCost,
@@ -1045,7 +1237,7 @@ function moveToRoom(creep, toRoomName, opts) {
                 // without blaming this room - see retreatWithoutBlame().
                 retreatWithoutBlame(creep);
                 if (creep.memory._routeRetreatTo) {
-                    return creep.moveTo(new RoomPosition(25, 25, creep.memory._routeRetreatTo), moveOpts);
+                    return moveRetreat(creep, moveOpts);
                 }
                 // no earlier room either - fail-soft, fall through to the
                 // normal findRoute()-based flow below as an absolute last
@@ -1053,7 +1245,7 @@ function moveToRoom(creep, toRoomName, opts) {
                 // "nowhere to retreat to" fallback).
             }
         } else {
-            return creep.moveTo(new RoomPosition(25, 25, creep.memory._routeRetreatTo), moveOpts);
+            return moveRetreat(creep, moveOpts);
         }
     }
 
@@ -1068,7 +1260,7 @@ function moveToRoom(creep, toRoomName, opts) {
         creep.memory._routeTrail = [];
         retreatFrom(creep);
         if (creep.memory._routeRetreatTo) {
-            return creep.moveTo(new RoomPosition(25, 25, creep.memory._routeRetreatTo), moveOpts);
+            return moveRetreat(creep, moveOpts);
         }
     }
 
@@ -1091,7 +1283,7 @@ function moveToRoom(creep, toRoomName, opts) {
         creep.memory._routeAvoidSeenLen = avoid.length;
     }
 
-    const routeOpts = Object.assign({}, opts, { avoid, body: creep.body });
+    const routeOpts = Object.assign({}, opts, { avoid, body: creep.body, currentRoomName: creep.room.name });
     const costs = bodyTravelCosts(
         creep.body,
         creep.store && creep.store.getUsedCapacity ? creep.store.getUsedCapacity() : 0
@@ -1158,7 +1350,8 @@ function moveToRoom(creep, toRoomName, opts) {
     // narrower allowlist is reserved for the findRoute()-only fallback,
     // which was never checked against real terrain and still benefits from
     // being kept roughly on the room-graph path findRoute() chose.
-    const costCallback = usingRealRoute && singleHop
+    const entry = usingRealRoute && validatedEntry(creep, nextHop || toRoomName);
+    const costCallback = usingRealRoute && (singleHop || entry)
         ? hopCostCallback(creep.room.name, nextHop, routeOpts)
         : usingRealRoute
             ? avoidCostCallback(avoid, routeOpts)
@@ -1192,7 +1385,7 @@ function moveToRoom(creep, toRoomName, opts) {
     // while the creep is still in the room behind it.
     const moveTarget = singleHop ? nextHop : toRoomName;
     const moveRange = 0;
-    const targetPos = hopEntryPosition(creep.room.name, moveTarget);
+    const targetPos = entry || hopEntryPosition(creep.room.name, moveTarget);
     traceScoutMove(creep, "route-before", targetPos, undefined, {
         forceCachedStep,
         progressKey,
@@ -1202,8 +1395,8 @@ function moveToRoom(creep, toRoomName, opts) {
     const status = creep.moveTo(targetPos, {
         range: moveRange,
         reusePath: moveOpts.reusePath,
-        maxOps: moveOpts.maxOps,
-        maxRooms: moveOpts.maxRooms,
+        maxOps: entry ? config.get("routing.hopMaxOps", 20000) : moveOpts.maxOps,
+        maxRooms: entry ? 2 : moveOpts.maxRooms,
         plainCost: costs.plainCost,
         swampCost: costs.swampCost,
         costCallback,
@@ -1222,7 +1415,7 @@ function moveToRoom(creep, toRoomName, opts) {
     if (creep.memory._routeNoPathTicks >= config.get("routing.noPathTicks", 2)) {
         retreatFrom(creep);
         if (creep.memory._routeRetreatTo) {
-            return creep.moveTo(new RoomPosition(25, 25, creep.memory._routeRetreatTo), moveOpts);
+            return moveRetreat(creep, moveOpts);
         }
     }
 
@@ -1275,6 +1468,7 @@ global.routeCheck = function (fromRoomName, toRoomName) {
 };
 
 module.exports = {
+    planningStatus,
     isHighwayRoom,
     bodyTravelCosts,
     findRoute,

@@ -15,11 +15,10 @@
 // Lab phases follow labSlots.planPhases: an intermediate that the next phase
 // consumes in place stays in its lab (reaction.keep stops the hauler draining
 // it, labLoad protects it from the transient drain); only a "park" phase
-// routes its product through storage. The final product is SOLD AS IT COMES OUT
+// routes its product through the shared resource policy. The final product is SOLD AS IT COMES OUT
 // (partialSales, user request 2026-10-02): the sooner it is sold, the shorter the
-// price risk. Product goes to storage and a sell op at the break-even floor takes
-// it to the terminal itself; it is NOT delivered straight to the terminal, because
-// terminalOps sweeps any terminal stock no operation claims back to storage.
+// price risk. Non-consumption product goes to the terminal (storage overflow is
+// allowed) and a sell op at the break-even floor reserves the committed output.
 const config = require("./config");
 const roomCache = require("./roomCache");
 const market = require("./market");
@@ -27,6 +26,8 @@ const marketPricing = require("./marketPricing");
 const marketFlip = require("./marketFlip");
 const terminalOps = require("./terminalOps");
 const labSlots = require("./labSlots");
+const labPolicy = require("./labPolicy");
+const labPolicyRuntime = require("./labPolicyRuntime");
 
 const FINAL = ["completed", "failed", "cancelled"];
 
@@ -83,6 +84,7 @@ function clearFlags(roomName, kind, product) {
     if (!kind || kind === "lab") {
         if (mem.labReactionAuto) { delete mem.labReaction; delete mem.labReactions; delete mem.labReactionAuto; }
         if (mem.labLoadAuto) { delete mem.labLoad; delete mem.labLoadAuto; }
+        delete mem.labPolicyInputs; delete mem.labPolicyHold; delete mem.labPolicyDesired;
     }
     if (!product || mem.directToTerminal === product) delete mem.directToTerminal;
 }
@@ -122,6 +124,7 @@ function clearChainFlags(chain) {
 // transient drain while the chain runs (transientStock reads mem.labLoad).
 function syncHolds(roomName, chain) {
     const mem = roomMem(roomName);
+    if (mem.labLoad && !mem.labLoadAuto) return;
     const ids = Object.keys(chain.holds || {});
     if (!ids.length) {
         if (mem.labLoadAuto) { delete mem.labLoad; delete mem.labLoadAuto; }
@@ -146,6 +149,12 @@ function manualPin(roomName, kinds) {
 // children-first). Lab steps take their slots from labSlots.planPhases.
 function buildQueue(room, candidate) {
     const steps = candidate.steps;
+    const optimized = labPolicy.descriptor(steps);
+    const available = optimized && labPolicyRuntime.resolve(room);
+    if (available && labPolicy.widePlan(optimized, available.built)) {
+        const queue = [optimized]; queue.strategy = "policy";
+        return queue;
+    }
     const labSteps = steps.filter((s) => s.kind === "lab");
     const phaseByProduct = {};
     // ROADMAP 0116: "wide" strategy = every step on the labs that reach the centre pair, one
@@ -228,6 +237,7 @@ function reactionOf(item) {
     const reaction = { a: item.a, b: item.b, product: item.product, output: item.output, input1: item.input1, input2: item.input2 };
     if (item.outputs && item.outputs.length > 1) reaction.outputs = item.outputs.slice();
     if (item.keep) reaction.keep = true;
+    reaction.remaining = item.target;
     return reaction;
 }
 
@@ -252,6 +262,12 @@ function open(room, candidate) {
     const cap = config.get("craft.maxActive", 0);
     if (cap > 0 && activeCount() >= cap) return { ok: false, reason: "max-active" };
     if (manualPin(room.name, kinds)) return { ok: false, reason: "manual-pin" };
+    if (config.get("stockPolicy.enabled", true)) {
+        const policy = require("./resourcePolicy"), committed = policy.commitments(room);
+        if (Object.keys(candidate.owns || {}).some((r) => candidate.owns[r] >
+            Math.max(0, policy.value(room.storage, r) + policy.value(room.terminal, r) - (committed[r] || 0))))
+            return { ok: false, reason: "stock-reserved" };
+    }
     // credits that actually leave the balance (purchases); the delivery fee is
     // energy and own inputs are opportunity cost - neither counts against caps
     const spend = candidate.spend;
@@ -295,16 +311,23 @@ function open(room, candidate) {
         limits[r] = Math.max(q.ask * (1 + slack), Math.min(raw, q.ask * (1 + premium)));
         overpay += q.qty * (limits[r] - q.ask);
     });
+    const reserve = spend + overpay;
+    if (reserve > require("./marketAccounting").available()) return { ok: false, reason: "credit-reserve" };
+    // Check all resources before registering any part of the batch.
+    for (const resourceType of buyKeys) {
+        if (terminalOps.lockConflict("buy", room.name, null, resourceType, false, { automaticPurchase: true }))
+            return { ok: false, reason: "buy-refused:" + resourceType,
+                detail: "já existe uma operação concorrente para este terminal/recurso" };
+    }
     const buys = {};
     const placed = [];
     for (const resourceType of buyKeys) {
         const q = quotes[resourceType];
-        const attempt = terminalOps.buy(room.name, resourceType, q.qty, limits[resourceType], false, true);
-        if (!attempt.ok) { placed.forEach((id) => terminalOps.cancel(id)); return { ok: false, reason: "buy-refused:" + resourceType }; }
+        const attempt = terminalOps.buy(room.name, resourceType, q.qty, limits[resourceType], false, true, { automaticPurchase: true });
+        if (!attempt.ok) { placed.forEach((id) => terminalOps.cancel(id)); return { ok: false, reason: "buy-refused:" + resourceType, detail: attempt.error }; }
         placed.push(attempt.id);
         buys[resourceType] = { opId: attempt.id, qty: q.qty, limit: limits[resourceType] };
     }
-    const reserve = spend + overpay;
     marketFlip.commit(reserve);
     // first chain of a room keeps the plain room name as its key; a second one
     // (the other structure kind) gets the kinds appended
@@ -337,6 +360,8 @@ function scaleChain(chain, fraction, limiting) {
     });
     if (scaled.some((entry) => !entry)) return false;
     scaled.forEach((entry) => {
+        if (entry.item.policy) entry.item.targets = Object.fromEntries(Object.entries(entry.item.targets)
+            .map(([p, n]) => [p, Math.floor(n / 5 * fraction) * 5]));
         entry.item.target = entry.target;
         if (entry.item.kind === "factory") entry.item.energy = entry.energy;
     });
@@ -359,7 +384,19 @@ function startItem(room, chain) {
     const group = groupAt(chain, chain.qi);
     const item = group[0];
     const mem = roomMem(room.name);
-    if (group.every((it) => it.started)) return true;
+    if (item.policy) {
+        if (item.base === undefined) item.base = stockAnywhere(room, item.product);
+        const ready = labPolicyRuntime.tick(room, chain, item);
+        syncHolds(room.name, chain);
+        return ready;
+    }
+    if (group.every((it) => it.started)) {
+        if (mem.labReactionAuto) [mem.labReaction].concat(mem.labReactions || []).forEach((r) => {
+            const it = r && group.find((current) => current.product === r.product);
+            if (it) r.remaining = Math.max(0, it.target - madeSoFar(room, chain, it));
+        });
+        return true;
+    }
     if (item.kind === "lab") {
         // drain barrier: with no reaction set the hauler drains every lab, so
         // the slots start empty (a lab holds one mineral type only)
@@ -393,10 +430,12 @@ function startItem(room, chain) {
 // Units of the item's product made so far: what is in stock beyond the baseline,
 // plus what the chain has already sold on the way (partial sales).
 function madeSoFar(room, chain, item) {
+    if (item.policy) return item.run && item.run.produced[item.product] || 0;
     return stockAnywhere(room, item.product) - item.base + (item.product === chain.product ? chain.sold || 0 : 0);
 }
 
 function itemDone(room, item, chain) {
+    if (item.policy) return !!(item.run && item.run.done);
     return madeSoFar(room, chain, item) >= item.target;
 }
 
@@ -514,6 +553,28 @@ function abort(chain, room, reason) {
     mem.stats.aborted++;
     const items = {};
     Object.keys(chain.buys).forEach((resourceType) => { items[resourceType] = chain.buys[resourceType].qty; });
+    // Retain the whole cancelled chain, including material produced before abort.
+    const retain = (r, q) => { if (r && Number.isFinite(q)) items[r] = Math.max(items[r] || 0, q); };
+    retain(chain.product, chain.qty);
+    const demand = {};
+    (chain.queue || []).forEach((step) => {
+        if (step.policy) {
+            step.order.forEach((p) => {
+                retain(p, step.targets[p]);
+                const recipe = marketPricing.recipeOf(p);
+                if (recipe) Object.keys(recipe.components).forEach((r) => {
+                    demand[r] = (demand[r] || 0) + Math.ceil(step.targets[p] / recipe.amount) * recipe.components[r];
+                });
+            });
+            return;
+        }
+        retain(step.product, step.target);
+        const recipe = marketPricing.recipeOf(step.product);
+        if (recipe) Object.keys(recipe.components).forEach((r) => {
+            demand[r] = (demand[r] || 0) + Math.ceil((step.target || 0) / recipe.amount) * recipe.components[r];
+        });
+    });
+    Object.keys(demand).forEach((r) => retain(r, demand[r]));
     const spent = chain.est.spend;
     mem.stranded[chain.room + "-" + Game.time] = { room: chain.room, tick: Game.time, product: chain.product, items, spent };
     recordRun(chain, 0, { aborted: reason });
@@ -543,7 +604,8 @@ function partialSales(chain, room, item) {
     if (!config.get("craft.partialSales", true) || item.product !== chain.product || chain.partialOpId) return;
     const product = chain.product;
     const reach = ((room.storage && room.storage.store[product]) || 0) + ((room.terminal && room.terminal.store[product]) || 0);
-    const unsold = Math.max(0, stockAnywhere(room, product) - item.base);
+    const unsold = item.policy ? Math.min(Math.max(0, stockAnywhere(room, product) - item.base),
+        Math.max(0, madeSoFar(room, chain, item) - (chain.sold || 0))) : Math.max(0, stockAnywhere(room, product) - item.base);
     const sellable = Math.min(unsold, reach);
     const lot = Math.max(1, Math.ceil(item.target * config.get("craft.minPartialSellRatio", 0.1)));
     if (sellable < lot) return;
@@ -572,6 +634,13 @@ function finishPartials(chain) {
 }
 
 function advance(chain, room) {
+    if (manualPin(room.name, kindsOf(chain))) {
+        const item = chain.queue[chain.qi || 0];
+        if (item && item.policy) labPolicyRuntime.reconcile(room, chain, item);
+        chain.wait = "manual-pin"; chain.stateTick = Game.time;
+        return;
+    }
+    delete chain.wait;
     // The stall guard measures PROGRESS, not time in the state: a long lab
     // reaction (XLH2O is ~12000 ticks on one output lab) legitimately stays in
     // "working" far longer than craft.stallTicks while its product keeps
@@ -639,6 +708,7 @@ function advance(chain, room) {
         setState(chain, "working"); // and start the first item this same tick
     }
     if (chain.state === "working") {
+        migratePending(room, chain);
         const group = groupAt(chain, chain.qi);
         const item = group[group.length - 1];
         if (!startItem(room, chain)) return;
@@ -666,11 +736,13 @@ function advance(chain, room) {
         chain.qi += group.length;
         if (chain.qi >= chain.queue.length) {
             finishPartials(chain);
-            chain.produced = Math.max(0, stockAnywhere(room, chain.product) - item.base + (chain.sold || 0));
+            chain.produced = item.policy ? madeSoFar(room, chain, item) :
+                Math.max(0, stockAnywhere(room, chain.product) - item.base + (chain.sold || 0));
             chain.sellStart = Game.time;
             setState(chain, "selling");
             log(chain.room + " " + chain.product + ": producao pronta (" + chain.produced + "), vendendo no piso " + saleFloor(chain).toFixed(2));
         } else {
+            migratePending(room, chain);
             chain.stateTick = Game.time; // progress resets the stall clock per item
         }
         return;
@@ -748,6 +820,11 @@ function replan(roomName) {
         if (chain.state !== "buying" && chain.state !== "working") { out.push(label + ": em '" + chain.state + "', nada a trocar"); return; }
         const room = Game.rooms[name];
         if (!room) { out.push(label + ": sem visao da sala"); return; }
+        if (labPolicy.enabled()) {
+            if (migratePending(room, chain)) out.push(label + ": sufixo pendente migrado para politica adaptativa");
+            else out.push(label + ": politica atual ou migracao aguardando barreira da onda em curso");
+            return;
+        }
         const pending = chain.queue.map((item, n) => n).filter((n) => n >= chain.qi && !chain.queue[n].started);
         if (!pending.length) { out.push(label + ": nenhuma etapa pendente (a que esta rodando termina como esta)"); return; }
         const steps = chain.queue.map((item) => {
@@ -781,6 +858,17 @@ function replan(roomName) {
 }
 
 // --- stranded inputs ---------------------------------------------------------
+function migratePending(room, chain) {
+    if (!labPolicy.enabled()) return false;
+    const pending = chain.queue.slice(chain.qi || 0);
+    if (pending.some((item) => item.started || item.policy) || pending.length < 2 ||
+        pending.some((item) => item.kind !== "lab")) return false;
+    const steps = pending.map((item) => ({ kind: "lab", product: item.product, batches: item.target / 5 }));
+    const optimized = labPolicy.descriptor(steps);
+    if (!optimized || !labPolicyRuntime.resolve(room)) return false;
+    chain.queue.splice(chain.qi || 0, pending.length, optimized);
+    return true;
+}
 function strandedSweep() {
     const mem = craft();
     const hold = config.get("craft.retentionTicks", 259200);
@@ -801,6 +889,7 @@ function strandedSweep() {
                 stock: (rt) => stockAnywhere(room, rt),
             });
             if (decision.action === "process") return;
+            if (config.get("stockPolicy.enabled", true)) return; // Released stock belongs to swing's guarded liquidation.
             terminalOps.sell(entry.room, resourceType, Math.floor(have), bid, false, true);
         });
     });

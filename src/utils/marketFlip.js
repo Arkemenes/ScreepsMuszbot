@@ -155,7 +155,7 @@ function openFlip(candidate, quantity, expectedNetProfit) {
     // operation on the same resource must not block the flip everywhere.
     let room = null, response = null;
     for (const candidateRoom of eligibleRooms(candidate.marketOnly, busyRooms(mem))) {
-        const attempt = terminalOps.buy(candidateRoom.name, candidate.resourceType, quantity, candidate.buyPrice, false, true);
+        const attempt = terminalOps.buy(candidateRoom.name, candidate.resourceType, quantity, candidate.buyPrice, false, true, { automaticPurchase: true });
         if (attempt.ok) { room = candidateRoom; response = attempt; break; }
     }
     if (!room) return false;
@@ -194,7 +194,7 @@ function scan() {
         .filter((candidate) => candidate && candidate.netProfitRatio >= Math.max(minProfitRatio, candidate.timeMargin))
         .sort((a, b) => b.netProfitRatio - a.netProfitRatio);
     const opportunities = [];
-    let availableCredits = market && typeof market.credits === "number" ? market.credits - mem.committedCredits : 0;
+    let availableCredits = require("./marketAccounting").available();
     candidates.forEach((candidate) => {
         const opportunity = {
             resourceType: candidate.resourceType, buyPrice: candidate.buyPrice, sellPrice: candidate.sellPrice,

@@ -23,7 +23,7 @@
 const BASE_SEGMENT = 10;
 const MAX_SEGMENT = 99;
 const MAX_ACTIVE = 10;
-const MARKET_HISTORY_SEGMENT = 9;
+const marketHistory = require("./marketHistoryStore");
 
 // roomName -> { buildings: [...], mincutBoundries: [...] }
 const heap = {};
@@ -153,9 +153,8 @@ function activate() {
             ids.push(id);
         }
     };
-    // Segment 9 is reserved for market history. Keep it active alongside
-    // up to nine room-plan segments; room plans begin at segment 10.
-    push(MARKET_HISTORY_SEGMENT);
+    // Root plus one history page while hydrating; plans still begin at 10.
+    marketHistory.activeSegmentIds().forEach(push);
     for (const r of Game.myRooms || []) push(map[r.name]);
     for (const rn in map) push(map[rn]);
 

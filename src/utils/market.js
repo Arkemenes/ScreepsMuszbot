@@ -5,9 +5,11 @@ const marketHistory = require("./marketHistoryStore");
 
 let lastCurrentScanTick = null;
 let lastSnapshotTick = null;
+let firstSnapshotDueTick = null;
 let lastSnapshot = null;
 const temporalSnapshots = {};
 let marketHistoryLoaded = false;
+let historyDirty = false;
 
 function numberOrZero(value) {
     return typeof value === "number" && isFinite(value) ? value : 0;
@@ -255,6 +257,9 @@ function emptySnapshot() {
 }
 
 function scan() {
+    if (firstSnapshotDueTick === null) firstSnapshotDueTick = Game.time;
+    if (Game.cpu && Game.cpu.bucket < config.get("market.minBucket", 500)) return lastSnapshot;
+    let historyBecameReady = false;
     if (!marketHistoryLoaded && marketHistory.load()) {
         const persisted = marketHistory.history();
         for (const resourceType in persisted) {
@@ -270,22 +275,31 @@ function scan() {
                 .map((tick) => byTick[tick])
                 .sort((left, right) => left.tick - right.tick);
             for (const sample of temporalSnapshots[resourceType]) {
-                if (lastSnapshotTick === null || sample.tick > lastSnapshotTick) {
-                    lastSnapshotTick = sample.tick;
+                const scheduled = Number.isFinite(sample.scheduledTick) ? sample.scheduledTick : sample.tick;
+                if (lastSnapshotTick === null || scheduled > lastSnapshotTick) {
+                    lastSnapshotTick = scheduled;
                 }
             }
         }
         marketHistoryLoaded = true;
+        historyBecameReady = true;
     }
+    // Hydration may finish between market scans. Flush real samples collected
+    // during loading before taking the cadence fast path.
+    if (historyDirty && marketHistoryLoaded && marketHistory.save(temporalSnapshots)) historyDirty = false;
     const currentInterval = Math.max(1, Number(config.get("market.currentInterval", 120)) || 120);
-    if (lastSnapshot && !cadence.due(lastCurrentScanTick, currentInterval)) {
+    const snapshotInterval = Math.max(1, Number(config.get("market.snapshotInterval", 3600)) || 3600);
+    const dueTick = lastSnapshotTick === null ? firstSnapshotDueTick : lastSnapshotTick + snapshotInterval;
+    const snapshotDue = Game.time >= dueTick;
+    // Delayed collection resumes immediately; it need not wait for the book grid.
+    if (lastSnapshot && !historyBecameReady && !snapshotDue && !cadence.due(lastCurrentScanTick, currentInterval)) {
         return lastSnapshot;
     }
     const orders = orderBook.all();
     const groupedOrders = groupOrders(orders);
     const resources = {};
-    const snapshotInterval = Math.max(1, Number(config.get("market.snapshotInterval", 3600)) || 3600);
-    const snapshotDue = lastSnapshotTick === null || Game.time - lastSnapshotTick >= snapshotInterval;
+    // Coalesce missed slots into one real observation, keeping the original grid.
+    const scheduledTick = dueTick + Math.floor(Math.max(0, Game.time - dueTick) / snapshotInterval) * snapshotInterval;
     for (const resourceType of resourceTypes()) {
         const sellType = typeof ORDER_SELL !== "undefined" ? ORDER_SELL : "sell";
         const buyType = typeof ORDER_BUY !== "undefined" ? ORDER_BUY : "buy";
@@ -295,6 +309,7 @@ function scan() {
         if (snapshotDue) {
             temporalSnapshots[resourceType].push({
                 tick: Game.time,
+                scheduledTick,
                 buyPrice: buyLevel.price,
                 buyVolume: buyLevel.volume,
                 sellPrice: sellLevel.price,
@@ -316,8 +331,9 @@ function scan() {
     applyCommodityPrices(resources);
     lastCurrentScanTick = Game.time;
     if (snapshotDue) {
-        lastSnapshotTick = Game.time;
-        marketHistory.save(temporalSnapshots);
+        lastSnapshotTick = scheduledTick;
+        historyDirty = true;
+        if (marketHistoryLoaded && marketHistory.save(temporalSnapshots)) historyDirty = false;
     }
     lastSnapshot = { tick: Game.time, resources };
     return lastSnapshot;
@@ -333,12 +349,18 @@ function samples(resourceType) {
     return temporalSnapshots[resourceType] || [];
 }
 
+function historyReady() {
+    return marketHistoryLoaded && lastSnapshot !== null;
+}
+
 function reset() {
     lastCurrentScanTick = null;
     lastSnapshotTick = null;
+    firstSnapshotDueTick = null;
     lastSnapshot = null;
     for (const resourceType in temporalSnapshots) delete temporalSnapshots[resourceType];
     marketHistoryLoaded = false;
+    historyDirty = false;
     marketHistory.resetCache();
     medianCache = {};
     groupedFor = null;
@@ -367,15 +389,24 @@ function marketPrice(resourceType) {
     return summary;
 }
 
+function flushHistory() {
+    if (!marketHistoryLoaded) return Object.assign({ ok: false, reason: "history-not-hydrated" }, marketHistory.status());
+    const ok = marketHistory.save(temporalSnapshots);
+    if (ok) historyDirty = false;
+    return Object.assign({ ok }, marketHistory.status());
+}
 global.marketPrice = marketPrice;
+global.marketHistoryFlush = flushHistory;
 
 module.exports = {
     scan,
     snapshot,
     samples,
+    historyReady,
     reset,
     groupOrders,
     weightedMedian,
     pointwiseFairPrice,
     marketPrice,
+    flushHistory,
 };

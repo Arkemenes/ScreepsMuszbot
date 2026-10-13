@@ -1,0 +1,1576 @@
+{
+  "assumptions": {
+    "qty": 3000,
+    "reactionAmount": 5,
+    "mineralCapacity": 3000,
+    "cooldowns": {
+      "OH": {
+        "inputs": [
+          "H",
+          "O"
+        ],
+        "cooldown": 20
+      },
+      "LH": {
+        "inputs": [
+          "L",
+          "H"
+        ],
+        "cooldown": 15
+      },
+      "LH2O": {
+        "inputs": [
+          "LH",
+          "OH"
+        ],
+        "cooldown": 10
+      },
+      "XLH2O": {
+        "inputs": [
+          "LH2O",
+          "X"
+        ],
+        "cooldown": 65
+      }
+    }
+  },
+  "rows": [
+    {
+      "count": 3,
+      "rcl": 6,
+      "bestPair": {
+        "inputs": [
+          1,
+          2
+        ],
+        "outputs": [
+          3
+        ]
+      },
+      "selected": "waves",
+      "estimates": {
+        "waves": 66000,
+        "wide": 66000
+      },
+      "plans": {
+        "waves": {
+          "ok": true,
+          "moves": 10,
+          "mode": "park",
+          "parallel": false,
+          "phases": [
+            {
+              "product": "LH",
+              "inputs": [
+                3,
+                1
+              ],
+              "out": 2,
+              "ops": [
+                {
+                  "op": "load",
+                  "slot": 3,
+                  "item": "L"
+                },
+                {
+                  "op": "load",
+                  "slot": 1,
+                  "item": "H"
+                },
+                {
+                  "op": "park",
+                  "slot": 2,
+                  "item": "LH"
+                }
+              ],
+              "wave": 0
+            },
+            {
+              "product": "OH",
+              "inputs": [
+                3,
+                1
+              ],
+              "out": 2,
+              "ops": [
+                {
+                  "op": "drain",
+                  "slot": 3
+                },
+                {
+                  "op": "load",
+                  "slot": 3,
+                  "item": "H"
+                },
+                {
+                  "op": "drain",
+                  "slot": 1
+                },
+                {
+                  "op": "load",
+                  "slot": 1,
+                  "item": "O"
+                },
+                {
+                  "op": "drain",
+                  "slot": 2
+                }
+              ],
+              "wave": 1
+            },
+            {
+              "product": "LH2O",
+              "inputs": [
+                3,
+                2
+              ],
+              "out": 1,
+              "ops": [
+                {
+                  "op": "drain",
+                  "slot": 3
+                },
+                {
+                  "op": "reload",
+                  "slot": 3,
+                  "item": "LH"
+                },
+                {
+                  "op": "drain",
+                  "slot": 1
+                }
+              ],
+              "wave": 2
+            },
+            {
+              "product": "XLH2O",
+              "inputs": [
+                1,
+                2
+              ],
+              "out": 3,
+              "ops": [
+                {
+                  "op": "drain",
+                  "slot": 2
+                },
+                {
+                  "op": "load",
+                  "slot": 2,
+                  "item": "X"
+                },
+                {
+                  "op": "drain",
+                  "slot": 3
+                }
+              ],
+              "wave": 3
+            }
+          ],
+          "strategy": "waves",
+          "T": 66000
+        },
+        "wide": {
+          "ok": true,
+          "strategy": "wide",
+          "moves": 0,
+          "mode": "wide",
+          "parallel": false,
+          "phases": [
+            {
+              "product": "LH",
+              "inputs": [
+                1,
+                2
+              ],
+              "out": 3,
+              "ops": [],
+              "wave": 0
+            },
+            {
+              "product": "OH",
+              "inputs": [
+                1,
+                2
+              ],
+              "out": 3,
+              "ops": [],
+              "wave": 1
+            },
+            {
+              "product": "LH2O",
+              "inputs": [
+                1,
+                2
+              ],
+              "out": 3,
+              "ops": [],
+              "wave": 2
+            },
+            {
+              "product": "XLH2O",
+              "inputs": [
+                1,
+                2
+              ],
+              "out": 3,
+              "ops": [],
+              "wave": 3
+            }
+          ],
+          "T": 66000
+        },
+        "auto": {
+          "ok": true,
+          "moves": 10,
+          "mode": "park",
+          "parallel": false,
+          "phases": [
+            {
+              "product": "LH",
+              "inputs": [
+                3,
+                1
+              ],
+              "out": 2,
+              "ops": [
+                {
+                  "op": "load",
+                  "slot": 3,
+                  "item": "L"
+                },
+                {
+                  "op": "load",
+                  "slot": 1,
+                  "item": "H"
+                },
+                {
+                  "op": "park",
+                  "slot": 2,
+                  "item": "LH"
+                }
+              ],
+              "wave": 0
+            },
+            {
+              "product": "OH",
+              "inputs": [
+                3,
+                1
+              ],
+              "out": 2,
+              "ops": [
+                {
+                  "op": "drain",
+                  "slot": 3
+                },
+                {
+                  "op": "load",
+                  "slot": 3,
+                  "item": "H"
+                },
+                {
+                  "op": "drain",
+                  "slot": 1
+                },
+                {
+                  "op": "load",
+                  "slot": 1,
+                  "item": "O"
+                },
+                {
+                  "op": "drain",
+                  "slot": 2
+                }
+              ],
+              "wave": 1
+            },
+            {
+              "product": "LH2O",
+              "inputs": [
+                3,
+                2
+              ],
+              "out": 1,
+              "ops": [
+                {
+                  "op": "drain",
+                  "slot": 3
+                },
+                {
+                  "op": "reload",
+                  "slot": 3,
+                  "item": "LH"
+                },
+                {
+                  "op": "drain",
+                  "slot": 1
+                }
+              ],
+              "wave": 2
+            },
+            {
+              "product": "XLH2O",
+              "inputs": [
+                1,
+                2
+              ],
+              "out": 3,
+              "ops": [
+                {
+                  "op": "drain",
+                  "slot": 2
+                },
+                {
+                  "op": "load",
+                  "slot": 2,
+                  "item": "X"
+                },
+                {
+                  "op": "drain",
+                  "slot": 3
+                }
+              ],
+              "wave": 3
+            }
+          ],
+          "strategy": "waves",
+          "T": 66000
+        }
+      },
+      "simulations": {
+        "waves": {
+          "0": {
+            "ticks": 65908,
+            "calls": 2400,
+            "outputLabTicks": 66000
+          },
+          "10": {
+            "ticks": 65928,
+            "calls": 2400,
+            "outputLabTicks": 66000
+          },
+          "50": {
+            "ticks": 66044,
+            "calls": 2400,
+            "outputLabTicks": 66000
+          },
+          "200": {
+            "ticks": 66494,
+            "calls": 2400,
+            "outputLabTicks": 66000
+          }
+        },
+        "wide": {
+          "0": {
+            "ticks": 65936,
+            "calls": 2400,
+            "outputLabTicks": 66000
+          },
+          "10": {
+            "ticks": 65937,
+            "calls": 2400,
+            "outputLabTicks": 66000
+          },
+          "50": {
+            "ticks": 66044,
+            "calls": 2400,
+            "outputLabTicks": 66000
+          },
+          "200": {
+            "ticks": 66494,
+            "calls": 2400,
+            "outputLabTicks": 66000
+          }
+        }
+      }
+    },
+    {
+      "count": 6,
+      "rcl": 7,
+      "bestPair": {
+        "inputs": [
+          1,
+          2
+        ],
+        "outputs": [
+          3,
+          4,
+          5,
+          6
+        ]
+      },
+      "selected": "wide",
+      "estimates": {
+        "waves": 27750,
+        "wide": 16500
+      },
+      "plans": {
+        "waves": {
+          "ok": true,
+          "moves": 3,
+          "mode": "reuse",
+          "parallel": true,
+          "phases": [
+            {
+              "product": "LH",
+              "inputs": [
+                3,
+                4
+              ],
+              "out": 6,
+              "ops": [
+                {
+                  "op": "load",
+                  "slot": 3,
+                  "item": "L"
+                },
+                {
+                  "op": "load",
+                  "slot": 4,
+                  "item": "H"
+                }
+              ],
+              "wave": 0
+            },
+            {
+              "product": "OH",
+              "inputs": [
+                5,
+                1
+              ],
+              "out": 2,
+              "ops": [
+                {
+                  "op": "load",
+                  "slot": 5,
+                  "item": "H"
+                },
+                {
+                  "op": "load",
+                  "slot": 1,
+                  "item": "O"
+                }
+              ],
+              "wave": 0
+            },
+            {
+              "product": "LH2O",
+              "inputs": [
+                6,
+                2
+              ],
+              "out": 1,
+              "ops": [
+                {
+                  "op": "drain",
+                  "slot": 1
+                }
+              ],
+              "wave": 1
+            },
+            {
+              "product": "XLH2O",
+              "inputs": [
+                1,
+                2
+              ],
+              "out": 3,
+              "ops": [
+                {
+                  "op": "drain",
+                  "slot": 2
+                },
+                {
+                  "op": "load",
+                  "slot": 2,
+                  "item": "X"
+                },
+                {
+                  "op": "drain",
+                  "slot": 3
+                }
+              ],
+              "wave": 2
+            }
+          ],
+          "strategy": "waves",
+          "T": 27750
+        },
+        "wide": {
+          "ok": true,
+          "strategy": "wide",
+          "moves": 0,
+          "mode": "wide",
+          "parallel": false,
+          "phases": [
+            {
+              "product": "LH",
+              "inputs": [
+                1,
+                2
+              ],
+              "out": 3,
+              "ops": [],
+              "wave": 0
+            },
+            {
+              "product": "OH",
+              "inputs": [
+                1,
+                2
+              ],
+              "out": 3,
+              "ops": [],
+              "wave": 1
+            },
+            {
+              "product": "LH2O",
+              "inputs": [
+                1,
+                2
+              ],
+              "out": 3,
+              "ops": [],
+              "wave": 2
+            },
+            {
+              "product": "XLH2O",
+              "inputs": [
+                1,
+                2
+              ],
+              "out": 3,
+              "ops": [],
+              "wave": 3
+            }
+          ],
+          "T": 16500
+        },
+        "auto": {
+          "ok": true,
+          "strategy": "wide",
+          "moves": 0,
+          "mode": "wide",
+          "parallel": false,
+          "phases": [
+            {
+              "product": "LH",
+              "inputs": [
+                1,
+                2
+              ],
+              "out": 3,
+              "ops": [],
+              "wave": 0
+            },
+            {
+              "product": "OH",
+              "inputs": [
+                1,
+                2
+              ],
+              "out": 3,
+              "ops": [],
+              "wave": 1
+            },
+            {
+              "product": "LH2O",
+              "inputs": [
+                1,
+                2
+              ],
+              "out": 3,
+              "ops": [],
+              "wave": 2
+            },
+            {
+              "product": "XLH2O",
+              "inputs": [
+                1,
+                2
+              ],
+              "out": 3,
+              "ops": [],
+              "wave": 3
+            }
+          ],
+          "T": 16500
+        }
+      },
+      "simulations": {
+        "waves": {
+          "0": {
+            "ticks": 27658,
+            "calls": 2400,
+            "outputLabTicks": 66000
+          },
+          "10": {
+            "ticks": 27678,
+            "calls": 2400,
+            "outputLabTicks": 66000
+          },
+          "50": {
+            "ticks": 27758,
+            "calls": 2400,
+            "outputLabTicks": 66000
+          },
+          "200": {
+            "ticks": 28058,
+            "calls": 2400,
+            "outputLabTicks": 66000
+          }
+        },
+        "wide": {
+          "0": {
+            "ticks": 16436,
+            "calls": 2400,
+            "outputLabTicks": 66000
+          },
+          "10": {
+            "ticks": 16437,
+            "calls": 2400,
+            "outputLabTicks": 66000
+          },
+          "50": {
+            "ticks": 16544,
+            "calls": 2400,
+            "outputLabTicks": 66000
+          },
+          "200": {
+            "ticks": 16994,
+            "calls": 2400,
+            "outputLabTicks": 66000
+          }
+        }
+      }
+    },
+    {
+      "count": 10,
+      "rcl": 8,
+      "bestPair": {
+        "inputs": [
+          1,
+          2
+        ],
+        "outputs": [
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10
+        ]
+      },
+      "selected": "wide",
+      "estimates": {
+        "waves": 22875,
+        "wide": 8250
+      },
+      "plans": {
+        "waves": {
+          "ok": true,
+          "moves": 0,
+          "mode": "tree",
+          "parallel": true,
+          "phases": [
+            {
+              "product": "LH",
+              "inputs": [
+                3,
+                4
+              ],
+              "out": 6,
+              "ops": [
+                {
+                  "op": "load",
+                  "slot": 3,
+                  "item": "L"
+                },
+                {
+                  "op": "load",
+                  "slot": 4,
+                  "item": "H"
+                }
+              ],
+              "wave": 0
+            },
+            {
+              "product": "OH",
+              "inputs": [
+                5,
+                7
+              ],
+              "out": 8,
+              "ops": [
+                {
+                  "op": "load",
+                  "slot": 5,
+                  "item": "H"
+                },
+                {
+                  "op": "load",
+                  "slot": 7,
+                  "item": "O"
+                }
+              ],
+              "wave": 0
+            },
+            {
+              "product": "LH2O",
+              "inputs": [
+                6,
+                8
+              ],
+              "out": 1,
+              "ops": [],
+              "wave": 1
+            },
+            {
+              "product": "XLH2O",
+              "inputs": [
+                1,
+                2
+              ],
+              "out": 9,
+              "ops": [
+                {
+                  "op": "load",
+                  "slot": 2,
+                  "item": "X"
+                }
+              ],
+              "wave": 2
+            }
+          ],
+          "strategy": "waves",
+          "T": 22875
+        },
+        "wide": {
+          "ok": true,
+          "strategy": "wide",
+          "moves": 0,
+          "mode": "wide",
+          "parallel": false,
+          "phases": [
+            {
+              "product": "LH",
+              "inputs": [
+                1,
+                2
+              ],
+              "out": 3,
+              "ops": [],
+              "wave": 0
+            },
+            {
+              "product": "OH",
+              "inputs": [
+                1,
+                2
+              ],
+              "out": 3,
+              "ops": [],
+              "wave": 1
+            },
+            {
+              "product": "LH2O",
+              "inputs": [
+                1,
+                2
+              ],
+              "out": 3,
+              "ops": [],
+              "wave": 2
+            },
+            {
+              "product": "XLH2O",
+              "inputs": [
+                1,
+                2
+              ],
+              "out": 3,
+              "ops": [],
+              "wave": 3
+            }
+          ],
+          "T": 8250
+        },
+        "auto": {
+          "ok": true,
+          "strategy": "wide",
+          "moves": 0,
+          "mode": "wide",
+          "parallel": false,
+          "phases": [
+            {
+              "product": "LH",
+              "inputs": [
+                1,
+                2
+              ],
+              "out": 3,
+              "ops": [],
+              "wave": 0
+            },
+            {
+              "product": "OH",
+              "inputs": [
+                1,
+                2
+              ],
+              "out": 3,
+              "ops": [],
+              "wave": 1
+            },
+            {
+              "product": "LH2O",
+              "inputs": [
+                1,
+                2
+              ],
+              "out": 3,
+              "ops": [],
+              "wave": 2
+            },
+            {
+              "product": "XLH2O",
+              "inputs": [
+                1,
+                2
+              ],
+              "out": 3,
+              "ops": [],
+              "wave": 3
+            }
+          ],
+          "T": 8250
+        }
+      },
+      "simulations": {
+        "waves": {
+          "0": {
+            "ticks": 22783,
+            "calls": 2400,
+            "outputLabTicks": 66000
+          },
+          "10": {
+            "ticks": 22803,
+            "calls": 2400,
+            "outputLabTicks": 66000
+          },
+          "50": {
+            "ticks": 22883,
+            "calls": 2400,
+            "outputLabTicks": 66000
+          },
+          "200": {
+            "ticks": 23183,
+            "calls": 2400,
+            "outputLabTicks": 66000
+          }
+        },
+        "wide": {
+          "0": {
+            "ticks": 8186,
+            "calls": 2400,
+            "outputLabTicks": 66000
+          },
+          "10": {
+            "ticks": 8187,
+            "calls": 2400,
+            "outputLabTicks": 66000
+          },
+          "50": {
+            "ticks": 8294,
+            "calls": 2400,
+            "outputLabTicks": 66000
+          },
+          "200": {
+            "ticks": 8744,
+            "calls": 2400,
+            "outputLabTicks": 66000
+          }
+        }
+      }
+    }
+  ],
+  "pipeline": {
+    "mapping": {
+      "H": 1,
+      "O": 3,
+      "L": 4,
+      "X": 8,
+      "OH": 6,
+      "LH": 5,
+      "LH2O": 2,
+      "XLH2O": [
+        7,
+        9,
+        10
+      ]
+    },
+    "visited": 1698,
+    "idealUnitsPerTick": 0.23076923076923078,
+    "group": [
+      {
+        "product": "OH",
+        "inputs": [
+          1,
+          3
+        ],
+        "outputs": [
+          6
+        ],
+        "keep": true
+      },
+      {
+        "product": "LH",
+        "inputs": [
+          4,
+          1
+        ],
+        "outputs": [
+          5
+        ],
+        "keep": true
+      },
+      {
+        "product": "LH2O",
+        "inputs": [
+          5,
+          6
+        ],
+        "outputs": [
+          2
+        ],
+        "keep": true
+      },
+      {
+        "product": "XLH2O",
+        "inputs": [
+          2,
+          8
+        ],
+        "outputs": [
+          7,
+          9,
+          10
+        ],
+        "keep": false
+      }
+    ],
+    "simulation": {
+      "ticks": 12978,
+      "calls": 2400,
+      "outputLabTicks": 66000
+    }
+  },
+  "lotSensitivity": [
+    {
+      "count": 3,
+      "qty": 5,
+      "strategies": {
+        "waves": {
+          "selected": "waves",
+          "estimated": 110,
+          "ticks": 18
+        },
+        "wide": {
+          "selected": "wide",
+          "estimated": 110,
+          "ticks": 46
+        },
+        "auto": {
+          "selected": "waves",
+          "estimated": 110,
+          "ticks": 18
+        }
+      }
+    },
+    {
+      "count": 3,
+      "qty": 20,
+      "strategies": {
+        "waves": {
+          "selected": "waves",
+          "estimated": 440,
+          "ticks": 348
+        },
+        "wide": {
+          "selected": "wide",
+          "estimated": 440,
+          "ticks": 376
+        },
+        "auto": {
+          "selected": "waves",
+          "estimated": 440,
+          "ticks": 348
+        }
+      }
+    },
+    {
+      "count": 3,
+      "qty": 100,
+      "strategies": {
+        "waves": {
+          "selected": "waves",
+          "estimated": 2200,
+          "ticks": 2108
+        },
+        "wide": {
+          "selected": "wide",
+          "estimated": 2200,
+          "ticks": 2136
+        },
+        "auto": {
+          "selected": "waves",
+          "estimated": 2200,
+          "ticks": 2108
+        }
+      }
+    },
+    {
+      "count": 3,
+      "qty": 500,
+      "strategies": {
+        "waves": {
+          "selected": "waves",
+          "estimated": 11000,
+          "ticks": 10908
+        },
+        "wide": {
+          "selected": "wide",
+          "estimated": 11000,
+          "ticks": 10936
+        },
+        "auto": {
+          "selected": "waves",
+          "estimated": 11000,
+          "ticks": 10908
+        }
+      }
+    },
+    {
+      "count": 3,
+      "qty": 3000,
+      "strategies": {
+        "waves": {
+          "selected": "waves",
+          "estimated": 66000,
+          "ticks": 65908
+        },
+        "wide": {
+          "selected": "wide",
+          "estimated": 66000,
+          "ticks": 65936
+        },
+        "auto": {
+          "selected": "waves",
+          "estimated": 66000,
+          "ticks": 65908
+        }
+      }
+    },
+    {
+      "count": 6,
+      "qty": 5,
+      "strategies": {
+        "waves": {
+          "selected": "waves",
+          "estimated": 95,
+          "ticks": 3
+        },
+        "wide": {
+          "selected": "wide",
+          "estimated": 110,
+          "ticks": 4
+        },
+        "auto": {
+          "selected": "waves",
+          "estimated": 95,
+          "ticks": 3
+        }
+      }
+    },
+    {
+      "count": 6,
+      "qty": 20,
+      "strategies": {
+        "waves": {
+          "selected": "waves",
+          "estimated": 185,
+          "ticks": 93
+        },
+        "wide": {
+          "selected": "wide",
+          "estimated": 110,
+          "ticks": 46
+        },
+        "auto": {
+          "selected": "wide",
+          "estimated": 110,
+          "ticks": 46
+        }
+      }
+    },
+    {
+      "count": 6,
+      "qty": 100,
+      "strategies": {
+        "waves": {
+          "selected": "waves",
+          "estimated": 925,
+          "ticks": 833
+        },
+        "wide": {
+          "selected": "wide",
+          "estimated": 550,
+          "ticks": 486
+        },
+        "auto": {
+          "selected": "wide",
+          "estimated": 550,
+          "ticks": 486
+        }
+      }
+    },
+    {
+      "count": 6,
+      "qty": 500,
+      "strategies": {
+        "waves": {
+          "selected": "waves",
+          "estimated": 4625,
+          "ticks": 4533
+        },
+        "wide": {
+          "selected": "wide",
+          "estimated": 2750,
+          "ticks": 2686
+        },
+        "auto": {
+          "selected": "wide",
+          "estimated": 2750,
+          "ticks": 2686
+        }
+      }
+    },
+    {
+      "count": 6,
+      "qty": 3000,
+      "strategies": {
+        "waves": {
+          "selected": "waves",
+          "estimated": 27750,
+          "ticks": 27658
+        },
+        "wide": {
+          "selected": "wide",
+          "estimated": 16500,
+          "ticks": 16436
+        },
+        "auto": {
+          "selected": "wide",
+          "estimated": 16500,
+          "ticks": 16436
+        }
+      }
+    },
+    {
+      "count": 10,
+      "qty": 5,
+      "strategies": {
+        "waves": {
+          "selected": "waves",
+          "estimated": 95,
+          "ticks": 3
+        },
+        "wide": {
+          "selected": "wide",
+          "estimated": 110,
+          "ticks": 4
+        },
+        "auto": {
+          "selected": "waves",
+          "estimated": 95,
+          "ticks": 3
+        }
+      }
+    },
+    {
+      "count": 10,
+      "qty": 20,
+      "strategies": {
+        "waves": {
+          "selected": "waves",
+          "estimated": 185,
+          "ticks": 93
+        },
+        "wide": {
+          "selected": "wide",
+          "estimated": 110,
+          "ticks": 22
+        },
+        "auto": {
+          "selected": "wide",
+          "estimated": 110,
+          "ticks": 22
+        }
+      }
+    },
+    {
+      "count": 10,
+      "qty": 100,
+      "strategies": {
+        "waves": {
+          "selected": "waves",
+          "estimated": 795,
+          "ticks": 703
+        },
+        "wide": {
+          "selected": "wide",
+          "estimated": 330,
+          "ticks": 242
+        },
+        "auto": {
+          "selected": "wide",
+          "estimated": 330,
+          "ticks": 242
+        }
+      }
+    },
+    {
+      "count": 10,
+      "qty": 500,
+      "strategies": {
+        "waves": {
+          "selected": "waves",
+          "estimated": 3845,
+          "ticks": 3753
+        },
+        "wide": {
+          "selected": "wide",
+          "estimated": 1430,
+          "ticks": 1342
+        },
+        "auto": {
+          "selected": "wide",
+          "estimated": 1430,
+          "ticks": 1342
+        }
+      }
+    },
+    {
+      "count": 10,
+      "qty": 3000,
+      "strategies": {
+        "waves": {
+          "selected": "waves",
+          "estimated": 22875,
+          "ticks": 22783
+        },
+        "wide": {
+          "selected": "wide",
+          "estimated": 8250,
+          "ticks": 8186
+        },
+        "auto": {
+          "selected": "wide",
+          "estimated": 8250,
+          "ticks": 8186
+        }
+      }
+    }
+  ],
+  "partialLayouts": {
+    "tested": 968,
+    "centresOptimal": 255,
+    "unusable": [
+      [
+        3,
+        4,
+        5
+      ],
+      [
+        3,
+        4,
+        7
+      ],
+      [
+        3,
+        5,
+        7
+      ],
+      [
+        4,
+        5,
+        7
+      ],
+      [
+        3,
+        4,
+        5,
+        7
+      ],
+      [
+        3,
+        4,
+        8
+      ],
+      [
+        3,
+        5,
+        8
+      ],
+      [
+        3,
+        6,
+        8
+      ],
+      [
+        4,
+        6,
+        8
+      ],
+      [
+        4,
+        7,
+        8
+      ],
+      [
+        3,
+        4,
+        9
+      ],
+      [
+        3,
+        5,
+        9
+      ],
+      [
+        4,
+        5,
+        9
+      ],
+      [
+        3,
+        4,
+        5,
+        9
+      ],
+      [
+        3,
+        6,
+        9
+      ],
+      [
+        4,
+        6,
+        9
+      ],
+      [
+        5,
+        6,
+        9
+      ],
+      [
+        4,
+        7,
+        9
+      ],
+      [
+        5,
+        7,
+        9
+      ],
+      [
+        4,
+        5,
+        7,
+        9
+      ],
+      [
+        3,
+        8,
+        9
+      ],
+      [
+        4,
+        8,
+        9
+      ],
+      [
+        3,
+        4,
+        8,
+        9
+      ],
+      [
+        6,
+        8,
+        9
+      ],
+      [
+        3,
+        6,
+        8,
+        9
+      ],
+      [
+        4,
+        6,
+        8,
+        9
+      ],
+      [
+        3,
+        4,
+        10
+      ],
+      [
+        3,
+        5,
+        10
+      ],
+      [
+        3,
+        6,
+        10
+      ],
+      [
+        4,
+        6,
+        10
+      ],
+      [
+        3,
+        7,
+        10
+      ],
+      [
+        4,
+        7,
+        10
+      ],
+      [
+        3,
+        4,
+        7,
+        10
+      ],
+      [
+        5,
+        7,
+        10
+      ],
+      [
+        3,
+        5,
+        7,
+        10
+      ],
+      [
+        6,
+        7,
+        10
+      ],
+      [
+        3,
+        8,
+        10
+      ],
+      [
+        4,
+        8,
+        10
+      ],
+      [
+        3,
+        4,
+        8,
+        10
+      ],
+      [
+        6,
+        8,
+        10
+      ],
+      [
+        3,
+        6,
+        8,
+        10
+      ],
+      [
+        4,
+        6,
+        8,
+        10
+      ],
+      [
+        3,
+        9,
+        10
+      ],
+      [
+        4,
+        9,
+        10
+      ],
+      [
+        3,
+        4,
+        9,
+        10
+      ],
+      [
+        5,
+        9,
+        10
+      ],
+      [
+        3,
+        5,
+        9,
+        10
+      ],
+      [
+        6,
+        9,
+        10
+      ],
+      [
+        3,
+        6,
+        9,
+        10
+      ],
+      [
+        4,
+        6,
+        9,
+        10
+      ],
+      [
+        7,
+        9,
+        10
+      ],
+      [
+        4,
+        7,
+        9,
+        10
+      ],
+      [
+        5,
+        7,
+        9,
+        10
+      ]
+    ]
+  }
+}

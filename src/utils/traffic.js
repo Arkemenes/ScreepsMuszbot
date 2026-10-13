@@ -8,6 +8,7 @@
 // spawn<->controller) roads.
 
 const config = require("./config");
+const nativePath = require("./nativePath");
 const { planEntriesAt } = require("./plan");
 
 let counts = {}; // { roomName: { "x:y": count } }
@@ -53,15 +54,8 @@ function recordDirectionIntent(creep, direction) {
 }
 
 function cachedMoveStep(creep) {
-    const nativePath = creep.memory._move && creep.memory._move.path;
-    if (nativePath) {
-        const direction = Number(nativePath[0]);
-        const dx = [0, 0, 1, 1, 1, 0, -1, -1, -1];
-        const dy = [0, -1, -1, 0, 1, 1, 1, 0, -1];
-        if (dx[direction] || dy[direction]) {
-            return { x: creep.pos.x + dx[direction], y: creep.pos.y + dy[direction] };
-        }
-    }
+    const step = nativePath.nextStep(creep);
+    if (step) return step;
     const path = creep.memory._m && creep.memory._m.path;
     if (path && path.length) return { x: path[0][0], y: path[0][1] };
     return null;

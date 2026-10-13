@@ -13,6 +13,8 @@ const marketPricing = require("./marketPricing");
 const marketFlip = require("./marketFlip");
 const labSlots = require("./labSlots");
 const craftChain = require("./craftChain");
+const labPolicy = require("./labPolicy");
+const labPolicyRuntime = require("./labPolicyRuntime");
 const resourceTiers = require("./resourceTiers");
 
 let lastScanTick = null;
@@ -81,10 +83,11 @@ function energyReserve(room) {
     try { return resourceTiers.reserveFloor(room) || 0; } catch (error) { return 0; }
 }
 
-function stockOf(room, resourceType) {
+function stockOf(room, resourceType, commitments) {
     const total = ((room.storage && room.storage.store[resourceType]) || 0) +
         ((room.terminal && room.terminal.store[resourceType]) || 0);
-    return Math.max(0, total - flipReserved(room.name, resourceType) - (resourceType === RESOURCE_ENERGY ? energyReserve(room) : 0));
+    const reserved = commitments ? commitments[resourceType] || 0 : flipReserved(room.name, resourceType);
+    return Math.max(0, total - reserved - (resourceType === RESOURCE_ENERGY ? energyReserve(room) : 0));
 }
 
 // level >= 1 commodities need the factory set to that level by a power
@@ -130,8 +133,7 @@ function viability(room, recipe) {
 }
 
 function availableCredits() {
-    const credits = Game.market && typeof Game.market.credits === "number" ? Game.market.credits : 0;
-    return Math.max(0, credits - marketFlip.committed());
+    return require("./marketAccounting").available();
 }
 
 // Phase plans depend only on the shape of the chain (which products, which built
@@ -150,13 +152,39 @@ function phasePlan(product, steps, built) {
 
 function buildContext(room, snapshot) {
     const labInfo = labPlanInfo(room);
+    const commitments = config.get("stockPolicy.enabled", true) ? require("./resourcePolicy").commitments(room) : null;
     const feeUnits = config.get("craft.deliveryEnergyPerUnit", 0.3);
+    const estimates = {};
+    function policyEstimate(steps) {
+        const item = labPolicy.descriptor(steps), resolved = item && labPolicyRuntime.resolve(room);
+        if (!resolved) return null;
+        const key = JSON.stringify(item.targets);
+        if (key in estimates) return estimates[key];
+        const scenario = labPolicyRuntime.snapshot(room, { id: null }, item, resolved);
+        const map = labPolicy.recipeMap(), needs = {};
+        item.order.forEach((p) => map[p].inputs.forEach((r) => { needs[r] = (needs[r] || 0) + item.targets[p]; }));
+        Object.keys(needs).forEach((r) => {
+            const inLabs = scenario.labs.reduce((sum, lab) => sum + (lab.role === r ? lab.amount : 0), 0);
+            // Preflight purchases will supply raw deficits before execution.
+            scenario.stock[r] = Math.max(scenario.stock[r] || 0, needs[r] - (item.targets[r] || 0) - inLabs, 0);
+        });
+        const job = labPolicy.request(item, scenario, scenario.allowPipeline);
+        const result = labPolicy.poll(job);
+        return estimates[key] = result && result.best ? result.best : null;
+    }
     return {
+        labPolicyInfo(steps) {
+            if (!labPolicy.descriptor(steps)) return null;
+            const best = policyEstimate(steps);
+            return { source: labPolicy.dataVersion, status: best ? "candidate-evaluated" : "legacy-reference",
+                plan: best && best.id, name: best && best.name, ticks: best && best.ticks,
+                planningTicks: config.get("craft.policyPlanningTicks", 100) };
+        },
         instant(resourceType) {
             const r = snapshot.resources[resourceType];
             return r ? { bid: r.currentBuy, ask: r.currentSell } : null;
         },
-        stock: (resourceType) => stockOf(room, resourceType),
+        stock: (resourceType) => stockOf(room, resourceType, commitments),
         canMake: (recipe) => !viability(room, recipe),
         // Wide mode: only the chain's FINAL lab step runs on several output labs (the
         // executor widens exactly that one); every earlier step keeps a single lab so
@@ -175,6 +203,8 @@ function buildContext(room, snapshot) {
             if (!labInfo) return null;
             const labSteps = steps.filter((s) => s.kind === "lab");
             if (labSteps.length < 2) return null;
+            const measured = policyEstimate(steps);
+            if (measured) return measured.ticks + config.get("craft.policyPlanningTicks", 100);
             const plan = phasePlan(labSteps[labSteps.length - 1].product, steps, labInfo.built);
             return plan && plan.ok && typeof plan.T === "number" ? plan.T : null;
         },
@@ -191,12 +221,15 @@ function buildContext(room, snapshot) {
         veto(plan) {
             if (!plan.steps.some((s) => s.kind === "lab")) return null;
             if (!labInfo) return "no-labs";
+            const item = labPolicy.descriptor(plan.steps), resolved = item && labPolicyRuntime.resolve(room);
+            if (resolved && labPolicy.widePlan(item, resolved.built)) return null;
             const top = plan.steps[plan.steps.length - 1];
             const phases = phasePlan(top.product, plan.steps, labInfo.built);
             return phases && phases.ok ? null : "no-phase-plan";
         },
         extraTicks(plan) {
             if (!labInfo || !plan.steps.some((s) => s.kind === "lab")) return 0;
+            if (policyEstimate(plan.steps)) return 0; // simulator already includes logistics
             const top = plan.steps[plan.steps.length - 1];
             const phases = phasePlan(top.product, plan.steps, labInfo.built);
             return phases && phases.ok ? phases.moves * config.get("craft.logisticsTicksPerMove", 50) : 0;
@@ -287,6 +320,7 @@ function scanRoom(room, snapshot, mem, found) {
             ratio: +verdict.ratio.toFixed(4), margin: +verdict.margin.toFixed(4), T: Math.round(verdict.T),
             steps: verdict.plan.steps.map((s) => ({ product: s.product, kind: s.kind, batches: s.batches })),
             buys: verdict.plan.buys, owns: verdict.plan.owns,
+            labPolicy: ctx.labPolicyInfo(verdict.plan.steps),
         });
     });
 }
@@ -357,11 +391,11 @@ function scan() {
                 break;
             }
             else {
-                discard(mem, candidate.product, room, "open-" + result.reason);
+                discard(mem, candidate.product, room, "open-" + result.reason, result.detail);
                 const key = candidate.room + ":" + candidate.product + ":" + result.reason;
                 if (!openFailLogged[key]) {
                     openFailLogged[key] = true;
-                    log("nao abriu " + candidate.room + " " + candidate.product + " x" + candidate.qty + ": " + result.reason +
+                    log("nao abriu " + candidate.room + " " + candidate.product + " x" + candidate.qty + ": " + result.reason + (result.detail ? " (" + result.detail + ")" : "") +
                         " (gasto em compras " + candidate.spend + ")");
                 }
             }
@@ -375,7 +409,12 @@ function scan() {
 let lastChainTick = null;
 function tick() {
     const chainInterval = config.get("craft.tickInterval", 10);
-    if (chainInterval <= 1 || cadence.due(lastChainTick, chainInterval)) {
+    const active = memory().active;
+    const policyActive = Object.keys(active).some((key) => {
+        const chain = active[key], item = chain && chain.queue && chain.queue[chain.qi || 0];
+        return item && item.policy && chain.state === "working";
+    });
+    if (policyActive || chainInterval <= 1 || cadence.due(lastChainTick, chainInterval)) {
         lastChainTick = Game.time;
         cpuMeter.span("craft.chains", () => craftChain.tick());
     }
@@ -396,6 +435,13 @@ global.craftStatus = () => {
         discards: mem.discards,
         discardSample: mem.discardSample || [],
         active: mem.active,
+        labPolicies: Object.keys(mem.active).map((key) => {
+            const chain = mem.active[key], item = chain.queue && chain.queue[chain.qi || 0];
+            if (!item || !item.policy) return null;
+            const room = Memory.rooms && Memory.rooms[chain.room] || {};
+            return { room: chain.room, state: item.run, targets: item.targets,
+                reactions: room.labReactions || [], logistics: room.labLogistics || null };
+        }).filter(Boolean),
         suspended: mem.suspended,
         ledger: mem.ledger.products,
         stats: mem.stats || null,

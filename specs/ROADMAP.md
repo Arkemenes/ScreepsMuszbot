@@ -1,4 +1,6 @@
 # Roadmap
+
+| 0129 | [Trânsito por aliados que atacam nossos creeps](features/0129-unsafe-ally-transit/spec.md) | done (correção de rota aguardando validação em jogo) | ARK-100: detecção confirmada em jogo; corrigido bloqueio ignorado por moveTo com matriz integralmente em 255. Scout/claimer e callbacks/recuos compartilham bloqueio dinâmico temporário, caches invalidados e nenhum jogador nos defaults; regressões com semântica do motor no smoke. |
 # 0105 concluído: paridade de entrega do miner com a cascata e os thresholds de torre do hauler.
 
 
@@ -10,6 +12,7 @@ detalhe.
 
 | #    | Feature | Status | Notas |
 |------|---------|--------|-------|
+| 0131 | [Claim: trânsito SK fora dos tiles perigosos](features/0131-claim-keeper-transit/spec.md) | done | ARK-111/ARK-112/ARK-113/ARK-115: máscaras de keeper/lair, observer e cache; core isolado bloqueia apenas seu tile, leitor de path nativo e orçamento/backoff de buscas corrigidos; bans preservados. Publicação e validação em jogo pendentes. |
 | 0001 | [CPU & Memory foundation](features/0001-cpu-memory-foundation/spec.md) | done | fix do cache de Memory, `census`, `roomCache`, `terrain`, índice do plano, `guard` no `main`, flag do profiler |
 | 0002 | [Economy roles & spawning](features/0002-economy-and-spawning/spec.md) | done | harvester como máquina de estados, fila de spawn priorizada, scout por último, intel em varredura única |
 | 0003 | [Base defense layout](features/0003-base-defense-layout/spec.md) | done | torres + ramparts dos clusters de source fora do perímetro, rebalanceamento do orçamento de torres |
@@ -286,6 +289,17 @@ causas, decisões e correções que ajudam revisões futuras.
 
 ## Origem
 
+Investigação em andamento — 0113 / ARK-116 (2026-10-12): média relatada
+7–8 →16–18 CPU. Instrumentação de busca/movimento e observação do intel;
+aguarda perfil live antes/depois e correções demonstradas para alcançar <9 CPU.
+
+13/10: perfil de 20,15 CPU aponta `craft.chains` (5,679) e hauler (5,149),
+sem scout/claimer. Cache de fallback/fases e cortes nas consultas de alvos,
+reagentes e combustível implementados; benchmark de fallback 1.221→18 ms
+em 300 ticks offline. Meta <9 e ganho live ainda pendentes. Evidências em
+`docs/cpu-regression-2026-10-13.md`.
+
+
 Destilado da análise completa em
 `~/.claude/plans/fa-a-uma-an-lise-completa-radiant-engelbart.md`. As tags de
 severidade originais (C1–C4, A1–A7, M1–M10) são referenciadas nas specs
@@ -297,4 +311,28 @@ individuais.
 | 0121 | [Coleta de recursos em corredores (power bank, deposits)](features/0121-highway-resource-harvest/spec.md) | spec | intel de `powerBank`/`deposits`, avaliador de viabilidade, squad de power bank (reusa `utils/squad`), `depositMiner`; console manual primeiro. Fornece power para 0122 |
 | 0122 | [Power creeps para produção de itens avançados](features/0122-power-creeps/spec.md) | spec | operador na sala da factory: spawn/renew, `PWR_GENERATE_OPS`, `PWR_OPERATE_FACTORY` libera nível 1+ (hoje recusado no 0051). Depende de GPL/power (0121) |
 | 0123 | [Ofensiva: squads contra bases inimigas](features/0123-offensive-squads/spec.md) | spec | avaliador de alvo (DPS de torre vs. cura do squad) + `attackBase()` assistido, ciclo completo sobre `raidSquad` (0032 Fase 4); nunca automático (decisão do 0046) |
-| 0124 | [Swing trade e valor-alvo por recurso/sala](features/0124-swing-trade/spec.md) | spec | posições sobre `marketPricing`: compra abaixo do piso quando barato, vende excedente acima do teto quando caro; alvo por (sala, recurso); `swing.test=true` por padrão; não altera o flip (0110) |
+| 0124 | [Estoque de uso e mercado oportunista](features/0124-swing-trade/spec.md) | implementado | ARK-32; storage de consumo, terminal de materiais, reservas quantitativas, piso global, compra/venda com frete e margem de 1%; mercado em simulação por padrão, mínimo temporário de 30 amostras (retornar a 48 após validar); histórico paginado preserva a janela após resets; coleta com bucket ≥500 e cadência sem drift ; diagnóstico de referência via `swingReference` ; mercado antes dos consumidores e recuperação imediata da hidratação ; reposição concorrente com consumo/transferências, descontando entradas pendentes |
+| 0125 | [Powered terminal relay aliado](features/0125-powered-terminal-relay/spec.md) | planned | ARK-90: cotação direta/relay implementada e plano pronto; ARK-91: execução e integração ao balanceamento não crítico em Backlog. |
+| 0126 | [Hauler: energia caída sob containers](features/0126-hauler-container-energy-drops/spec.md) | done | ARK-95: exclui drops cobertos, preserva cache de links e compartilha índice por sala/tick; regressões no smoke. |
+| 0127 | [Política de labs por vazão efetiva](features/0127-lab-throughput-planning/spec.md) | done | ARK-98: catálogo de 596 planos/1.950 cenários, avaliação incremental, executor híbrido, confirmação/reservas, hauler e migração; smoke/check/build verdes. |
+| 0128 | [Busca offline de estratégias de labs](features/0128-lab-strategy-search/spec.md) | done | ARK-99: 1.950 cenários, 119.704 avaliações, 596 planos; 18 ótimos pequenos e 2 limites. Smoke/build verdes; runtime preservado. |
+| 0130 | [Reservas por direção no terminal](features/0130-terminal-directional-reservations/spec.md) | done | ARK-108: compras automáticas convivem com saídas sem tomar estoque listado; reservas de entradas futuras, proteção de cargo/intents no hauler e preflight de craft. |
+
+0124 / ARK-32: reserva de energia do terminal passa a ser dinâmica (duas transações +20%, zero quando ocioso), com proteção quantitativa de carga/frete, prioridade de reposição, escassez, hysteresis e diagnóstico `terminalFuelStatus`. Validada no smoke, incluindo executor e haulers.
+# Correção concluída — 0064 / ARK-102 (2026-10-12)
+
+Claim para E5N41: perda das entradas validadas reproduzida offline e corrigida.
+Waypoints ficam no heap; destino aceita qualquer entrada conectada ao interior;
+hops validados usam duas salas/20000 ops; nova busca completa aguarda bucket
+>=1000, sem falso blacklist. Cache recomposto uma vez após reset.
+Smoke/node --check/build validados; sem commit e sem confirmação de trajetória
+ou medição de CPU em jogo. A cópia automática do bundle para o cliente local
+foi bloqueada por permissão (`EPERM`); `dist/main.js` foi gerado.
+## Correção concluída — 0035 / ARK-109 (2026-10-12)
+
+Claim sem motivo visível: último snapshot e encerramento preservados; consulta
+`claimStatus()` e códigos de `claimController` no console. Desaparecimento não
+atribui atacante nem expiração. Sem mudar a política de claim/respawn.
+Evidência trazida pelo usuário: E5N41 neutra (RCL0, my=false, enemies=0 no snapshot),
+ordem ausente; incidente de TimelessTacticianEon em E3N43 não comprova causa desse
+desaparecimento. Versão anterior não reteve o diagnóstico; causa real não fechada.

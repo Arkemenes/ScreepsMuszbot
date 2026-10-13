@@ -15,6 +15,7 @@ let utils = {
     priority: require("./priority"),
     market: require("./market"),
     terminalOps: require("./terminalOps"),
+    swingTrade: require("./swingTrade"),
     marketFlip: require("./marketFlip"),
     craftPlanner: require("./craftPlanner"),
     energyBalancing: require("../rooms/energyBalancing"),

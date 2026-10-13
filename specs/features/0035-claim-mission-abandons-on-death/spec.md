@@ -74,3 +74,38 @@ logic + log in `rooms/needs.js`'s `compute()`. Validado pelo smoke (264
 assertions no total - 5 novas: sem `creepSeen` no início, primeira
 tentativa ainda spawna, `creepSeen` marcado ao rodar, abandono quando o
 claimer some, e o log explicando por quê) + `npx grunt`.
+## Diagnóstico persistente (ARK-109, 2026-10-12)
+
+O usuário perdeu um claimer enviado a E5N41 e não viu logs. O desaparecimento
+não prova ataque nem expiração; o código anterior perdia o último estado ao
+apagar a ordem e encerrava retornos de `claimController` sem mostrar o código.
+
+Critérios adicionais:
+
+- A ordem ativa preserva somente um snapshot compacto: creep, tick, posição,
+  TTL, hits, fadiga, bucket e fase/retorno observado. Nenhum objeto de jogo.
+- O encerramento conserva apenas `Memory.lastClaimResult`, com alvo/origem,
+  tick, razão, retorno da API e último snapshot; não há histórico crescente.
+- Desaparecimento registra `creep_missing`, sem atribuir ataque/expiração.
+  Sucesso da chamada registra `claim_accepted` (intent aceito, não ownership
+  confirmado); erros mostram código/nome; ausência de controller fica explícita.
+- `claimStatus()` permite consultar ordem ativa e último encerramento após os
+  logs terem passado. Sem registro anterior, retorna `lastResult: null`.
+- Nenhuma política de claim/retry muda. Não há novo scan de `Game.creeps`,
+  pathfinding nem serviço por tick; callbacks existentes escrevem o snapshot.
+- Smoke reproduz desaparecimento após espera de CPU, erro de GCL, intent OK,
+  ausência de controller, cancelamento e leitura sem registro; resultado sobrevive
+  ao GC de `Memory.creeps` e o log terminal não se repete.
+
+Plano: utilitário `claimDiagnostics` concentra snapshots/encerramentos/status;
+`reserver.run` observa cada fase e retorno; `needs` conserva o diagnóstico antes
+do abandono; `remotes` registra cancelamento e expõe `claimStatus`; `help` explica
+a consulta. Implementar regressões, verificar JS/smoke/build e atualizar graphify.
+### Outcome de ARK-109
+
+Snapshot e resultado único implementados, incluindo códigos de claim, leitura
+por `claimStatus()` e log sem atribuição de causa ao desaparecimento. Regressões
+offline validam erro de GCL, intent aceito, espera de CPU, controller ausente,
+cancelamento, GC do creep, leitura desacoplada e ausência de spam.
+O caso anterior de E5N41 não pode ser reconstruído a partir do registro antigo:
+alvo neutro no snapshot e agressão conhecida em outra sala não provam a causa.

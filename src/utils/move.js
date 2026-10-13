@@ -5,6 +5,8 @@
 
 const roomCache = require("./roomCache");
 const excuseMe = require("./excuseMe");
+const nativePath = require("./nativePath");
+const cpuMeter = require("./cpuMeter");
 
 function scoutMoveDebugEnabled(creep) {
     return !!(
@@ -48,7 +50,10 @@ function traceNativeMove(creep, target, opts, before, status) {
 }
 
 // Captured before anything overrides it (prototypes/move.js).
-const nativeMoveTo = Creep.prototype.moveTo;
+const engineMoveTo = Creep.prototype.moveTo;
+function nativeMoveTo(target, opts) {
+    return cpuMeter.span("move.native", () => engineMoveTo.call(this, target, opts));
+}
 
 const ROAD_COST = 1;
 const PLAIN_COST = 2;
@@ -95,6 +100,10 @@ function roomMatrix(room) {
 }
 
 function findPath(creep, destPos, range, avoidCreeps) {
+    return cpuMeter.span("move.localSearch", () => searchLocalPath(creep, destPos, range, avoidCreeps));
+}
+
+function searchLocalPath(creep, destPos, range, avoidCreeps) {
     const base = roomMatrix(creep.room);
     let matrix = base;
     if (avoidCreeps) {
@@ -166,14 +175,9 @@ global.moveStats = function (enabled) {
 
 
 function invalidateBlockedCrossRoomPath(creep) {
-    const cached = creep.memory._move;
-    if (!cached || !cached.path || !cached.path.length) return false;
-    const direction = Number(cached.path[0]);
-    const dx = [0, 0, 1, 1, 1, 0, -1, -1, -1];
-    const dy = [0, -1, -1, 0, 1, 1, 1, 0, -1];
-    const x = creep.pos.x + (dx[direction] || 0);
-    const y = creep.pos.y + (dy[direction] || 0);
-    if (x < 0 || x > 49 || y < 0 || y > 49) return false;
+    const step = nativePath.nextStep(creep);
+    if (!step) return false;
+    const { x, y } = step;
     if (creep.room.getTerrain().get(x, y) !== TERRAIN_MASK_WALL) return false;
     delete creep.memory._move;
     return true;

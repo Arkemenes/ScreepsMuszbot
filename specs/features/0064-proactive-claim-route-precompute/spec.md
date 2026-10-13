@@ -692,3 +692,37 @@ incorporarem estrutura conhecida) pro item que fica pendente de propósito
 ## Open questions
 
 Nenhuma.
+# Correção de travessias e orçamento de CPU (ARK-102, 2026-10-12)
+
+O relato de claim para E5N41 revelou uma perda de informação entre planejamento
+e execução: a busca completa valida tiles, mas a execução escolhia novamente
+uma saída pelo meio da borda. Uma saída livre pode pertencer a outro pocket,
+gerando `ERR_NO_PATH`, recuos, falsos dead ends e novas buscas de até 200000 ops.
+A reprodução offline demonstra esse mecanismo; a trajetória real cancelada
+pelo usuário ainda não foi observada.
+
+## Acceptance criteria
+
+- A sequência de salas mantém, no heap, as coordenadas reais de entrada de cada
+  hop da busca validada. `Memory` continua guardando somente a sequência compacta.
+- A execução de um hop usa sua entrada validada, sem selecionar outra saída;
+  ao entrar na próxima sala, avança para a entrada seguinte.
+- A busca completa aceita qualquer entrada conectada ao interior da sala
+  (`RoomPosition(25,25,destino)`, range 24), sem impor uma saída arbitrária.
+- Após reset/deserialização, recompõe os waypoints no heap uma vez; se não
+  conseguir validar, mantém o fallback legado sem repetir por tick.
+- Hop validado limita a busca nativa a duas salas e
+  `routing.hopMaxOps` (default 20000), inclusive no último hop.
+- Nova busca completa aguarda `routing.realRouteMinBucket` (default 1000),
+  retornando `ERR_BUSY` sem marcar dead end e sem consumir o estado de retry.
+  Caminho já validado pode continuar com orçamento limitado.
+- `claimRouteCases` reproduz uma saída central desconectada e valida passagem,
+  ausência de falso blacklist, uma busca por viagem e recuperação do bucket.
+
+Plano: registrar entradas em `WeakMap` indexado pela sequência retornada por
+`computeRealRoute`; selecionar o waypoint correspondente em `moveToRoom` normal
+e nativo; manter fallback para rotas anteriores ao reset do heap. Aplicar o
+guard de bucket antes de iniciar/revalidar a viagem e limitar os hops.
+
+Tasks: reprodução vermelha → waypoints e limites → smoke/node --check/build →
+graphify update. Não há promessa de redução medida de CPU no jogo real.

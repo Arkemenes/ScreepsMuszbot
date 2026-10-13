@@ -1,145 +1,135 @@
-// Persistent temporal market snapshots. The active calculation stays in the
-// heap; this compact representation survives a global reset/deploy.
-
+// Persistent temporal snapshots, paged across reserved segments 0..9.
+// Heap calculations keep original prices, volumes and ticks; no thinning.
 const SEGMENT_ID = 9;
-const VERSION = 1;
+const VERSION = 2;
 const MAX_BYTES = 95000;
-
-let loaded = false;
-let firstSeenTick = null;
+const MAX_PAGES = 10;
+const loadedHistory = {};
+let loaded = false, firstSeenTick = null, manifest = null, manifestRaw = null;
+let pending = [], persistedBytes = 0, error = null;
 
 function rawSegments() {
-    return typeof RawMemory !== "undefined" && RawMemory.segments
-        ? RawMemory.segments
-        : null;
+    return typeof RawMemory !== "undefined" && RawMemory.segments ? RawMemory.segments : null;
 }
-
-function unpack(raw) {
-    if (!raw) return {};
+function parse(raw) {
     try {
         const payload = JSON.parse(raw);
-        if (!payload || payload.version !== VERSION || !payload.snapshots) {
-            return {};
-        }
-        const result = {};
-        Object.keys(payload.snapshots).forEach((resourceType) => {
-            const rows = payload.snapshots[resourceType];
-            if (!Array.isArray(rows)) return;
-            result[resourceType] = rows
-                .filter((row) => Array.isArray(row) && row.length === 5)
-                .map((row) => ({
-                    tick: row[0],
-                    buyPrice: row[1],
-                    sellPrice: row[2],
-                    buyVolume: row[3],
-                    sellVolume: row[4],
-                }));
-        });
-        return result;
-    } catch (error) {
-        return {};
-    }
+        return payload && (payload.version === 1 || payload.version === VERSION) &&
+            payload.snapshots && typeof payload.snapshots === "object" ? payload : null;
+    } catch (e) { return null; }
 }
-
+function merge(payload) {
+    Object.keys(payload.snapshots).forEach((r) => {
+        const rows = payload.snapshots[r];
+        if (!Array.isArray(rows)) return;
+        if (!loadedHistory[r]) loadedHistory[r] = [];
+        rows.forEach((row) => {
+            if (Array.isArray(row) && (row.length === 5 || row.length === 6) && Number.isFinite(row[0])) {
+                const sample = { tick: row[0], buyPrice: row[1], sellPrice: row[2], buyVolume: row[3], sellVolume: row[4] };
+                if (Number.isFinite(row[5])) sample.scheduledTick = row[5];
+                loadedHistory[r].push(sample);
+            }
+        });
+    });
+}
+function resetCache() {
+    loaded = false; firstSeenTick = null; manifest = null; manifestRaw = null;
+    pending = []; persistedBytes = 0; error = null;
+    Object.keys(loadedHistory).forEach((r) => delete loadedHistory[r]);
+}
 function load() {
     if (loaded) return true;
     const segments = rawSegments();
     if (!segments) return false;
     const raw = segments[SEGMENT_ID];
-    // An inactive segment is not readable on the real server. Give the
-    // activation request one tick to make it available before treating an
-    // undefined value as a genuinely empty first-use segment.
-    if (raw === undefined && firstSeenTick === null) {
-        firstSeenTick = typeof Game !== "undefined" ? Game.time : 0;
-        return false;
+    if (raw === undefined) {
+        const now = typeof Game !== "undefined" ? Game.time : 0;
+        if (firstSeenTick === null) { firstSeenTick = now; return false; }
+        if (now <= firstSeenTick || manifest) return false;
+        // An activated first-use root may have no stored string.
+        loaded = true; return true;
     }
-    Object.assign(loadedHistory, unpack(typeof raw === "string" ? raw : ""));
-    loaded = true;
-    return true;
-}
-
-const loadedHistory = {};
-
-function compact(history) {
-    const snapshots = {};
-    Object.keys(history || {}).forEach((resourceType) => {
-        const rows = history[resourceType];
-        if (!Array.isArray(rows) || !rows.length) return;
-        snapshots[resourceType] = rows.map((row) => [
-            row.tick,
-            row.buyPrice,
-            row.sellPrice,
-            row.buyVolume,
-            row.sellVolume,
-        ]);
-    });
-    return { version: VERSION, snapshots };
-}
-
-function serialized(history) {
-    return JSON.stringify(compact(history));
-}
-
-function oldestResource(history) {
-    let selected = null;
-    Object.keys(history).forEach((resourceType) => {
-        const rows = history[resourceType];
-        if (!rows || !rows.length) return;
-        if (!selected || rows[0].tick < history[selected][0].tick) {
-            selected = resourceType;
+    if (raw !== manifestRaw) {
+        resetCache(); manifestRaw = raw;
+        if (!raw) { loaded = true; return true; }
+        manifest = parse(raw);
+        if (!manifest) { error = "invalid-root"; return false; }
+        const pages = manifest.version === 1 ? 0 : manifest.pages;
+        if (!Number.isInteger(pages) || pages < 0 || pages >= MAX_PAGES) { error = "invalid-page-count"; return false; }
+        pending = Array.from({ length: pages }, (_, i) => i);
+        persistedBytes = raw.length; merge(manifest);
+    }
+    if (!manifest || error === "invalid-root" || error === "invalid-page-count") return false;
+    error = null;
+    const next = [];
+    for (const id of pending) {
+        const pageRaw = segments[id];
+        if (typeof pageRaw !== "string") { next.push(id); continue; }
+        const page = parse(pageRaw);
+        if (!page || page.version !== VERSION || page.generation !== manifest.generation) {
+            error = "invalid-page-" + id; next.push(id); continue;
         }
-    });
-    return selected;
+        merge(page); persistedBytes += pageRaw.length;
+    }
+    pending = next;
+    loaded = !pending.length;
+    if (loaded) Object.keys(loadedHistory).forEach((r) => loadedHistory[r].sort((a, b) => a.tick - b.tick));
+    return loaded;
 }
-
+function activeSegmentIds() {
+    load();
+    // Read one page per tick while hydrating, leaving eight slots for plans.
+    return pending.length ? [SEGMENT_ID, pending[0]] : [SEGMENT_ID];
+}
+function compactPages(history) {
+    const pages = [{}], sizes = [2];
+    for (const r of Object.keys(history || {})) {
+        if (!Array.isArray(history[r])) continue;
+        for (const row of history[r]) {
+            const tuple = [row.tick, row.buyPrice, row.sellPrice, row.buyVolume, row.sellVolume];
+            if (Number.isFinite(row.scheduledTick)) tuple.push(row.scheduledTick);
+            const length = JSON.stringify(tuple).length;
+            let index = pages.length - 1;
+            let overhead = pages[index][r] ? 1 : JSON.stringify(r).length + 4;
+            if (sizes[index] + length + overhead > MAX_BYTES - 300) {
+                if (pages.length >= MAX_PAGES) return null;
+                pages.push({}); sizes.push(2); index++; overhead = JSON.stringify(r).length + 4;
+            }
+            if (!pages[index][r]) pages[index][r] = [];
+            pages[index][r].push(tuple);
+            sizes[index] += length + overhead;
+        }
+    }
+    return pages;
+}
 function save(history) {
     if (!load()) return false;
     const segments = rawSegments();
     if (!segments) return false;
-    const copy = {};
-    Object.keys(history || {}).forEach((resourceType) => {
-        copy[resourceType] = Array.isArray(history[resourceType])
-            ? history[resourceType].slice()
-            : [];
-    });
-    let raw = serialized(copy);
-    while (raw.length > MAX_BYTES) {
-        const resourceType = oldestResource(copy);
-        if (!resourceType) break;
-        copy[resourceType].shift();
-        if (!copy[resourceType].length) delete copy[resourceType];
-        raw = serialized(copy);
-    }
-    segments[SEGMENT_ID] = raw;
-    return raw.length <= MAX_BYTES;
+    const pages = compactPages(history);
+    if (!pages) { error = "history-capacity"; return false; }
+    const generation = (manifest && manifest.generation || 0) + 1;
+    const payloads = pages.map((snapshots, index) => JSON.stringify(Object.assign({
+        version: VERSION, generation, snapshots,
+    }, index === 0 ? { pages: pages.length - 1 } : {})));
+    if (payloads.some((raw) => raw.length > MAX_BYTES)) { error = "history-capacity"; return false; }
+    // Commit the root last. No row is evicted just to fit a single segment.
+    for (let i = 1; i < payloads.length; i++) segments[i - 1] = payloads[i];
+    segments[SEGMENT_ID] = payloads[0];
+    manifestRaw = payloads[0]; manifest = parse(manifestRaw);
+    persistedBytes = payloads.reduce((sum, raw) => sum + raw.length, 0);
+    error = null;
+    return true;
 }
-
-function history() {
-    load();
-    return loadedHistory;
+function history() { load(); return loadedHistory; }
+function status() {
+    return { loaded, version: manifest && manifest.version, pages: manifest ? (manifest.pages || 0) + 1 : 0,
+        pendingSegments: pending.slice(), persistedBytes, error };
 }
-
-// Reset only the in-process view. Persistent snapshots must survive a global
-// reset/deploy; callers that intentionally need an empty fixture may use clear.
-function resetCache() {
-    loaded = false;
-    firstSeenTick = null;
-    Object.keys(loadedHistory).forEach((resourceType) => {
-        delete loadedHistory[resourceType];
-    });
-}
-
 function clear() {
     resetCache();
     const segments = rawSegments();
-    if (segments) segments[SEGMENT_ID] = "";
+    if (segments) { segments[SEGMENT_ID] = ""; for (let i = 0; i < SEGMENT_ID; i++) delete segments[i]; }
 }
-
-module.exports = {
-    segmentId: SEGMENT_ID,
-    history,
-    load,
-    save,
-    resetCache,
-    clear,
-};
+global.marketHistoryStatus = status;
+module.exports = { segmentId: SEGMENT_ID, history, load, save, resetCache, clear, activeSegmentIds, status };

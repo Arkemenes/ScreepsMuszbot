@@ -292,10 +292,13 @@ module.exports.loop = function () {
             _.forEach(Game.myRooms, (r) =>
                 guard("spawn:" + r.name, () => roomLogic.spawning(r))
             );
+            // Hydrate and refresh prices before any market consumer evaluates them.
+            guard("market", () => utils.market.scan()); // Market owns its 500-bucket gate.
             guard("terminalOps", () => utils.terminalOps.tick());
             if (!shedding()) guard("marketFlip", () => utils.marketFlip.tick());
             guard("craftPlanner", () => utils.craftPlanner.tick());
             guard("energyBalancing", () => utils.energyBalancing.run());
+            if (!shedding()) guard("swingTrade", () => utils.swingTrade.tick());
             // automatic safe mode when a spawn is in real danger (ROADMAP
             // 0032 D6) - conservative gate, see rooms/defense.js
             _.forEach(Game.myRooms, (r) =>
@@ -361,7 +364,6 @@ module.exports.loop = function () {
                     Game.cpu.generatePixel();
                 }
             });
-            if (!shedding()) guard("market", () => utils.market.scan());
             guard("stats", () => utils.stats());
             cpuMeter.endTick();
         });

@@ -1,85 +1,84 @@
-# 0124 — Swing trade e valor-alvo por recurso/sala
+# 0124 — Estoque de uso e mercado oportunista
 
-- **Status:** spec
-- **Owner:** Arkemenes
-- **Created:** 2026-10-03
-- **Relacionadas:** 0110 (market flip), 0111 (craft flip, `marketPricing`),
-  0100 (preço direto), 0054 (logística/reservas), `terminalOps`
+**Issue:** ARK-32 · **Estado:** implementado, mercado em simulação por padrão.
 
-## Problem
+## Objetivo
 
-`utils/marketFlip.js` (0110) faz **arbitragem instantânea**: acha um par
-ordem-de-venda/ordem-de-compra com lucro líquido e executa as duas pontas
-(horizonte `marketFlip.horizonTicks`, 60). Não há estratégia de **posição**:
+### Correção de consultas de CPU — ARK-116 (2026-10-13)
 
-- Comprar quando o preço está **abaixo do normal** e segurar até ficar **caro**
-  (swing trade). `marketPricing` já mantém histórico de 7 dias (mediana, sigma,
-  liquidez, `outlier`), mas só é usado como guarda-corpo, não como sinal de
-  entrada/saída.
-- Falta o conceito de **valor-alvo por recurso por sala**: quanto de cada
-  recurso a sala *deveria* manter (para consumo próprio + folga), abaixo do
-  qual comprar quando barato, e acima do qual vender o **excedente** quando
-  caro. Hoje o excedente só sai por `terminalOps`/venda de excedente, sem
-  critério de preço-alvo, e o estoque não é um orçamento por sala.
-- Capital e risco: o bot precisa limitar crédito empatado (`committedCredits`
-  já existe no flip) e tempo máximo de posição.
+Verificar o alvo de um único recurso não deve reconstruir o mapa completo
+de alvos. Ler override por sala e padrão global diretamente, mantendo
+precedência, validação e mudanças no mesmo tick. Na seleção de reagentes,
+consultar cada recurso no máximo uma vez por seleção (inclusive falta de
+estoque), sem reutilizar respostas em seleções futuras. Calcular o limite
+de frete opcional uma vez por previsão de combustível, mantendo reservas
+e alterações de operações/estoques visíveis no mesmo tick.
 
-## Desired outcome
 
-Uma camada de **posições** sobre `marketPricing`:
+Separar estoque de consumo, materiais comprometidos e saldo vendável. A logística aplica a política compartilhada mesmo em simulação; somente o novo mercado depende de `swing.test`. Flip, craft e operações manuais existentes continuam operando com suas regras, acrescidos das proteções compartilhadas.
 
-1. **Alvo por (sala, recurso):** `target.min` (piso: abaixo disso compra se o
-   preço estiver barato) e `target.max` (teto: acima disso vende excedente se
-   estiver caro), com defaults vindos do consumo real (labs, factory, boosts,
-   energia) e *override* em `Memory.settings`.
-2. **Sinal de preço:** "barato" = ask abaixo de `buyBelow` × mediana 7d
-   (ajustado por sigma); "caro" = bid acima de `sellAbove` × mediana 7d.
-3. **Posição aberta:** compra via `terminalOps.buy`, registra custo médio,
-   quantidade e prazo; vende quando o preço-alvo (custo + margem líquida da
-   energia de transação) é atingido ou o prazo expira (stop por tempo/perda).
-4. **Orçamento:** teto de crédito em posições, teto por recurso, não compra
-   o que o flip instantâneo já cobre.
+## Estoque e logística
 
-## In scope
+- `stockPolicy.targets` define recursos de uso; `stockPolicy.rooms.<room>.targets` sobrescreve alvos por sala. Inicialmente energia: 100000 no storage, sem venda automática de excedentes.
+- A energia operacional do terminal fica separada: `logistics.terminalReserveRatio`, padrão 10% da capacidade (30000 no terminal normal).
+- Demais recursos ficam no terminal. `stockPolicy.terminalFreeRatio=0.15` reserva espaço livre, descontando recebimentos pendentes e staging. Storage aceita overflow temporário.
+- Coleta, loot, receipts de compras e produtos de processamento usam os mesmos destinos. Material sem operação deixa de circular de volta ao storage.
+- Balanceamento entre salas precede reposição no mercado. Estoque inclui carga de haulers e recebimentos pendentes para impedir compras duplicadas.
+- As reservas quantitativas cobrem flip, cadeias completas, processamento manual, transferências, vendas/ordens abertas e retenção após cancelamento. Carga já atribuída a haulers permanece protegida.
 
-- Módulo `utils/swingTrade.js` (scanner + gerente de posições) em cima de
-  `marketPricing`/`terminalOps`, sem alterar `terminalOps.js` (mesma restrição
-  do flip).
-- Cálculo do alvo por sala (`utils/roomTargets.js`) a partir de consumo e
-  `Memory.settings.targets`.
-- Flag `swing.test` (default **true**: só loga, igual ao `marketFlip.test`).
-- Consoles: `swingStatus()`, `swingTargets(room?)`, `setTarget(room, res, min,
-  max)`.
+## Negócios e orçamento
 
-## Out of scope
+Referência válida exige pelo menos 30 amostras durante a validação (retornar a 48 após validar) e última observação com idade máxima de 7200 ticks. A referência de energia usada para frete também deve ser válida. Sem referência, bloquear e registrar o motivo.
 
-- Mudar o flip instantâneo (0110) ou o cálculo de preço de commodities (0100).
-- Arbitragem entre shards, opções/futuros, mercado de pixels/CPU.
+Compra imediata apenas quando há déficit e custo efetivo estritamente menor que `sellPrice * 0.99`. Energia: créditos pagos / unidades líquidas recebidas após frete. Outros recursos: preço nominal + valor da energia de transporte / quantidade. Nunca comprar caro para garantir o alvo e nunca criar ordens próprias de compra nesta versão.
 
-## Acceptance criteria
+Preservar `stockPolicy.creditReserve=100000` créditos livres após compromissos e gasto proposto. O orçamento é compartilhado com compras automáticas de flip/craft, operações pendentes e ordens de compra legadas. Custos de intents aceitos no mesmo tick são contabilizados sem desconto duplicado quando já refletidos nos créditos.
 
-1. Smoke: com histórico sintético (mediana 100), ask 85 abaixo do piso da sala
-   abre posição; ask 105 não abre.
-2. Smoke: posição aberta vende quando o bid cobre custo + `swing.minProfit`
-   líquido de energia; stop por prazo vende (ou cancela) com a razão logada.
-3. Smoke: excedente acima de `target.max` só sai quando `bid > sellAbove ×
-   mediana`; abaixo disso não vende (aguarda).
-4. Smoke: `committedCredits` somado (flip + swing) nunca passa do teto.
-5. `swing.test=true` nunca chama `terminalOps.buy/sell` (assert).
-6. `marketFlip` continua verde sem alteração (regressão).
+Vender somente recursos não configurados para uso e quantidades sem compromissos. Priorizar venda imediata quando preço nominal menos frete por unidade for estritamente maior que `buyPrice * 1.01`. Sem candidato imediato, permitir ordem própria cujo preço líquido após taxa antecipada de 5% supere o mesmo piso.
 
-## Constitution check
+Ordens swing preservam o preço aprovado na criação, sem repricing. Expiram em 1209600 ticks: cancelar e reter uma quantidade equivalente ao saldo em `Memory.swing.noRelist`, sem relistagem automática. Venda imediata futura continua permitida e reduz essa retenção. A identificação é por sala/recurso/quantidade, pois unidades do mesmo recurso são fungíveis.
 
-- §1: `getAllOrders` já é varrido pelo flip a cada `scanInterval` — reaproveitar
-  o mesmo scan, nada novo por tick. §2: posições em `Memory.swing` (só ids/
-  números). §3 guard. §6 todos os limiares em `config.swing.*`. §7: sem
-  histórico suficiente para o recurso, no-op (bloqueia como o flip faz).
+## Execução e observabilidade
 
-## Open questions
+`terminalOps.buy/sell` aceitam options no sétimo argumento, incluindo `effectiveLimit`, sem mudar a semântica dos chamadores antigos. Operações swing revalidam referência, preço efetivo, frete, créditos, reservas e capacidade antes do negócio; compras que perderam elegibilidade são encerradas. Confirmar transações observáveis e tratar receipts parciais sem duplicar créditos do pai.
 
-- Alvos: calculados do consumo ou fixos por tabela? Quais recursos entram na
-  1ª versão (minerais base, compounds, energia, commodities)?
-- Margem desejada e prazo máximo de posição? Perda máxima antes de stop?
-- Orçamento: % do saldo em créditos?
-- Pode competir com o excedente do `terminalOps` (conflito de dono do
-  estoque)? Quem tem prioridade?
+`swing.enabled=true` e `swing.test=true` por padrão. Simulação grava candidatos em `Memory.swing.observations`; `swingStatus(roomName?)` expõe preços efetivos, referências, quantidades e bloqueios. Não enfileirar negócios ou balanceamento swing em simulação. Logística de estoque continua ativa.
+
+## Critérios de aceitação
+
+1. Storage mantém consumo, terminal mantém os demais materiais; overflow retorna ao terminal quando há espaço permitido, sem circulação repetitiva.
+2. Frete líquido de energia, margens estritas de 1%, piso financeiro, histórico e reposições pendentes são verificados no smoke.
+3. Reservas impedem venda de cadeias completas, produção manual, materiais retidos, haulers e ordens existentes; fills parciais liberam apenas saldo efetivamente consumido.
+4. Compras não usadas concluem no terminal; energia repõe storage preservando combustível; receipts parciais não encerram o pai prematuramente.
+5. Ordens próprias têm taxa antecipada, preço fixo, expiração e bloqueio quantitativo de relistagem, preservando venda imediata.
+6. `node --check`, smoke, `npx grunt` e `graphify update .` executados. Sem deploy ou validação em servidor nesta etapa.
+
+## Correção de persistência do histórico (2026-10-11)
+
+No servidor, O e energia apresentaram sampleCount=31 apesar de semanas de coleta. A reprodução com 90 recursos × 168 amostras mostrou que o formato anterior cortava o payload para 95 KB e recuperava somente 31 linhas por recurso após reset. O gerador de pixel zera o bucket e o shedding pode atrasar scans, mas não justifica descartar amostras já coletadas.
+
+A persistência version 2 usa a raiz no segmento 9 e páginas nos segmentos 0..8, preservando preços, volumes e ticks sem perda de precisão. O formato version 1 migra sem descartar as linhas existentes. A carga ocorre em vários ticks, validando gerações; nenhuma gravação substitui o histórico antes da hidratação completa. Capacidade total excedida reporta erro, preservando a geração anterior.
+
+O mínimo é temporariamente 30 amostras válidas durante a validação; o alvo após validar é 48. O shedding permanece. Não preencher lacunas com preços repetidos nem recuperar dados já descartados. A janela de sete dias é 604800 ticks; a densidade depende dos scans efetivamente executados. `marketHistoryStatus()` permite acompanhar carregamento e persistência.
+
+`marketHistoryFlush()` força a persistência/migração dos dados já hidratados, sem novo scan, sem amostra extra e sem mudar a cadência. Retorna `ok:false` com `history-not-hydrated` antes da carga completa, preservando os segmentos existentes.
+
+## Bucket e cadência da coleta
+
+`market.minBucket=500`: scans/coletas automáticos não consultam o book, acrescentam amostras ou gravam histórico abaixo desse piso. Main chama o coletor via guard, independentemente do shedding geral de 2000. Ao recuperar para 500, uma coleta pendente roda sem esperar a grade de currentInterval. A grade histórica permanece ancorada no horário originalmente previsto: atraso em 3600 até 3700 mantém a próxima em 7200. Cada amostra guarda `tick` real e `scheduledTick`; a persistência aceita tuplas antigas de cinco campos e novas com sexto campo opcional. Após reset a grade é recuperada do scheduledTick (fallback tick para dados antigos). Atrasos que atravessam vários slots produzem uma única observação real no slot vencido mais recente, sem backfill fictício.
+
+### Diagnóstico das referências
+
+`Swing` conta apenas amostras com preço positivo no lado relevante, enquanto `marketPrice().sampleCount` conta todas as observações. `swingReference(resourceType, kind = "buy")` consulta a referência atual sem esperar o próximo scan; informa lado, amostras totais/válidas, mínimo configurado, idade e motivo de bloqueio, incluindo a contagem independente de energia quando aplicável. Bloqueios de referência em `swingStatus()` incluem os mesmos dados do scan registrado.
+
+### Prontidão após reset do heap
+
+O scan de mercado precede `terminalOps`, flip, craft e swing no tick. Até terminar a hidratação das páginas, referências ficam bloqueadas com `history-loading`; esse estado não consome a cadência do swing. A primeira avaliação com histórico completo ocorre no tick em que ele fica disponível. O resumo temporal é recalculado nesse tick, mesmo antes da cadência normal do book, sem criar amostras fora do horário previsto.
+
+### Reposição concorrente a operações de consumo
+
+Compras de reposição `policy: swing` podem coexistir com operações do mesmo recurso (craft, compra manual, venda ou transferência). Quantidades de entradas pendentes continuam descontadas do déficit e da capacidade; créditos e estoque comprometido continuam protegidos. As demais travas mantêm a semântica existente, incluindo exclusividade entre saídas do mesmo recurso. A concorrência é entre operações lógicas: o executor aceita no máximo um intent físico de deal/send por terminal e tick, além do cooldown do jogo. Energia já carregada para outra operação não pode pagar o frete da reposição. Recebimentos precisam ser associados pelo pedido/transferência, e a confirmação de deal usa a transação correspondente quando disponível.
+
+### Reserva dinâmica de combustível
+
+Substituir o piso padrão de 30k por frete das próximas duas transações elegíveis +20% de margem, configuráveis. Quotes recentes e transferências ainda não enviadas alimentam a previsão; ordens próprias aguardando comprador não geram frete. Energia já carregada para operações fica protegida separadamente, sem dupla contagem. Sem previsão, a reserva preventiva vai a zero. Storage abaixo de 10% do alvo de uso remove margem preventiva e adia vendas swing cujo frete exceda 10% da energia local disponível. Compra de energia ganha prioridade. Histerese de devolução (25% da reserva prevista) evita oscilações; excesso ocioso retorna ao storage mesmo com outras operações pendentes, preservando cargas/haulers.

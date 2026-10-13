@@ -7,6 +7,7 @@
 // only consulted live.
 
 const roomCache = require("../utils/roomCache");
+const config = require("../utils/config");
 
 // --- console: setLabReaction / cancelLabReaction ------------------------
 //   setLabReaction("W1N1", "H", "O")   -> produce OH, picks 3 labs itself
@@ -35,14 +36,14 @@ global.setLabReaction = function (roomName, mineral1, mineral2) {
     // Any lab within range 2 of two others - runReaction()'s real
     // requirement (the output lab must be within range 2 of both inputs).
     let picked = null;
-    for (const output of labs) {
-        const near = labs.filter(
-            (l) => l.id !== output.id && output.pos.getRangeTo(l) <= 2
-        );
-        if (near.length >= 2) {
-            picked = { output, input1: near[0], input2: near[1] };
-            break;
-        }
+    const reserved = Memory.rooms[roomName] && Memory.rooms[roomName].labBoostReservations || {};
+    const usable = labs.filter((l) => !reserved[l.id] && (!l.isActive || l.isActive()));
+    for (const input1 of usable) for (const input2 of usable) {
+        if (input1.id === input2.id) continue;
+        const outputs = usable.filter((l) => l.id !== input1.id && l.id !== input2.id &&
+            l.pos.getRangeTo(input1) <= 2 && l.pos.getRangeTo(input2) <= 2);
+        if (outputs.length && (!picked || outputs.length > picked.outputs.length))
+            picked = { output: outputs[0], outputs, input1, input2 };
     }
     if (!picked) {
         console.log(
@@ -52,11 +53,20 @@ global.setLabReaction = function (roomName, mineral1, mineral2) {
     }
 
     if (!Memory.rooms[roomName]) Memory.rooms[roomName] = {};
+    delete Memory.rooms[roomName].labReactions;
+    delete Memory.rooms[roomName].labReactionAuto;
+    delete Memory.rooms[roomName].labPolicyInputs;
+    delete Memory.rooms[roomName].labPolicyHold;
+    delete Memory.rooms[roomName].labPolicyDesired;
+    if (Memory.rooms[roomName].labLoadAuto) {
+        delete Memory.rooms[roomName].labLoad; delete Memory.rooms[roomName].labLoadAuto;
+    }
     Memory.rooms[roomName].labReaction = {
         a: mineral1,
         b: mineral2,
         product,
         output: picked.output.id,
+        outputs: (config.get("craft.wideLabs", true) ? picked.outputs : [picked.output]).map((l) => l.id),
         input1: picked.input1.id,
         input2: picked.input2.id,
     };
