@@ -35,6 +35,34 @@ profiler só carrega quando `Memory.settings.profiler` está setado.
 
 ## Modules
 
+### Correções da revisão de 13–14/10 (ARK-124)
+
+Trânsito SK e escape consultam `roomCache.foreignCreeps`, incluindo jogadores
+neutros/aliados; diplomacia de combate continua em `getHostiles`. O primeiro
+intel compartilha fontes e minerais pelo mesmo cache. `labReactions.execute`
+revalida inputs/output contra reservas para boost e atividade em cada intent,
+inclusive configurações manuais antigas. BUY listing desconta taxas ainda
+atribuídas ao saldo antes de reprecificar e inclui a taxa incremental de
+aumento/extensão; reduzir preço não restitui taxas já pagas.
+
+### Patrimônio estimado no Grafana (0133 / ARK-122)
+
+`stats.js` publica `Memory.stats.assets.resources` na cadência existente:
+stores de estruturas em salas próprias (incluindo labs, factories e containers),
+creeps próprios em qualquer sala via `census.allOwned()`, power creeps presentes
+e recursos de conta. Estoques são físicos, sem somar reservas ou ordens; fontes,
+loot e estruturas em salas remotas ficam fora. `roomCache` reutiliza as buscas.
+
+`exporter.py` publica `screeps_resource_amount{resource}` e
+`screeps_resource_sell_value{resource}` com `market.fairPrice.sellPrice` — a
+série **Sell Value** do dashboard. Limpa séries desaparecidas a cada snapshot.
+`screeps_assets_unpriced_resources` indica tipos em estoque sem preço válido.
+No `grafana.json`, o painel 235 calcula créditos + 95% do estoque precificado
+em PromQL, mantendo créditos quando o estoque é vazio; painel 236 mostra a
+cobertura. Não há fallback para `currentSell`; preço ausente torna a estimativa
+parcial. Curvas globais não seguem o filtro de sala. Atualizar o exporter e
+importar o JSON é necessário para ativar os novos painéis.
+
 ### Atribuição de CPU de movimento (0113 / ARK-116)
 
 Todos os roles que fazem trânsito por salas usam `routing.travelToRoom`:
@@ -318,9 +346,9 @@ without a prior "seen" baseline (bug real, usuário reportou em produção,
 2026-09-24: 10000 O paradas no terminal, 0 energia pra taxa, ordem de venda
 de 1000 nunca executava). A SELL's `queued`/`waiting` branch also reconciles
 `loadedAmount` against whatever the terminal already holds up to the staging
-buffer — `lockConflict()` guarantees exclusive ownership of the
-resource/room pair, so pre-existing stock is safe to treat as this
-operation's cargo; without that credit, `loadedAmount` stayed at zero
+buffer — desde 0132, `terminalClaims.physicalFree()` desconta os lotes
+de outros proprietários; somente carga livre é creditada à operação.
+Antes dessa reconciliação, `loadedAmount` stayed at zero
 whenever the terminal already met the buffer, permanently zeroing
 `candidateOrders()`'s cargo cap and blocking every deal (and the energy-fee
 loading that only runs once a deal executes) forever.
@@ -447,11 +475,12 @@ but the user sets `op.limit` by reading the market's raw price
 (`marketPrice()`/order book), not some hidden delivery-adjusted number —
 confirmed live via `marketPrice("O")` showing the raw `sellPrice` matched
 what they'd used to pick the limit. `candidateOrders()` now filters on the
-order's own raw price against `op.limit`; `effective` (net of delivery cost)
+order's own raw price against `op.limit` for legacy/manual SELLs; desde 0132,
+BUY usa limite efetivo com frete e energia líquida. `effective` (net of delivery cost)
 is still used to rank/sort the orders that clear that raw bar, so a
 cheaper-to-deliver order still wins over a pricier-to-reach one at the same
-raw price. `reportNoCandidate()`'s "best" pick follows the same raw-price
-criterion now, for the same reason.
+raw price. Desde 0132, `reportNoCandidate()` usa o mesmo custo efetivo da
+seleção para escolher a melhor alternativa e explicar recusas.
 
 `managedTerminalIncrease()` (used by both `scanTerminalBalances()`'s surplus
 check and `tickReceipt()`'s withdraw amount) used to gate `feeLoadedAmount`
@@ -786,9 +815,70 @@ O fast gate de grandes drops ignora essas pilhas, preservando picks cacheados
 de links; pickups cacheados são revalidados contra o índice. Sem nova coleta
 de estruturas, sem `lookForAt` e sem Memory. A ordem restante é preservada.
 
+## Disponibilidade de insumos do craft (0134 / ARK-123)
+
+`craftPurchaseBook` mantém no heap, por scan, as quantidades restantes das
+SELL orders do cache compartilhado `orderBook`. Desconta apenas compras ativas
+e elegíveis, pelo saldo da operação; compras concluídas e recebimentos não
+consomem oferta futura. Intents aceitos no tick reservam a order exata; após
+refletidos no book, não são descontados novamente.
+
+`marketPricing.evaluate` aceita `ctx.buyQuote`, precifica a quantidade candidata
+com frete real e revalida a soma dos insumos no root. `craftPlanner` reavalia
+cada candidato antes de abrir e reserva seus volumes imediatamente, permitindo
+cadeias concorrentes com o mesmo insumo e reduzindo lotes ao saldo disponível.
+`craftStatus().candidates[].purchaseQuotes` informa quantidade, disponibilidade,
+frete, custo, custo unitário efetivo e allocations por orderId. Falta de saldo
+gera `no-plan:<resource>:liq-depth`; lucro insuficiente gera `margin`.
+
+O limite de compra do craft parte do maior custo efetivo das ofertas usadas;
+a exposição adicional sobre o custo médio e a tolerância de preço consomem a
+margem econômica antes do prêmio configurado. A estimativa genérica de frete
+permanece apenas na venda, evitando contar novamente o frete das compras.
+O executor do terminal continua revalidando ofertas e proteções físicas.
+
+## Coordenação por lote e custo efetivo (0132 / ARK-120)
+
+`terminalClaims` compartilha reservas físicas e intents de retirada (heap por
+tick) entre executor e resourcePolicy. Operações persistem `owner`, `lots` e
+contabilidade parcial; proprietários legados são inferidos pelos vínculos de
+craft/flip ou policy swing. Listings manuais não gerenciadas também protegem
+estoque. Pedidos de proprietários diferentes convivem; a execução física é
+serializada por terminal/tick, com desempate por último negócio confirmado.
+
+`sellLot` recebe quantidade acumulada incluindo o já vendido, `owner` e
+`lotId`. `Memory.terminalOps.lotTargets` impede duplicação após retentativas e
+reset; lotes compatíveis do mesmo proprietário crescem na operação existente.
+Confirmações repartem preenchimentos FIFO e eventos carregam operationId,
+owner e marketFees. Craft não oferece material ainda em labs/factory e sua
+contabilidade filtra negócios de outros proprietários. Vendas parciais em
+settlement são confirmadas antes de transitar para a venda final.
+
+`purchaseCost.evaluate` é a avaliação única para BUY, swing e diagnóstico:
+energia usa price*q/(q-freight); outros recursos somam freight*energyFairPrice/q.
+O limite inclui frete e taxas de listing cancelada. Igualdade é elegível;
+energia líquida não positiva não é. Quantidade solicitada continua bruta.
+`terminalOps.maxBuyFreightShare` é opcional, null por padrão; a regra de
+frete legada das SELLs continua. Não existe campo urgency.
+
+Compras priorizam SELL executável. Sem oferta, somente createListing=true
+publica BUY, com preço <= limite/1.05 e desconto das taxas não recuperadas.
+Troca de BUY publicada por negócio instantâneo espera confirmação de
+cancelamento e reaplica o orçamento incluindo taxa perdida. Criação e
+extensão têm confirmação e binding exclusivo; intents não reconciliados
+falham sem emitir novamente uma taxa. `orderConfirmationTicks` default 10.
+
+Listings compatíveis usam extendOrder para saldo adicional e changeOrderPrice
+para reprecificação; falha preserva ID/ordem. Swing segue referência atual
+válida, respeitando cadência. Cargo novo não publicado pode ser vendido
+imediatamente antes de ampliar a listing; o saldo publicado continua
+integralmente protegido. Em concorrência, nova listing/extensão exige lastro
+integral. Validação offline em test/terminalLotCases.js; publicação e
+confirmação live W7N49/E1N47 são etapas separadas.
+
 ## Estoque de uso e mercado oportunista (0124 / ARK-32)
 
-Compras de reposição (`policy: swing`) compartilham o recurso com operações de consumo; as entradas pendentes reduzem o déficit e a capacidade reservada. Outras saídas do mesmo recurso mantêm exclusividade. O executor serializa intents físicos por terminal/tick, desconta energia carregada por outras operações e associa recebimentos pelo pedido/tick ou descrição da transferência. Deals podem ser confirmados pela transação exata quando o consumo concorrente mascara o delta físico.
+Compras de reposição (`policy: swing`) compartilham o recurso com operações de consumo; as entradas pendentes reduzem o déficit e a capacidade reservada. Desde 0132, vendas de lotes distintos também convivem com reservas quantitativas, e compras de proprietários diferentes não bloqueiam compras de craft. O executor serializa intents físicos por terminal/tick, desconta energia carregada por outras operações e associa recebimentos pelo pedido/tick ou descrição da transferência. Deals podem ser confirmados pela transação exata quando o consumo concorrente mascara o delta físico.
 
 O guard `market` roda antes dos consumidores de mercado. `market.historyReady()` exige histórico hidratado e snapshot disponível; swing bloqueia referências parciais com `history-loading` e inicia a cadência apenas após prontidão. A conclusão da hidratação força o recálculo do resumo temporal no mesmo tick.
 
@@ -800,7 +890,7 @@ O guard `market` roda antes dos consumidores de mercado. `market.historyReady()`
 
 `utils/swingTrade` consulta o orderBook compartilhado e referências históricas de marketPricing (30 amostras durante validação; alvo final 48, idade máxima 7200 ticks). Balanceamento interno precede compra; custo efetivo considera frete e ganho líquido de energia. Compra abaixo de 99% sellPrice e venda acima de 101% buyPrice; recursos de uso não são liquidados. Começa com `swing.test=true`; `swingStatus(roomName?)` lê candidatos e bloqueios persistidos, sem enfileirar negócios no modo simulado.
 
-`terminalOps` mantém a API anterior e aceita options com `effectiveLimit` e `policy:"swing"`. Antes de deal/listagem, revalida preço, frete, crédito, reservas e capacidade; confirms e receipts mantêm contabilidade parcial. Ordens swing cobram 5% na criação, preservam preço e expiram em 1209600 ticks. `Memory.swing.noRelist` retém saldo por sala/recurso após expiração; vendas imediatas continuam permitidas. Ordens existentes sem operação gerenciada também reservam saldo. A chamada em main passa por `guard` e shedding.
+`terminalOps` mantém a API anterior e aceita options com `effectiveLimit` e `policy:"swing"`. Antes de deal/listagem, revalida preço, frete, crédito, reservas e capacidade; confirms e receipts mantêm contabilidade parcial. Ordens swing cobram 5% na criação, reprecificam pela referência atual válida desde 0132 e expiram em 1209600 ticks. `Memory.swing.noRelist` retém saldo por sala/recurso após expiração; vendas imediatas continuam permitidas. Ordens existentes sem operação gerenciada também reservam saldo. A chamada em main passa por `guard` e shedding.
 
 Ordens cujo preço bruto já viola a margem são rejeitadas antes do cálculo
 de quantidade e frete, tanto na compra quanto na venda. Candidatos restantes

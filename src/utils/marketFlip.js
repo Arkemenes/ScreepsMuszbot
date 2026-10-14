@@ -155,7 +155,16 @@ function openFlip(candidate, quantity, expectedNetProfit) {
     // operation on the same resource must not block the flip everywhere.
     let room = null, response = null;
     for (const candidateRoom of eligibleRooms(candidate.marketOnly, busyRooms(mem))) {
-        const attempt = terminalOps.buy(candidateRoom.name, candidate.resourceType, quantity, candidate.buyPrice, false, true, { automaticPurchase: true });
+        // The executor's limit includes the buy leg's freight; the flip's profit
+        // calculation already budgets that freight independently of the raw ask.
+        const energy = marketPrices.snapshot();
+        const energyPrice = energy && energy.resources && energy.resources[RESOURCE_ENERGY] && energy.resources[RESOURCE_ENERGY].fairPrice || 0;
+        const asks = orderBook.matching(ORDER_SELL, candidate.resourceType).filter((o) => o.price <= candidate.buyPrice && orderAmount(o) >= quantity);
+        const ceiling = asks.reduce((best, o) => Math.min(best, terminalOps.evaluatePurchase({ resourceType: candidate.resourceType, limit: Infinity }, o.price, quantity,
+            candidate.marketOnly ? 0 : txCost(quantity, candidateRoom.name, o.roomName), energyPrice).effective), Infinity);
+        const buyLimit = Number.isFinite(ceiling) ? ceiling : candidate.buyPrice;
+        const attempt = terminalOps.buy(candidateRoom.name, candidate.resourceType, quantity, buyLimit, false, true,
+            { automaticPurchase: true, owner: { kind: "flip", id: candidateRoom.name + ":" + candidate.resourceType + ":" + Game.time } });
         if (attempt.ok) { room = candidateRoom; response = attempt; break; }
     }
     if (!room) return false;
@@ -269,7 +278,8 @@ function advanceFlips() {
             // pickRoom() novo: o estoque comprado está no storage daquela
             // sala específica, e com salas em paralelo (2026-09-30) uma
             // re-seleção poderia escolher outra sala sem o material.
-            const response = terminalOps.sell(entry.room, resourceType, dealt, entry.sellPrice, false, true); // skipFeeCap:true, mesmo motivo do buy() acima
+            const response = terminalOps.sellLot(entry.room, resourceType, dealt, entry.sellPrice, false, true,
+                { owner: { kind: "flip", id: entry.room + ":" + resourceType + ":" + entry.openedTick }, lotId: "purchase:" + entry.buyOpId });
             if (!response.ok) return; // retry next tick, within the same maxHoldingTicks budget
             if (dealt < entry.quantity) {
                 const ratio = dealt / entry.quantity;

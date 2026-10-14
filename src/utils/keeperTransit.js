@@ -1,7 +1,6 @@
 // Claim-only SK transit: retain static geometry in the heap and avoid danger tiles.
 const config = require("./config");
 const roomCache = require("./roomCache");
-const { getHostiles } = require("./hostiles");
 const observer = require("./observer");
 const combat = require("./combat");
 const nativePath = require("./nativePath");
@@ -15,11 +14,12 @@ function isKeeperRoom(name) {
     return x >= 4 && x <= 6 && y >= 4 && y <= 6 && !(x === 5 && y === 5);
 }
 
-function observe(room, hostiles) {
+function observe(room) {
     if (!isKeeperRoom(room.name)) return;
     const previous = rooms.get(room.name);
     if (previous && previous.lastTick === Game.time) return;
-    hostiles = hostiles || getHostiles(room);
+    // Transit safety includes allies and unlisted players, independently of combat diplomacy.
+    const hostiles = roomCache.foreignCreeps(room);
     const lairs = roomCache.structures(room).filter((s) => s.structureType === STRUCTURE_KEEPER_LAIR);
     const centers = lairs.concat(roomCache.sources(room), roomCache.minerals(room))
         .map((o) => ({ x: o.pos.x, y: o.pos.y }));
@@ -94,8 +94,8 @@ function invalidateNextStep(creep) {
 function evade(creep) {
     if (!isKeeperRoom(creep.room.name)) return false;
     const range = config.get("claim.keeperAvoidRange", 6);
-    const hostiles = getHostiles(creep.room);
-    observe(creep.room, hostiles);
+    const hostiles = roomCache.foreignCreeps(creep.room);
+    observe(creep.room);
     const entry = rooms.get(creep.room.name);
     const dangers = hostiles.concat((entry ? entry.centers : []).map((p) =>
         ({ pos: new RoomPosition(p.x, p.y, creep.room.name) })));

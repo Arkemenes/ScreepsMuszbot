@@ -31,9 +31,16 @@ Novo pré-voo/gate de spawn, probes, combate/escolta, rota literal, mudanças de
 
 ## Constitution / Risks
 
-Scans usam `roomCache`/`getHostiles`; coleta entra pelo intel guardado. Dados derivados ficam no heap; Memory recebe fila existente, configuração e versão escalar. Config não fixa salas/jogadores. Planejamento segue limites existentes, sem busca longa por movimento do keeper. Terreno e visão determinam passagem; não há garantia de ausência de combate ou de vida suficiente para o claimer atual.
+Scans usam `roomCache`; segurança SK observa todos os creeps estrangeiros, enquanto `getHostiles` mantém a diplomacia de combate. Coleta entra pelo intel guardado. Dados derivados ficam no heap; Memory recebe fila existente, configuração e versão escalar. Config não fixa salas/jogadores. Planejamento segue limites existentes, sem busca longa por movimento do keeper. Terreno e visão determinam passagem; não há garantia de ausência de combate ou de vida suficiente para o claimer atual.
 
 ## Review
+
+ARK-124 (correções autorizadas em 2026-10-14 após ARK-121): jogador neutro,
+aliado ou configurado como inimigo impede trânsito SK sem alterar diplomacia.
+`observe` e escape usam `roomCache.foreignCreeps`, mesmo quando o intel já
+consultou `getHostiles`. Primeiro intel compartilha fontes/minerais pelo
+cache; smoke exige uma consulta de cada tipo por sala/tick e retomada após
+a saída do jogador.
 
 ARK-115: a versão global de territórios mudava com intel do observer, inclusive em salas sem relação com o trajeto. routing agora usa versão das restrições de jogadores e verifica segurança das salas do caminho/destino do path/recuo. Observação distante não invalida rota; mudança hostil no trajeto e alteração de bans continuam invalidando. O backoff usa ID/nome estável, porque Game recria Creep por tick; a retenção no heap é limitada.
 

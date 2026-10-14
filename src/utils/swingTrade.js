@@ -67,7 +67,7 @@ function quote(room, kind, r, quantity, options) {
     orders.forEach((order) => {
         if (!order || own[order.id] || (options.deadOrderIds || []).indexOf(order.id) >= 0 || order.type !== (kind === "buy" ? ORDER_SELL : ORDER_BUY) || order.resourceType !== r || !order.roomName || !(order.price > 0)) return;
         // Freight can only worsen the raw price on either side.
-        if (kind === "buy" ? order.price >= limit : order.price <= limit) return;
+        if (kind === "buy" ? order.price > limit : order.price < limit) return;
         const remaining = order.remainingAmount === undefined ? order.amount : order.remainingAmount;
         let q = Math.floor(Math.min(cap, remaining || 0, kind === "buy" ? cash / order.price : Infinity));
         if (kind === "buy") {
@@ -89,7 +89,8 @@ function quote(room, kind, r, quantity, options) {
         if (!(q > 0)) return;
         const cost = transactionCost(q, order.roomName);
         const price = effective(kind, r, order.price, q, cost, ref.energy);
-        if (kind === "buy" ? price >= limit : price <= limit) return;
+        if (kind === "buy" ? price > limit : price < limit) return;
+        if (kind === "buy" && !require("./purchaseCost").evaluate({ resourceType: r, limit }, order.price, q, cost, ref.energy).ok) return;
         matches.push({ order, quantity: q, cost, effective: price, fee: cost * ref.energy / q,
             reference: ref.price, limit, energyFairPrice: ref.energy, netAmount: r === RESOURCE_ENERGY && kind === "buy" ? q - cost : q });
     });
@@ -177,14 +178,22 @@ function tick() {
         const resources = Object.keys(room.storage.store).concat(Object.keys(room.terminal.store)).filter((r, i, all) => all.indexOf(r) === i);
         resources.forEach((r) => {
             if (policy.used(room, r) || typeof RESOURCES_ALL !== "undefined" && RESOURCES_ALL.indexOf(r) < 0) return;
-            const free = Math.floor(policy.available(room, r));
-            const pending = ops.activeForRoom(room.name).some((op) => op.resourceType === r);
+            const owner = { kind: "swing", id: room.name + ":" + r };
+            const active = ops.activeForRoom(room.name).filter((op) => op.resourceType === r);
+            const sales = active.filter((op) => op.kind === "sell" && require("./terminalClaims").owner(op) === "swing:" + owner.id);
+            const free = Math.floor(policy.available(room, r, sales.length ? "swing:" + owner.id : undefined));
+            const pending = active.some((op) => sales.indexOf(op) < 0);
             if (!free || pending) { observe(room, r, "sell", { reason: pending ? "pending-operation" : "reserved-stock" }); return; }
-            const q = quote(room, "sell", r, free, { orders });
+            const lotId = sales.length && sales[0].lots && sales[0].lots[0].id || room.name + ":" + r + ":" + Game.time;
+            const targetKey = "swing:" + owner.id + ":" + r + ":" + lotId;
+            const target = Memory.terminalOps && Memory.terminalOps.lotTargets && Memory.terminalOps.lotTargets[targetKey];
+            const sold = Math.max(0, (target && target.accepted || 0) - sales.reduce((n, op) => n + op.remaining, 0));
+            const saleOptions = { policy: "swing", effectiveLimit: true, owner, lotId };
+            const q = quote(room, "sell", r, free, { orders, excludeId: sales.length ? sales[0].id : undefined });
             if (q.order) {
                 observe(room, r, "sell", { reason: "eligible", quantity: q.quantity, effective: q.effective, reference: q.reference, limit: q.limit, cost: q.cost, orderId: q.order.id });
                 if (!test) {
-                    const result = ops.sell(room.name, r, q.quantity, q.limit, false, true, { policy: "swing", effectiveLimit: true });
+                    const result = ops.sellLot(room.name, r, sold + q.quantity, q.limit, false, true, saleOptions);
                     if (result.ok) memory().observations[room.name + ":" + r + ":sell"].opId = result.id;
                 }
                 return;
@@ -197,7 +206,7 @@ function tick() {
             const price = listingPrice(room, r, q.limit, orders);
             if (price * qty * 0.05 > accounting.available()) { observe(room, r, "sell", { reason: "listing-fee-budget" }); return; }
             observe(room, r, "sell", { reason: "eligible-listing", quantity: qty, effective: price * 0.95, price, reference: q.reference, limit: q.limit });
-            if (!test) ops.sell(room.name, r, qty, q.limit, true, true, { policy: "swing", effectiveLimit: true, fixedListing: true });
+            if (!test) ops.sellLot(room.name, r, sold + qty, q.limit, true, true, Object.assign({}, saleOptions, { fixedListing: true }));
         });
     });
 }

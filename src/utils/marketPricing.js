@@ -230,9 +230,11 @@ function planNode(resourceType, qty, ctx, depth, visiting, forceMake) {
         if (buyQty <= 0) {
             options.push({ source: "own", total: ownCost, cash: 0, T: 0, steps: [], buys: {}, owns, sigma: 0 });
         } else {
-            const ask = conservativeAsk(resourceType, instant.ask);
+            const quote = ctx.buyQuote ? ctx.buyQuote(resourceType, buyQty) : null;
+            const ask = quote && quote.ok ? quote.unit : conservativeAsk(resourceType, instant.ask);
             const leg = ask === null ? null : buyLeg(resourceType, instant.ask, buyQty);
-            if (ask === null) reason = "no-ask";
+            if (quote && !quote.ok) reason = quote.reason;
+            else if (ask === null) reason = "no-ask";
             else if (!leg.ok) reason = "liq-" + leg.reason;
             else {
                 options.push({
@@ -310,6 +312,19 @@ function evaluate(product, qty, ctx) {
         const pick = keys.find((k) => k !== product && ctx.why[k] !== "no-option") ||
             keys.find((k) => ctx.why[k] !== "no-option") || keys[0];
         return { ok: false, reason: "no-plan", detail: pick ? pick + ":" + ctx.why[pick] : null };
+    }
+    if (ctx.buyQuote) {
+        const quotes = {};
+        let cash = 0;
+        for (const r of Object.keys(plan.buys)) {
+            const quote = ctx.buyQuote(r, Math.ceil(plan.buys[r]));
+            if (!quote.ok) return { ok: false, reason: "no-plan", detail: r + ":" + quote.reason };
+            quotes[r] = quote;
+            cash += quote.cost;
+        }
+        plan.total += cash - plan.cash;
+        plan.cash = cash;
+        plan.purchaseQuotes = quotes;
     }
     const instant = ctx.instant(product) || {};
     const bid = conservativeBid(product, instant.bid);

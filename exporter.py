@@ -39,6 +39,9 @@ room_mineral = Gauge('screeps_room_mineral', 'Assets de minerais base', ['room',
 room_compound_t3 = Gauge('screeps_room_compound_t3', 'Assets de compostos T3', ['room', 'compound'])
 room_energy_spent = Gauge('screeps_room_energy_spent', 'Energia gasta por categoria', ['room', 'category'])
 market_credits = Gauge('screeps_market_credits', 'Créditos no mercado')
+resource_amount = Gauge('screeps_resource_amount', 'Inventário físico total por recurso', ['resource'])
+resource_sell_value = Gauge('screeps_resource_sell_value', 'Sell Value por recurso (market.fairPrice.sellPrice)', ['resource'])
+assets_unpriced_resources = Gauge('screeps_assets_unpriced_resources', 'Tipos de recurso em estoque sem Sell Value')
 market_bought_amount = Gauge('screeps_market_bought_amount', 'Quantidade comprada', ['resource'])
 market_sold_amount = Gauge('screeps_market_sold_amount', 'Quantidade vendida', ['resource'])
 market_bought_credits = Gauge('screeps_market_bought_credits', 'Créditos gastos', ['resource'])
@@ -173,12 +176,31 @@ def update_generic_metrics(stats):
             generic_stat_info.labels(value=value, **metric_labels).set(1)
 
 
+def update_asset_metrics(stats):
+    """Publish the same resource key for stock and Sell Value; never reuse old quotes."""
+    resource_amount.clear()
+    resource_sell_value.clear()
+    prices = stats.get("market", {}).get("fairPrice", {})
+    unpriced = 0
+    for resource, amount in stats.get("assets", {}).get("resources", {}).items():
+        if isinstance(amount, bool) or not isinstance(amount, (int, float)) or not math.isfinite(amount) or amount <= 0:
+            continue
+        resource_amount.labels(resource=resource).set(amount)
+        price = prices.get(resource, {}).get("sellPrice")
+        if isinstance(price, bool) or not isinstance(price, (int, float)) or not math.isfinite(price) or price < 0:
+            unpriced += 1
+            continue
+        resource_sell_value.labels(resource=resource).set(price)
+    assets_unpriced_resources.set(unpriced)
+
+
 def update_metrics():
     stats = fetch_stats()
     if not stats:
         return
 
     update_generic_metrics(stats)
+    update_asset_metrics(stats)
 
     # --- GCL ---
     gcl = stats.get("gcl", {})

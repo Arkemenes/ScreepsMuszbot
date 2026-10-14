@@ -2,6 +2,7 @@
 const config = require("./config");
 const census = require("./census");
 const accounting = require("./marketAccounting");
+const terminalClaims = require("./terminalClaims");
 let withdrawalTick = -1;
 let withdrawals = {};
 function withdrawalKey(source, resource) {
@@ -11,6 +12,7 @@ function withdrawalKey(source, resource) {
 function recordConsumerWithdraw(source, resource, quantity) {
     const key = withdrawalKey(source, resource);
     withdrawals[key] = (withdrawals[key] || 0) + quantity;
+    terminalClaims.withdraw(source, resource, quantity);
 }
 function value(s, r) { return s && s.store && Math.max(0, s.store[r] || 0) || 0; }
 function targets(room) {
@@ -82,40 +84,20 @@ function pendingPurchase(room, resource, id) {
 // Consumers may use newly arrived excess, but never outgoing cargo. Allocate
 // staged/listed stock to the terminal and the unstaged remainder to storage.
 function consumerAvailable(room, source, resource) {
-    const key = withdrawalKey(source, resource);
-    const pending = withdrawals[key] || 0;
-    if (source !== room.storage && source !== room.terminal) return Math.max(0, value(source, resource) - pending);
-    // Outgoing reservations can only lower the physically available amount.
-    if (value(source, resource) <= pending) return 0;
-    let total = 0, staged = 0;
-    const managed = new Set();
-    operations(room).forEach((op) => {
-        if (op.marketOrderId) managed.add(op.marketOrderId);
-        if (op.sourceRoom !== room.name || op.resourceType !== resource ||
-            (op.kind !== "sell" && op.kind !== "transfer") || op.sentAmount > 0) return;
-        const remaining = Math.max(0, op.remaining || 0);
-        total += remaining;
-        staged += Math.min(remaining, Math.max(0, op.loadedAmount || 0));
-    });
-    const orders = Game.market && Game.market.orders || {};
-    Object.keys(orders).forEach((id) => {
-        const order = orders[id];
-        if (!managed.has(id) && order.roomName === room.name && order.type === ORDER_SELL && order.resourceType === resource) {
-            const quantity = Math.max(0, order.remainingAmount === undefined ? order.amount || 0 : order.remainingAmount);
-            total += quantity; staged += quantity;
-        }
-    });
-    staged = Math.min(Math.max(staged, total - value(room.storage, resource)), value(room.terminal, resource));
-    return Math.max(0, value(source, resource) - (source === room.terminal ? staged : total - staged) - pending);
+    return terminalClaims.physicalFree(room, source, resource);
 }
 function commitments(room, excludeId) {
     const sums = {}, coveredOps = {};
+    const excludedOp = Memory.terminalOps && Memory.terminalOps.operations && Memory.terminalOps.operations[excludeId];
+    const excludedOwner = excludedOp ? terminalClaims.owner(excludedOp) : excludeId;
     const add = (r, q) => { if (r) sums[r] = (sums[r] || 0) + Math.max(0, q || 0); };
     const flips = Memory.marketFlip && Memory.marketFlip.active || {};
     Object.keys(flips).forEach((r) => {
         const f = flips[r];
         if (f.room !== room.name) return;
-        if (excludeId && (f.buyOpId === excludeId || f.sellOpId === excludeId)) return;
+        if (excludeId && (f.buyOpId === excludeId || f.sellOpId === excludeId || excludedOwner === "flip:" + f.room + ":" + r + ":" + f.openedTick)) {
+            coveredOps[f.buyOpId] = coveredOps[f.sellOpId] = true; return;
+        }
         add(r, Math.max(0, f.quantity - pendingPurchase(room, r, f.buyOpId)));
         coveredOps[f.buyOpId] = coveredOps[f.sellOpId] = true;
     });
@@ -123,7 +105,7 @@ function commitments(room, excludeId) {
     Object.keys(chains).forEach((key) => {
         const c = chains[key];
         if ((c.room || key.split(":")[0]) !== room.name) return;
-        if (excludeId && c.id === excludeId) {
+        if (excludeId && (c.id === excludeId || excludedOwner === "craft:" + c.id)) {
             Object.keys(c.buys || {}).forEach((r) => { coveredOps[c.buys[r].opId] = true; });
             coveredOps[c.sellOpId] = coveredOps[c.partialOpId] = true;
             return;
@@ -169,7 +151,7 @@ function commitments(room, excludeId) {
         if (e.room === room.name) Object.keys(e.items || {}).forEach((r) => add(r, e.items[r]));
     });
     operations(room).forEach((op) => {
-        if (op.id === excludeId || coveredOps[op.id]) return;
+        if (op.id === excludeId || coveredOps[op.id] || excludedOwner && terminalClaims.owner(op) === excludedOwner) return;
         if (op.sourceRoom === room.name && (op.kind === "sell" || op.kind === "transfer"))
             add(op.resourceType, op.kind === "transfer" && op.sentAmount > 0 ? 0 : op.remaining);
         if (op.sourceRoom === room.name && op.kind === "buy") add(op.resourceType, Math.max(0, op.dealtAmount || 0));

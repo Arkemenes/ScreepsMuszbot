@@ -282,6 +282,32 @@ module.exports = function labPolicyCases(PROJECT, assert) {
         reactions.execute(w.labs[5]);
         assert(w.intents.length === 1, "0127: even a mutated store cannot expose new intermediate to the same tick");
 
+        for (const automatic of [false, true]) {
+            w = world("XLH2O", 20, [1, 2, 3]);
+            const roomMem = Memory.rooms[w.room.name];
+            const manual = { a: "H", b: "O", product: "OH", input1: w.labs[0].id,
+                input2: w.labs[1].id, output: w.labs[2].id };
+            if (automatic) roomMem.labReactions = [manual];
+            else roomMem.labReaction = manual;
+            w.labs[0].mineralType = "H"; w.labs[0].store.H = 100;
+            w.labs[1].mineralType = "O"; w.labs[1].store.O = 100;
+            reactions.execute(w.labs[2]);
+            assert(w.intents.length === 1, "ARK-124: unreserved " + (automatic ? "automatic" : "manual") + " reaction remains executable");
+            for (const lab of w.labs) {
+                Game.time++; w.intents.length = 0;
+                roomMem.labBoostReservations = { [lab.id]: true };
+                reactions.execute(w.labs[2]);
+                assert(w.intents.length === 0, "ARK-124: new boost reservation on " + lab.id + " blocks every reaction participant");
+                delete roomMem.labBoostReservations;
+                lab.isActive = () => false;
+                reactions.execute(w.labs[2]);
+                assert(w.intents.length === 0, "ARK-124: inactive " + lab.id + " cannot participate in a configured reaction");
+                lab.isActive = () => true;
+                reactions.execute(w.labs[2]);
+                assert(w.intents.length === 1, "ARK-124: restored lab availability resumes without consuming quota while blocked");
+            }
+        }
+
         w = world("XLH2O", 20, [1, 2, 3]);
         const mem = Memory.rooms[w.room.name];
         mem.labReactionAuto = true;

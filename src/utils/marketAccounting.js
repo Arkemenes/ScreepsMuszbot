@@ -33,7 +33,7 @@ function available(excludeId) {
         const op = ops[id];
         if (!active(op) || op.kind !== "buy") continue;
         const allocation = owner(id);
-        const cost = Math.max(0, op.remaining || 0) * (op.limit || 0) * (op.createListing ? 1.05 : 1);
+        const cost = Math.max(0, op.remaining || 0) * (op.limit || 0);
         if (allocation) {
             if (id === excludeId) reserved -= Math.min(allocation.reserved || 0, cost);
         } else if (id !== excludeId) reserved += cost;

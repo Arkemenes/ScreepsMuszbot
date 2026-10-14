@@ -88,9 +88,9 @@ module.exports = function (project, assert) {
                     roomName: "W1N1", price: kind === "buy" ? 11 : 9, remainingAmount: 100 }));
                 orders.push({ id: "dead", roomName: "W1N1", price: 10, remainingAmount: 100 },
                     { id: "eligible", roomName: "W1N1", price: 10, remainingAmount: 100 });
-                const op = runTrade(kind, { deadOrderIds: ["dead"] });
+                const op = runTrade(kind, { deadOrderIds: ["dead"], limit: kind === "buy" ? 10.001 : 10 });
                 assert(op.fuelQuote && op.fuelQuote.cost === 1 && op.error === "terminal em cooldown",
-                    "ARK-116: raw-price " + kind + " preserves the eligible order and execution state");
+                    "ARK-116: " + kind + " preserves the eligible order and execution state with its current price semantics");
                 assert(freightCalls === 1,
                     "ARK-116: raw-price " + kind + " computes freight only for the eligible order");
             }

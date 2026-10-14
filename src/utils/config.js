@@ -452,6 +452,9 @@ const defaults = {
         // fora - já avaliam a mesma taxa como parte do próprio lucro
         // líquido, com seu próprio limiar (marketFlip.minProfitRatio).
         maxFeeRatio: 0.05,
+        // Optional BUY guardrail; the effective price ceiling always applies.
+        maxBuyFreightShare: null,
+        orderConfirmationTicks: 10,
     },
     hauler: {
         // a load pick is kept this many ticks while its target still holds 50+ energy

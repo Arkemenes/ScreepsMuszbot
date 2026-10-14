@@ -7,6 +7,8 @@ module.exports = function (project, assert) {
     const reserver = require(path.join(project, "src/roles/reserver"));
     const combat = require(path.join(project, "src/utils/combat"));
     const observer = require(path.join(project, "src/utils/observer"));
+    const getIntel = require(path.join(project, "src/rooms/intel"));
+    const { getHostiles } = require(path.join(project, "src/utils/hostiles"));
     const saved = { game: Game, memory: Memory, search: PathFinder.search, flee: combat.flee,
         move: routing.moveToRoom, lair: global.STRUCTURE_KEEPER_LAIR,
         observerFor: observer.observerFor };
@@ -111,6 +113,33 @@ module.exports = function (project, assert) {
         enemies=[{owner:{username:"Invader"},my:false,pos:new RoomPosition(10,10,sk),body:[]}];
         keeperTransit.observe(room);
         assert(!keeperTransit.canTransit(sk), "an Invader in SK preserves whole-room hostile exclusion");
+        for (const ally of [false, true]) {
+            Game.time++;
+            const username = ally ? "KeeperTransitAlly" : "UnknownArmedPlayer";
+            Memory.settings.allies = ally ? [username] : [];
+            Memory.settings.hostilePlayers = []; Memory.settings.targetEnemies = [];
+            enemies = [keeper, { owner: { username }, my: false,
+                pos: new RoomPosition(10, 10, sk), body: [{ type: ATTACK, hits: 100 }] }];
+            const diplomatic = getHostiles(room);
+            keeperTransit.observe(room, diplomatic);
+            assert(diplomatic.length === 1 && !keeperTransit.canTransit(sk),
+                "ARK-124: SK transit blocks " + (ally ? "allied" : "unlisted") + " players without changing diplomacy");
+            assert(fallback(sk, base).get(1, 1) === 255 && retreat(sk, base).get(1, 1) === 255,
+                "ARK-124: player presence excludes SK from fallback and retreat even when combat ignores it");
+        }
+        Game.time++;
+        enemies = [keeper];
+        const counts = {}, oldFind = room.find;
+        room.find = (type) => { counts[type] = (counts[type] || 0) + 1; return oldFind(type); };
+        Memory.rooms[sk] = { exits: {} };
+        getIntel(room);
+        keeperTransit.canTransit(sk); keeperTransit.matrix(sk, base);
+        assert(counts[FIND_SOURCES] === 1 && counts[FIND_MINERALS] === 1 && counts[FIND_HOSTILE_CREEPS] === 1,
+            "ARK-124: first SK intel and transit share one source, mineral and foreign-creep scan per tick");
+        assert(keeperTransit.canTransit(sk) && Memory.rooms[sk].sourceNumber === 1 && Memory.rooms[sk].mineral === null,
+            "ARK-124: clearing foreign players restores keeper-only transit and preserves initial intel");
+        room.find = oldFind;
+        Memory.rooms[sk].sourceNumber = 3;
         Game.time++;
         enemies=[];
         keeperTransit.observe(room);

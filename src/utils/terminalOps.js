@@ -8,6 +8,8 @@ const roomCache = require("./roomCache");
 const stockPolicy = require("./resourcePolicy");
 const marketAccounting = require("./marketAccounting");
 const cpuMeter = require("./cpuMeter");
+const claims = require("./terminalClaims");
+const purchaseCost = require("./purchaseCost");
 
 const FINAL_STATES = ["completed", "failed", "cancelled"];
 
@@ -67,8 +69,16 @@ function transferLoadTarget(op) { return op.amount + (op.kind === "transfer" && 
 // "failed" ops used to only be visible via terminalOperations() polling.
 function touch(op, state) {
     if (state === "failed" && op.state !== "failed") console.log("[terminalOps] " + op.id + " (" + op.kind + " " + op.resourceType + ", " + (op.sourceRoom || "?") + (op.targetRoom ? "->" + op.targetRoom : "") + ") falhou: " + (op.error || "motivo desconhecido"));
+    if ((state === "cancelled" || state === "failed") && active(op)) releaseLotTargets(op);
     if (state) op.state = state;
     op.updatedTick = Game.time;
+}
+function releaseLotTargets(op) {
+    const targets = memory().lotTargets || {};
+    (op.lots || []).forEach((lot) => {
+        const key = lot.targetKey || op.lotKey;
+        if (key && targets[key]) targets[key].accepted = Math.max(0, targets[key].accepted - (lot.remaining || 0));
+    });
 }
 
 // Outgoing cargo keeps its exclusive owner. Usage replenishment is incoming
@@ -95,6 +105,11 @@ function lockConflict(kind, from, to, resourceType, automatic, options) {
         // two operations on the same marketOnly resource still conflict no
         // matter which room they were issued from.
         if (marketOnlyResource(resourceType) || marketOnlyResource(op.resourceType)) return op.resourceType === resourceType;
+        // Named incoming requests and disjoint sales reserve quantities, not a room lock.
+        if (options && options.owner && (sameFrom || sameTo) && op.resourceType === resourceType &&
+            (kind === "buy" || kind === "sell" && op.kind === "sell")) {
+            return op.kind === kind && claims.owner(op) === claims.key(options.owner) && !(kind === "sell" && options.lotManaged);
+        }
         const replenishing = kind === "buy" && options && options.policy === "swing" ||
             op.kind === "buy" && op.policy === "swing";
         if (replenishing && op.resourceType === resourceType) return false;
@@ -116,6 +131,8 @@ function create(kind, from, to, resourceType, value, options) {
     const mem = memory();
     const id = "terminal-" + mem.nextId++;
     mem.operations[id] = Object.assign({ id, kind, sourceRoom: from || null, targetRoom: to || null, resourceType, amount: value, remaining: value, state: "queued", createdTick: Game.time, updatedTick: Game.time, loadedAmount: 0, sentAmount: 0, receivedAmount: 0, transactionCost: 0 }, options || {});
+    claims.owner(mem.operations[id]);
+    if (kind === "sell") mem.operations[id].lots = [{ id: options && options.lotId || id, amount: value, remaining: value, limit: options && options.limit }];
     return id;
 }
 function reservedFrom(roomName, resourceType) {
@@ -155,20 +172,86 @@ function trade(kind, roomName, resourceType, value, limit, createListing, skipFe
     if (marketOnly && (!target || !target.controller || !target.controller.my)) return result(false, "sala precisa ser própria para uma operação de mercado");
     if (!target) return result(false, "sala precisa ser própria com storage e terminal");
     if (!validResource(resourceType) || !amount(value) || !(typeof limit === "number" && limit > 0)) return result(false, "recurso, quantidade ou limite inválido");
-    if (lockConflict(kind, roomName, null, resourceType, false, options)) return result(false, "já existe uma operação concorrente para este terminal/recurso");
+    options = Object.assign({}, options);
+    if (!options.owner) options.owner = options.policy === "swing" ? { kind: "swing", id: roomName + ":" + resourceType } : { kind: "manual", id: "terminal-" + memory().nextId };
+    if (lockConflict(kind, roomName, null, resourceType, false, options)) return conflictResult(kind, roomName, resourceType, options);
     const prices = priceData(resourceType, !marketOnly);
     if (!prices) return result(false, "aguardando cotação temporal e fairPrice de energia");
     // ROADMAP 0111: a SELL may also use material already sitting in the terminal
     // (e.g. a craft chain delivered its product straight there) - stageSaleCargo
     // already credits it as usable cargo. Energy is excluded: the terminal's
     // energy backs transfer fees and balancing, never a sale.
-    const terminalStock = kind === "sell" && !marketOnly && resourceType !== RESOURCE_ENERGY ? storeValue(target.terminal.store, resourceType) : 0;
-    const available = marketOnly ? value : Math.max(0, storeValue(target.storage.store, resourceType) + terminalStock - reservedFrom(roomName, resourceType));
+    const ownReserved = kind === "sell" && !marketOnly ? activeForRoom(roomName).filter((op) => claims.outgoing(op, target, resourceType) && claims.owner(op) === claims.key(options.owner)).reduce((n, op) => n + op.remaining, 0) : 0;
+    const available = kind !== "sell" || marketOnly ? value : Math.max(0, saleAvailable(target, resourceType, options.owner, resourceType !== RESOURCE_ENERGY) - ownReserved);
     if (!marketOnly && kind === "sell" && available < value) return result(false, "material insuficiente: disponível " + available + ", necessário " + value);
     // A BUY consumes an ORDER_SELL; a SELL consumes an ORDER_BUY.
     const reference = kind === "buy" ? prices.data.sellPrice : prices.data.buyPrice;
     if (!(typeof reference === "number" && reference > 0)) return result(false, "aguardando " + kind + "Price temporal");
     return result(true, create(kind, roomName, null, resourceType, value, Object.assign({}, options || {}, { limit, referencePrice: reference, energyFairPrice: prices.energy, marketOnly, createListing: !!createListing, skipFeeCap: !!skipFeeCap })));
+}
+function conflictResult(kind, roomName, resourceType, options) {
+    const response = result(false, "já existe uma operação concorrente para este terminal/recurso");
+    response.code = "owner-conflict";
+    response.owner = options.owner;
+    response.blockers = activeForRoom(roomName).filter((op) => op.resourceType === resourceType && op.kind === kind).map((op) => ({ id: op.id, owner: claims.owner(op), state: op.state, remaining: op.remaining }));
+    return response;
+}
+function saleAvailable(source, resource, owner, includeTerminal = true) {
+    const physical = claims.physicalFree(source, source.storage, resource, null, owner) +
+        (includeTerminal ? claims.physicalFree(source, source.terminal, resource, null, owner) : 0);
+    const committed = stockPolicy.commitments(source, claims.key(owner))[resource] || 0;
+    const uncommitted = Math.max(0, storeValue(source.storage.store, resource) + (includeTerminal ? storeValue(source.terminal.store, resource) : 0) - committed -
+        claims.withdrawn(source.storage, resource) - (includeTerminal ? claims.withdrawn(source.terminal, resource) : 0));
+    return Math.min(physical, uncommitted);
+}
+// Cumulative target includes this lot's confirmed sales. Compatible active sales grow in place.
+function sellLot(roomName, resourceType, cumulative, limit, createListing, skipFeeCap, options) {
+    options = Object.assign({}, options);
+    if (!options.owner || !options.lotId || !amount(cumulative)) return result(false, "owner, lotId e quantidade acumulada são obrigatórios");
+    const mem = memory();
+    if (!mem.lotTargets) mem.lotTargets = {};
+    const key = claims.key(options.owner) + ":" + resourceType + ":" + options.lotId;
+    const sales = activeForRoom(roomName).filter((op) => op.kind === "sell" && op.resourceType === resourceType && claims.owner(op) === claims.key(options.owner));
+    if (!mem.lotTargets[key]) {
+        let sold = 0;
+        Object.values(Memory.craft && Memory.craft.active || {}).forEach((c) => { if (claims.key(options.owner) === "craft:" + c.id && options.lotId === c.id + ":" + resourceType) sold = Math.max(sold, c.sold || 0); });
+        let remaining = 0;
+        sales.forEach((op) => {
+            if (!op.lots || !op.lotManaged) {
+                op.lots = [{ id: options.lotId, amount: op.amount, remaining: op.remaining, limit: op.limit, dealtAmount: op.dealtAmount || 0, targetKey: key }];
+                op.lotManaged = true;
+            }
+            let dealt = 0;
+            (op.lots || []).filter((lot) => lot.id === options.lotId).forEach((lot) => { remaining += lot.remaining; dealt += lot.dealtAmount || 0; });
+            sold = Math.max(sold, dealt);
+        });
+        mem.lotTargets[key] = { accepted: sold + remaining, updatedTick: Game.time };
+    }
+    const target = mem.lotTargets[key];
+    const delta = Math.max(0, cumulative - target.accepted);
+    const prior = sales.find((op) => op.limit === limit && op.createListing === !!createListing && op.skipFeeCap === !!skipFeeCap);
+    if (!delta) {
+        const existing = prior || sales.find((op) => (op.lots || []).some((lot) => lot.id === options.lotId));
+        return existing ? result(true, existing.id) : result(false, "nenhum saldo novo do lote");
+    }
+    const compatible = !!prior;
+    if (compatible) {
+        const source = owned(roomName);
+        if (!source || saleAvailable(source, resourceType, options.owner) < sales.reduce((sum, op) => sum + op.remaining, 0) + delta) return result(false, "saldo físico do proprietário insuficiente");
+        prior.amount += delta; prior.remaining += delta;
+        let lot = prior.lots && prior.lots.find((entry) => entry.id === options.lotId);
+        if (!prior.lots) prior.lots = [{ id: prior.id, amount: prior.amount - delta, remaining: prior.remaining - delta, limit }];
+        if (!lot) { lot = { id: options.lotId, amount: 0, remaining: 0, limit }; prior.lots.push(lot); }
+        lot.amount += delta; lot.remaining += delta;
+        lot.targetKey = key;
+        target.accepted = cumulative; target.updatedTick = Game.time;
+        if (prior.state === "waiting") touch(prior, "queued");
+        return result(true, prior.id);
+    }
+    options.lotManaged = true;
+    const response = trade("sell", roomName, resourceType, delta, limit, createListing, skipFeeCap, options);
+    if (response.ok) { target.accepted = cumulative; target.updatedTick = Game.time; operation(response.id).lots[0].targetKey = key; }
+    return response;
 }
 // createListing (default false, pedido do usuário, 2026-09-29): sem ordem
 // pública para o que não fechar negócio instantâneo - a operação negocia o
@@ -181,14 +264,17 @@ function trade(kind, roomName, resourceType, value, limit, createListing, skipFe
 // passam true porque já avaliam essa mesma taxa como parte do próprio
 // lucro líquido, com seu próprio limiar (marketFlip.minProfitRatio).
 function buy(roomName, resourceType, value, maxUnitPrice, createListing, skipFeeCap, options) { return announce("terminalBuy", trade("buy", roomName, resourceType, value, maxUnitPrice, createListing, skipFeeCap, options)); }
-function sell(roomName, resourceType, value, minUnitPrice, createListing, skipFeeCap, options) { return announce("terminalSell", trade("sell", roomName, resourceType, value, minUnitPrice, createListing, skipFeeCap, options)); }
+function sell(roomName, resourceType, value, minUnitPrice, createListing, skipFeeCap, options) {
+    return announce("terminalSell", options && options.owner && options.lotId ? sellLot(roomName, resourceType, value, minUnitPrice, createListing, skipFeeCap, options) :
+        trade("sell", roomName, resourceType, value, minUnitPrice, createListing, skipFeeCap, options));
+}
 function activeForRoom(roomName) { return activeIds().map(operation).filter((op) => active(op) && (op.sourceRoom === roomName || op.targetRoom === roomName)); }
 // `room` stays sourceRoom||targetRoom (single field) for the existing
 // per-room stats() below; `from`/`to`/`resourceType` are additive, kept
 // separate so a transfer's two rooms don't collapse into one another and a
 // market deal keeps which resource actually traded (ROADMAP 0079 follow-up:
 // the dashboard's "Mercado"/"Terminal Network" panels need both).
-function record(op, value, credits, energy) { memory().events.push({ tick: Game.time, room: op.sourceRoom || op.targetRoom, from: op.sourceRoom || null, to: op.targetRoom || null, kind: op.kind, resourceType: op.resourceType, amount: value || 0, credits: credits || 0, transactionEnergy: energy || 0 }); }
+function record(op, value, credits, energy, fees = 0) { memory().events.push({ tick: Game.time, operationId: op.id, owner: claims.owner(op), room: op.sourceRoom || op.targetRoom, from: op.sourceRoom || null, to: op.targetRoom || null, kind: op.kind, resourceType: op.resourceType, amount: value || 0, credits: credits || 0, transactionEnergy: energy || 0, marketFees: fees }); }
 
 function findHauler(roomName) { return census.creepsByRole(roomName, "hauler").find((creep) => !creep.memory.terminalJob && creep.store.getUsedCapacity() === 0); }
 function assign(op, home, direction, from, to, value, resourceType) {
@@ -209,7 +295,7 @@ function assign(op, home, direction, from, to, value, resourceType) {
     return true;
 }
 
-function orderAmount(order) { return order && (order.remainingAmount || order.amount) || 0; }
+function orderAmount(order) { return order && (order.remainingAmount === undefined ? order.amount || 0 : order.remainingAmount) || 0; }
 // Diagnostics score the full book; selection rejects known-ineligible
 // orders before computing delivery cost. Effective limits still need freight.
 function scoredOrders(op, candidatesOnly = false) {
@@ -225,7 +311,7 @@ function scoredOrders(op, candidatesOnly = false) {
     // regardless of the real order book (bug real, usuário reportou em
     // produção, 2026-09-24: terminalSell de pixel via marketPrice mostrava
     // volume no book mas caía sempre em listagem própria).
-    const currentPrices = op.effectiveLimit && priceData(op.resourceType, !op.marketOnly);
+    const currentPrices = (op.effectiveLimit || op.kind === "buy") && priceData(op.resourceType, !op.marketOnly);
     if (currentPrices) op.energyFairPrice = currentPrices.energy;
     const dead = op.deadOrderIds || [];
     const freight = new Map();
@@ -235,14 +321,17 @@ function scoredOrders(op, candidatesOnly = false) {
         if (!candidatesOnly) return true;
         if (!(op.remaining > 0) || (op.kind === "sell" && !op.marketOnly && !(op.loadedAmount > 0)) ||
             dead.indexOf(order.id) >= 0) return false;
-        return op.effectiveLimit || (op.kind === "buy" ? order.price <= op.limit : order.price >= op.limit);
+        return op.kind === "buy" ? order.price <= op.limit : op.effectiveLimit || order.price >= op.limit;
     }).map((order) => {
         const quantity = Math.min(op.remaining, orderAmount(order), op.kind === "sell" && !op.marketOnly ? (op.loadedAmount || 0) : op.remaining);
         const freightKey = quantity + ":" + order.roomName;
         if (!op.marketOnly && !freight.has(freightKey)) freight.set(freightKey, txCost(quantity, op.sourceRoom, order.roomName));
         const cost = op.marketOnly ? 0 : freight.get(freightKey);
         const fee = quantity ? cost * (op.energyFairPrice || 0) / quantity : Infinity;
-        const effective = op.effectiveLimit ? require("./swingTrade").effective(op.kind, op.resourceType, order.price, quantity, cost, op.energyFairPrice || 0) : op.kind === "buy" ? order.price + fee : order.price - fee;
+        if (op.kind === "buy") return Object.assign({ order }, purchaseCost.evaluate(Object.assign({}, op, {
+            cancelledListingFees: (op.cancelledListingFees || 0) + (op.marketOrderId ? op.orderFeesRemaining || 0 : 0),
+        }), order.price, quantity, cost, op.energyFairPrice || 0));
+        const effective = op.effectiveLimit ? require("./swingTrade").effective(op.kind, op.resourceType, order.price, quantity, cost, op.energyFairPrice || 0) : order.price - fee;
         return { order, quantity, cost, fee, effective };
     }));
 }
@@ -266,7 +355,7 @@ function scoredOrders(op, candidatesOnly = false) {
 // aqui de novo seria redundante e mais restritivo que o desenho do flip.
 function candidateOrders(op) {
     delete op.fuelQuote;
-    if (op.policy === "swing") {
+    if (op.policy === "swing" && !op.cancelledListingFees && op.state !== "cancellingListing") {
         const target = owned(op.sourceRoom);
         if (!target) return [];
         const wanted = op.kind === "sell" ? Math.min(op.remaining, op.loadedAmount || 0) : op.remaining;
@@ -275,7 +364,7 @@ function candidateOrders(op) {
         op.limit = candidate.limit; op.energyFairPrice = candidate.energyFairPrice;
         delete op.policyBlock;
         op.fuelQuote = { tick: Game.time, cost: candidate.cost };
-        return [candidate];
+        return [op.kind === "buy" ? Object.assign({}, candidate, purchaseCost.evaluate(op, candidate.order.price, candidate.quantity, candidate.cost, candidate.energyFairPrice)) : candidate];
     }
     // deadOrderIds excludes orders that already burned a deal() call this
     // operation without any observable effect (see the verification in
@@ -285,8 +374,8 @@ function candidateOrders(op) {
     const dead = op.deadOrderIds || [];
     const maxFeeRatio = config.get("terminalOps.maxFeeRatio", 0.05);
     const candidates = scoredOrders(op, true).filter((item) => item.quantity > 0 && dead.indexOf(item.order.id) < 0 &&
-        (op.kind === "buy" ? (op.effectiveLimit ? item.effective : item.order.price) <= op.limit : (op.effectiveLimit ? item.effective : item.order.price) >= op.limit) &&
-        (op.skipFeeCap || item.fee <= item.order.price * maxFeeRatio)
+        (op.kind === "buy" ? item.ok : (op.effectiveLimit ? item.effective : item.order.price) >= op.limit) &&
+        (op.kind === "buy" || op.skipFeeCap || item.fee <= item.order.price * maxFeeRatio)
     ).sort((a, b) => op.kind === "buy" ? a.effective - b.effective : b.effective - a.effective);
     if (candidates[0]) op.fuelQuote = { tick: Game.time, cost: candidates[0].cost };
     return candidates;
@@ -315,7 +404,15 @@ function reportNoCandidate(op) {
         if (logDue) { op.noCandidateLogTick = Game.time; console.log(head + text); }
         return;
     }
-    const best = scored.sort((a, b) => op.kind === "buy" ? a.order.price - b.order.price : b.order.price - a.order.price)[0];
+    const best = scored.sort((a, b) => op.kind === "buy" ? a.effective - b.effective : b.effective - a.effective)[0];
+    if (op.kind === "buy") {
+        const reason = best.reason || "aguardando recursos/créditos/capacidade para executar";
+        const changed = !op.noCandidate || op.noCandidate.reason !== reason;
+        op.noCandidate = Object.assign({}, best, { order: undefined, tick: Game.time, reason,
+            best: { id: best.order.id, room: best.order.roomName, price: best.order.price }, owner: claims.owner(op) });
+        if (logDue || changed) { op.noCandidateLogTick = Game.time; console.log(head + reason + "; bruto " + best.quantity + ", líquido " + best.netAmount + ", frete " + best.cost + ", efetivo " + best.effective + ", máximo " + op.limit); }
+        return;
+    }
     const maxFeeRatio = config.get("terminalOps.maxFeeRatio", 0.05);
     const priceOk = op.kind === "buy" ? best.order.price <= op.limit : best.order.price >= op.limit;
     const feeOk = op.skipFeeCap || best.fee <= best.order.price * maxFeeRatio;
@@ -361,9 +458,25 @@ function retryDeal(op, target) {
     }
     executeDeal(op, target);
 }
-function executeDeal(op, target) {
+function executeDeal(op, target, selected) {
     if (!op.marketOnly && terminalBusy(op.sourceRoom)) { op.error = "terminal já usado neste tick"; touch(op, "waiting"); return; }
-    const candidate = candidateOrders(op)[0];
+    let choices = selected ? [selected] : candidateOrders(op);
+    if (op.kind === "sell" && op.marketOrderId) {
+        const order = Game.market.orders && Game.market.orders[op.marketOrderId];
+        const exposed = orderAmount(order);
+        const unlisted = Math.max(0, op.remaining - exposed);
+        const physical = op.marketOnly ? unlisted : Math.max(0, claims.physicalFree(target, target.terminal, op.resourceType, op.id) - exposed);
+        if (!unlisted || !physical) { touch(op, "listed"); return; }
+        choices = choices.map((item) => {
+            const quantity = Math.min(item.quantity, unlisted, physical);
+            const cost = op.marketOnly ? 0 : txCost(quantity, op.sourceRoom, item.order.roomName);
+            const fee = cost * (op.energyFairPrice || 0) / Math.max(1, quantity);
+            return Object.assign({}, item, { quantity, cost, fee, effective: item.order.price - fee });
+        }).filter((item) => item.quantity > 0 && (op.effectiveLimit ? item.effective : item.order.price) >= op.limit &&
+            (op.skipFeeCap || item.fee <= item.order.price * config.get("terminalOps.maxFeeRatio", 0.05)));
+    }
+    const candidate = op.kind === "buy" ? choices.find((item) => canExecutePurchase(op, target, item)) || choices[0] : choices[0];
+    if (candidate && op.kind === "buy" && op.marketOrderId) { cancelListingForDeal(op); return; }
     // createListing:false: negocia o que existir (parcial incluso, tick a
     // tick, via candidateOrders() normalmente); esgotado o livro elegível,
     // só espera/retenta - nunca cria ordem pública pro que faltar. Loga só
@@ -409,7 +522,7 @@ function executeDeal(op, target) {
         op.error = "capacidade de recebimento insuficiente"; touch(op, "waiting"); return;
     }
     if (op.kind === "sell" && !op.marketOnly) {
-        const held = storeValue(target.terminal.store, op.resourceType);
+        const held = claims.physicalFree(target, target.terminal, op.resourceType, op.id);
         if (held < candidate.quantity) { shortCargo(op, held, candidate.quantity); return; }
     }
     // Diagnostic (2026-09-24, usuário reportou em produção): status OK de
@@ -471,6 +584,7 @@ function executeDeal(op, target) {
         price: candidate.order.price, tick: Game.time,
         orderRemaining: orderAmount(candidate.order),
         terminalBefore: op.marketOnly ? 0 : storeValue(target.terminal.store, op.resourceType),
+        sunkFees: op.kind === "buy" ? op.cancelledListingFees || 0 : 0,
     };
     touch(op, "settling");
 }
@@ -513,17 +627,25 @@ function settleDeal(op, source) {
         op.error = "deal retornou OK mas nenhuma troca foi observada";
         op.deadOrderIds = (op.deadOrderIds || []).concat(pending.orderId).slice(-10);
         touch(op, op.kind === "sell" && !op.marketOnly ? "atTerminal" : "waiting");
+        if (op.cancelRequested) cancel(op.id);
         return;
     }
     op.remaining = Math.max(0, op.remaining - traded); op.dealtAmount = (op.dealtAmount || 0) + traded; op.transactionCost += pending.cost;
+    op.lastSuccessfulDealTick = Game.time;
+    if (op.kind === "buy") {
+        op.netBought = (op.netBought || 0) + (op.resourceType === RESOURCE_ENERGY ? traded - pending.cost : traded);
+        op.buyCredits = (op.buyCredits || 0) + pending.price * traded;
+        op.cancelledListingFees = Math.max(0, (op.cancelledListingFees || 0) - (pending.sunkFees || 0));
+    } else settleLots(op, traded, pending.price, pending.cost * (op.energyFairPrice || 0));
     op.feeLoadedAmount = Math.max(0, (op.feeLoadedAmount || 0) - pending.cost);
     if (op.kind === "sell") op.loadedAmount = Math.max(0, (op.loadedAmount || 0) - traded);
-    record(op, traded, pending.price * traded * (op.kind === "buy" ? -1 : 1), pending.cost);
+    record(op, traded, pending.price * traded * (op.kind === "buy" ? -1 : 1), pending.cost, pending.sunkFees || 0);
     if (op.kind === "buy" && config.get("stockPolicy.enabled", true) && !stockPolicy.used(source, op.resourceType))
         op.receivedAmount = Math.max(op.receivedAmount || 0, op.dealtAmount);
-    touch(op, op.remaining ? "queued" : (op.kind === "buy" && !op.marketOnly ? "awaitingReceipt" : "completed"));
+    touch(op, op.remaining ? (op.marketOrderId ? "listed" : "queued") : (op.kind === "buy" && !op.marketOnly ? "awaitingReceipt" : "completed"));
     if (op.kind === "buy" && !op.remaining && (op.receivedAmount || 0) >= (op.dealtAmount || 0)) touch(op, "completed");
     if (op.kind === "sell" && op.policy === "swing") require("./swingTrade").sold(op.sourceRoom, op.resourceType, traded);
+    if (op.cancelRequested && active(op)) cancel(op.id);
 }
 function competitivePrice(op) {
     const step = config.get("terminalOps.marketPriceStep", 0.001);
@@ -553,21 +675,15 @@ function saleBuffer(op, source) {
 function fundedListing(op, source) {
     const order = op.marketOrderId && Game.market && Game.market.orders && Game.market.orders[op.marketOrderId];
     return op.fixedListing && order && op.loadedAmount >= op.remaining &&
-        storeValue(source.terminal.store, op.resourceType) >= op.remaining;
+        claims.physicalFree(source, source.terminal, op.resourceType, op.id) >= op.remaining;
 }
 function stageSaleCargo(op, source) {
     if (op.policy === "swing" && !fundedListing(op, source) && stockPolicy.available(source, op.resourceType, op.id) < op.remaining) {
         op.error = "estoque passou a ser comprometido"; cancel(op.id); return false;
     }
     const buffer = saleBuffer(op, source);
-    const already = storeValue(source.terminal.store, op.resourceType);
-    // lockConflict guarantees this op is the sole active sell/transfer
-    // for this resource/room, so anything already in the terminal - a
-    // previous batch, or logistics that dropped it here before this
-    // operation existed - is usable cargo. Without crediting it here,
-    // loadedAmount stays zero whenever the terminal already holds at
-    // least the staging buffer, and candidateOrders' cargo cap then
-    // blocks every deal forever.
+    const already = claims.physicalFree(source, source.terminal, op.resourceType, op.id);
+    // Only cargo not allocated to another operation may be credited here.
     const usable = Math.min(already, op.remaining);
     if (usable > op.loadedAmount) op.loadedAmount = usable;
     // ...and the other way round (bug real, usuario reportou em producao, 2026-10-03: deal()
@@ -576,26 +692,136 @@ function stageSaleCargo(op, source) {
     // o numero antigo fazia o candidateOrders() oferecer mais do que existe e o deal() falhar
     // eternamente; agora o numero desce ao estoque real e a diferenca volta a ser carregada.
     if (op.loadedAmount > already) op.loadedAmount = already;
-    return assign(op, source, "load", source.storage, source.terminal, Math.min(op.remaining - op.loadedAmount, Math.max(0, buffer - already)));
+    return assign(op, source, "load", source.storage, source.terminal, Math.min(op.remaining - op.loadedAmount,
+        claims.physicalFree(source, source.storage, op.resourceType, op.id), Math.max(0, buffer - storeValue(source.terminal.store, op.resourceType))));
+}
+function settleLots(op, quantity, price, fees) {
+    let left = quantity;
+    (op.lots || []).forEach((lot) => {
+        const taken = Math.min(left, lot.remaining || 0);
+        lot.remaining -= taken; lot.dealtAmount = (lot.dealtAmount || 0) + taken;
+        lot.credits = (lot.credits || 0) + taken * price;
+        lot.fees = (lot.fees || 0) + (quantity ? fees * taken / quantity : 0);
+        left -= taken;
+    });
+}
+function chargeMarketFee(op, fee, before) {
+    marketAccounting.debit(fee, before);
+    op.marketFees = (op.marketFees || 0) + fee;
+    op.orderFeesRemaining = (op.orderFeesRemaining || 0) + fee;
+    if (op.policy === "swing") op.listingFee = (op.listingFee || 0) + fee;
+}
+function hydrateMarketFees(op) {
+    if (op.marketFees !== undefined) return;
+    const recorded = typeof op.listingFee === "number";
+    const known = recorded ? op.listingFee : op.listedPrice > 0 && op.listedAmount > 0 ? op.listedPrice * op.listedAmount * 0.05 : 0;
+    op.marketFees = Math.max(0, known);
+    const order = op.marketOrderId && Game.market && Game.market.orders && Game.market.orders[op.marketOrderId];
+    op.orderFeesRemaining = order ? op.marketFees * Math.min(1, orderAmount(order) / Math.max(1, op.listedAmount || op.amount)) : 0;
+    if (known && !recorded) op.feeHistoryEstimated = true;
+}
+function cancelListingForDeal(op) {
+    if (op.pendingListingCancel) {
+        if (Game.time <= op.pendingListingCancel.tick || Game.market.orders && Game.market.orders[op.pendingListingCancel.id]) {
+            op.error = "aguardando confirmação do cancelamento da listing"; return false;
+        }
+        op.cancelledListingFees = (op.cancelledListingFees || 0) + (op.orderFeesRemaining || 0);
+        op.orderFeesRemaining = 0;
+        delete op.marketOrderId; delete op.pendingListingCancel;
+        delete op.listedAmount; delete op.listedFilled; delete op.listedTick;
+        touch(op, op.kind === "buy" ? "queued" : "atTerminal");
+        return true;
+    }
+    if (!op.marketOrderId) return true;
+    if (typeof Game.market.cancelOrder !== "function") { op.error = "cancelOrder indisponível"; return false; }
+    const status = Game.market.cancelOrder(op.marketOrderId);
+    if (status !== OK) { op.error = "cancelOrder retornou " + status; return false; }
+    op.pendingListingCancel = { id: op.marketOrderId, tick: Game.time };
+    touch(op, "cancellingListing");
+    return false;
+}
+function canExecutePurchase(op, source, candidate) {
+    if (!candidate || !candidate.ok || !source) return false;
+    if (!op.marketOnly && (terminalBusy(source.name) || source.terminal.cooldown || freeCapacity(source.terminal.store, op.resourceType) < candidate.quantity)) return false;
+    const credits = candidate.order.price * candidate.quantity;
+    if (Game.market.credits < credits || marketAccounting.automatic(op) && marketAccounting.available(op.id) < credits) return false;
+    const fuel = op.marketOnly ? Infinity : Math.max(0, storeValue(source.terminal.store, RESOURCE_ENERGY) -
+        managedTerminalIncrease(source.name, RESOURCE_ENERGY, activeForRoom(source.name).filter((other) => other.id !== op.id)));
+    return fuel >= candidate.cost;
+}
+function buyListingCeiling(op, order) {
+    const quantity = order ? orderAmount(order) : op.remaining;
+    if (!(quantity > 0)) return 0;
+    const fees = (op.cancelledListingFees || 0) + (order ? op.orderFeesRemaining || 0 : 0);
+    const allowance = Math.max(0, op.limit - fees / quantity);
+    if (!order) return allowance / 1.05;
+    // Price decreases keep sunk fees; increases add 5% of the positive price delta.
+    return allowance <= order.price ? allowance : (allowance + order.price * 0.05) / 1.05;
 }
 function listResidual(op, target) {
     if (!Game.market || typeof Game.market.createOrder !== "function") { op.error = "mercado indisponível"; touch(op, "waiting"); return; }
     // Cheap interval check first: competitivePrice() scans the order book, and
     // a live order inside its reprice window needs nothing from it.
     const liveOrder = op.marketOrderId && Game.market.orders && Game.market.orders[op.marketOrderId];
-    if (op.fixedListing && (liveOrder || op.listedTick)) { touch(op, "listed"); return; }
+    if (op.createdListing && !liveOrder && op.listedTick !== undefined) {
+        // Never create twice while waiting for the engine to expose an order ID.
+        if (Game.time - op.listedTick > config.get("terminalOps.orderConfirmationTicks", 10)) {
+            op.error = "listing criada não reconciliada; não será recriada automaticamente"; touch(op, "failed"); return;
+        }
+        touch(op, "listing"); return;
+    }
     if (op.policy === "swing") {
         const ref = require("./swingTrade").reference(op.resourceType, op.kind);
-        if (ref.reason || stockPolicy.available(target, op.resourceType, op.id) < op.remaining) {
-            op.error = ref.reason || "estoque comprometido"; touch(op, "waiting"); return;
+        if (!ref.reason) {
+            op.limit = ref.price * (1 + (op.kind === "buy" ? -1 : 1) * config.get("swing.margin", 0.01));
+            op.referencePrice = ref.price; op.energyFairPrice = ref.energy;
         }
-        op.limit = ref.price * (1 + config.get("swing.margin", 0.01));
-        op.referencePrice = ref.price; op.energyFairPrice = ref.energy;
+    }
+    const extended = liveOrder && Math.max(0, op.remaining - (orderAmount(liveOrder) + (op.pendingExtension && op.pendingExtension.amount || 0)));
+    if (op.kind === "sell" && extended > 0 && !op.pendingExtension) {
+        const exposed = orderAmount(liveOrder);
+        const free = op.marketOnly ? extended : Math.max(0, claims.physicalFree(target, target.terminal, op.resourceType, op.id) - exposed);
+        const quote = candidateOrders(op).find((item) => item.quantity > 0);
+        if (quote && free > 0) {
+            const quantity = Math.min(extended, free, quote.quantity);
+            const cost = op.marketOnly ? 0 : txCost(quantity, op.sourceRoom, quote.order.roomName);
+            const fee = cost * (op.energyFairPrice || 0) / quantity;
+            const effective = quote.order.price - fee;
+            if ((op.effectiveLimit ? effective : quote.order.price) >= op.limit && (op.skipFeeCap || fee <= quote.order.price * config.get("terminalOps.maxFeeRatio", 0.05))) {
+                executeDeal(op, target, Object.assign({}, quote, { quantity, cost, fee, effective, exposed }));
+                return;
+            }
+        }
+    }
+    if (op.pendingExtension) {
+        const pending = op.pendingExtension;
+        if (liveOrder && Game.time > pending.tick && ((liveOrder.totalAmount || 0) >= pending.totalBefore + pending.amount || orderAmount(liveOrder) >= pending.remainingBefore + pending.amount)) {
+            op.listedAmount += pending.amount; delete op.pendingExtension;
+        } else {
+            if (Game.time - pending.tick > config.get("terminalOps.orderConfirmationTicks", 10)) {
+                delete op.pendingExtension; op.error = "extensão não confirmada; listing preservada sem repetir taxa"; touch(op, "failed"); return;
+            }
+            touch(op, "listed"); return;
+        }
+    }
+    if (liveOrder && extended > 0 && (op.kind !== "sell" || liveOrder.price >= op.limit / 0.95)) {
+        if (op.kind === "sell" && claims.physicalFree(target, target.terminal, op.resourceType, op.id) < op.remaining) { op.error = "aguardando lastro integral da listing"; touch(op, "listed"); return; }
+        const fee = liveOrder.price * extended * 0.05;
+        if (Game.market.credits < fee || fee > marketAccounting.available(op.id)) { op.error = "orçamento insuficiente para estender listing"; touch(op, "listed"); return; }
+        if (op.kind === "buy" && liveOrder.price + ((op.orderFeesRemaining || 0) + (op.cancelledListingFees || 0) + fee) /
+            Math.max(1, orderAmount(liveOrder) + extended) > op.limit) { op.error = "extensão excede limite efetivo"; touch(op, "listed"); return; }
+        const beforeCredits = Game.market.credits, totalBefore = liveOrder.totalAmount || 0, remainingBefore = orderAmount(liveOrder);
+        const status = typeof Game.market.extendOrder === "function" ? Game.market.extendOrder(op.marketOrderId, extended) : ERR_INVALID_ARGS;
+        if (status === OK) {
+            op.pendingExtension = { amount: extended, tick: Game.time, totalBefore, remainingBefore };
+            chargeMarketFee(op, fee, beforeCredits);
+        } else op.error = "extendOrder retornou " + status;
+        touch(op, "listed"); return;
     }
     if (liveOrder && Game.time - (op.repriceTick || op.listedTick || 0) < config.get("terminalOps.repriceInterval", 1000)) { touch(op, "listed"); return; }
-    const ceiling = op.kind === "buy" ? op.limit / 1.05 : Infinity;
+    const ceiling = op.kind === "buy" ? buyListingCeiling(op, liveOrder) : Infinity;
     const floor = op.kind === "sell" ? op.limit / 0.95 : 0;
-    const price = op.fixedListing ? require("./swingTrade").listingPrice(target, op.resourceType, op.limit, require("./orderBook").all()) : op.kind === "buy" ? Math.min(competitivePrice(op), ceiling) : Math.max(competitivePrice(op), floor);
+    const price = op.fixedListing && op.kind === "sell" ? require("./swingTrade").listingPrice(target, op.resourceType, op.limit, require("./orderBook").all()) : op.kind === "buy" ? Math.min(competitivePrice(op), ceiling) : Math.max(competitivePrice(op), floor);
     if (!(price > 0) || (op.kind === "buy" && price > ceiling) || (op.kind === "sell" && price < floor)) { op.error = "não há preço competitivo dentro do limite líquido"; touch(op, "waiting"); return; }
     const old = op.marketOrderId && Game.market.orders && Game.market.orders[op.marketOrderId];
     const interval = config.get("terminalOps.repriceInterval", 1000);
@@ -606,8 +832,8 @@ function listResidual(op, target) {
     // createOrder, what this did until 2026-09-24, re-paid the full 5% of the
     // whole order every repriceInterval and refunded none of the previous fee:
     // repricing the 62751 O of terminal-180, listed at 62.445, would have burned
-    // ~196k credits (bug real, usuário reportou em produção). Recreating is now
-    // only the fallback for when changeOrderPrice itself fails.
+    // ~196k credits (bug real, usuário reportou em produção). Failed changes
+    // now preserve the paid order for a later retry.
     let changed = null;
     if (old) {
         if (price === op.listedPrice) { op.repriceTick = Game.time; touch(op, "listed"); return; }
@@ -618,9 +844,11 @@ function listResidual(op, target) {
             touch(op, "listed");
             return;
         }
+        const before = Game.market.credits;
         changed = typeof Game.market.changeOrderPrice === "function" ? Game.market.changeOrderPrice(op.marketOrderId, price) : null;
-        if (changed === OK) { op.listedPrice = price; op.repriceTick = Game.time; touch(op, "listed"); return; }
-        if (changed !== null) op.error = "changeOrderPrice retornou " + changed;
+        if (changed === OK) { chargeMarketFee(op, delta, before); op.listedPrice = price; op.repriceTick = Game.time; touch(op, "listed"); return; }
+        op.error = "changeOrderPrice retornou " + changed;
+        touch(op, "listed"); return;
     }
     const fee = price * op.remaining * 0.05;
     if (op.policy === "swing" && fee > marketAccounting.available()) { op.error = "piso global de créditos para taxa"; touch(op, "waiting"); return; }
@@ -634,16 +862,21 @@ function listResidual(op, target) {
         touch(op, old ? "listed" : "failed");
         return;
     }
-    if (old && typeof Game.market.cancelOrder === "function") Game.market.cancelOrder(op.marketOrderId);
+    if (op.kind === "sell" && !op.marketOnly && activeForRoom(op.sourceRoom).some((other) => other.id !== op.id && claims.outgoing(other, target, op.resourceType)) &&
+        claims.physicalFree(target, target.terminal, op.resourceType, op.id) < op.remaining) { op.error = "aguardando lastro integral da listing"; touch(op, "waiting"); return; }
+    if (activeForRoom(op.sourceRoom).some((other) => other.id !== op.id && other.resourceType === op.resourceType && other.kind === op.kind && other.listedTick === Game.time && !other.marketOrderId)) {
+        op.error = "listing do mesmo recurso sendo confirmada"; touch(op, "waiting"); return;
+    }
     const creditsBefore = Game.market.credits;
     const status = Game.market.createOrder({ type: op.kind === "buy" ? ORDER_BUY : ORDER_SELL, resourceType: op.resourceType, price, totalAmount: op.remaining, roomName: target.name });
-    if (status === OK) marketAccounting.debit(fee, creditsBefore);
+    if (status === OK) chargeMarketFee(op, fee, creditsBefore);
     if (status !== OK) { op.error = "createOrder retornou " + status; touch(op, "waiting"); return; }
     op.marketOrderId = null; op.listedPrice = price; op.listedAmount = op.remaining; op.listedTick = Game.time; op.repriceTick = Game.time; touch(op, "listing");
-    if (op.policy === "swing") op.listingFee = fee;
+    op.createdListing = true;
 }
 function bindCreatedOrders() {
     if (!Game.market || !Game.market.orders) return;
+    const bound = new Set(activeIds().map(operation).map((op) => op.marketOrderId).filter(Boolean));
     activeIds().forEach((id) => {
         const op = operation(id);
         // op.listedTick is only ever set by listResidual() right after a real
@@ -663,8 +896,10 @@ function bindCreatedOrders() {
         if (!op || op.state !== "listing" || !op.listedTick) return;
         Object.keys(Game.market.orders).some((orderId) => {
             const order = Game.market.orders[orderId];
+            if (bound.has(orderId)) return false;
             if (!order || order.roomName !== op.sourceRoom || order.resourceType !== op.resourceType || order.type !== (op.kind === "buy" ? ORDER_BUY : ORDER_SELL) || order.created < op.listedTick) return false;
-            op.marketOrderId = orderId; touch(op, "listed"); return true;
+            if (op.createdListing && (order.price !== op.listedPrice || order.totalAmount !== undefined && order.totalAmount !== op.listedAmount)) return false;
+            bound.add(orderId); op.marketOrderId = orderId; touch(op, "listed"); return true;
         });
     });
 }
@@ -684,12 +919,23 @@ function syncManagedOrders() {
         if (!active(op) || !op.marketOrderId || typeof op.listedAmount !== "number") return;
         const order = Game.market.orders[op.marketOrderId];
         if (!order) return;
+        hydrateMarketFees(op);
         const remainingOnMarket = order.remainingAmount === undefined ? order.amount : order.remainingAmount;
+        if (op.pendingExtension && Game.time > op.pendingExtension.tick &&
+            ((order.totalAmount || 0) >= op.pendingExtension.totalBefore + op.pendingExtension.amount || remainingOnMarket >= op.pendingExtension.remainingBefore + op.pendingExtension.amount)) {
+            op.listedAmount += op.pendingExtension.amount; delete op.pendingExtension;
+        }
         const filled = Math.max(0, op.listedAmount - remainingOnMarket - (op.listedFilled || 0));
         if (filled <= 0) return;
         op.listedFilled = (op.listedFilled || 0) + filled;
         op.remaining = Math.max(0, op.remaining - filled);
-        record(op, filled, order.price * filled * (op.kind === "buy" ? -1 : 1), 0);
+        const fees = (op.orderFeesRemaining || 0) * Math.min(1, filled / Math.max(1, filled + remainingOnMarket));
+        op.orderFeesRemaining = Math.max(0, (op.orderFeesRemaining || 0) - fees);
+        op.dealtAmount = (op.dealtAmount || 0) + filled;
+        op.lastSuccessfulDealTick = Game.time;
+        if (op.kind === "sell") { op.loadedAmount = Math.max(0, (op.loadedAmount || 0) - filled); settleLots(op, filled, order.price, fees); }
+        else { op.netBought = (op.netBought || 0) + filled; op.buyCredits = (op.buyCredits || 0) + filled * order.price; }
+        record(op, filled, order.price * filled * (op.kind === "buy" ? -1 : 1), 0, fees);
         if (op.remaining <= 0) {
             if (op.kind === "buy") touch(op, "awaitingReceipt");
             else touch(op, "completed");
@@ -1059,6 +1305,14 @@ function gcOperations() {
         const op = operation(id);
         if (op && FINAL_STATES.indexOf(op.state) >= 0 && Game.time - (op.updatedTick || op.createdTick || Game.time) >= retention) delete memory().operations[id];
     });
+    const targets = memory().lotTargets || {};
+    if (!Object.keys(targets).length) return;
+    const liveOwners = new Set(Object.values(memory().operations).filter(active).map((op) => claims.owner(op)));
+    const chains = Memory.craft && Memory.craft.active || {};
+    Object.values(chains).forEach((c) => liveOwners.add("craft:" + c.id));
+    Object.keys(targets).forEach((key) => {
+        if (Game.time - targets[key].updatedTick >= retention && !Array.from(liveOwners).some((owner) => key.startsWith(owner + ":"))) delete targets[key];
+    });
 }
 const perf = {};
 function phase(name, fn) {
@@ -1110,6 +1364,8 @@ function settleOrphanBuy(op, source) {
 }
 function runOperation(id) {
         const op = operation(id); if (!active(op)) return;
+        claims.owner(op);
+        hydrateMarketFees(op);
         const marketOnly = op.marketOnly || marketOnlyResource(op.resourceType);
         const source = op.sourceRoom && (marketOnly ? room(op.sourceRoom) : owned(op.sourceRoom)), target = op.targetRoom && owned(op.targetRoom);
         if (op.policy === "swing" && op.kind === "sell" && source && op.state !== "settling" && !fundedListing(op, source) &&
@@ -1121,6 +1377,15 @@ function runOperation(id) {
             return;
         }
         if (!source || (op.kind === "transfer" && !target)) { op.error = "terminal/storage indisponível"; touch(op, "waiting"); return; }
+        if (op.cancelRequested && !op.pendingDeal && !op.pendingExtension && op.state !== "recovering") { cancel(op.id); return; }
+        if (op.state === "cancellingListing") { cancelListingForDeal(op); return; }
+        if (op.kind === "buy" && (op.state === "listing" || op.state === "listed")) {
+            const candidate = candidateOrders(op).find((item) => canExecutePurchase(op, source, item));
+            if (candidate) {
+                if (cancelListingForDeal(op)) executeDeal(op, source);
+                return;
+            }
+        }
         if (marketOnly) {
             if (op.state === "settling") settleDeal(op, source);
             else if (op.state === "queued" || op.state === "waiting") retryDeal(op, source);
@@ -1167,7 +1432,8 @@ function runOperations() {
             if (["settling", "awaitingReceipt", "unloading", "recovering"].indexOf(op.state) >= 0) return 0;
             return op.kind === "buy" && op.resourceType === RESOURCE_ENERGY ? 1 : 2;
         };
-        return priority(a) - priority(b);
+        return priority(a) - priority(b) || (operation(a).lastSuccessfulDealTick || operation(a).createdTick || 0) -
+            (operation(b).lastSuccessfulDealTick || operation(b).createdTick || 0);
     }).forEach((id) => {
         const head = operation(id);
         if (!active(head)) return;
@@ -1203,10 +1469,18 @@ function runHauler(creep) {
         return true;
     }
     if (carried > 0) {
-        const status = creep.transfer(to, job.resourceType);
-        if (status === ERR_NOT_IN_RANGE) creep.moveTo(to, { range: 1, reusePath: 10 });
+        const cancelling = !!op.cancelRequested || !active(op);
+        const home = cancelling && owned(op.sourceRoom || op.targetRoom);
+        const destination = home ? home.storage : to;
+        const status = creep.transfer(destination, job.resourceType);
+        if (status === ERR_NOT_IN_RANGE) creep.moveTo(destination, { range: 1, reusePath: 10 });
         else if (status === OK) {
-            if (job.direction === "fee") { op.feeJob = false; op.feeLoadedAmount = (op.feeLoadedAmount || 0) + carried; touch(op, "atTerminal"); }
+            if (cancelling) {
+                op.recoveredAmount = (op.recoveredAmount || 0) + carried;
+                op.haulerName = null;
+                if (active(op)) cancel(op.id);
+            }
+            else if (job.direction === "fee") { op.feeJob = false; op.feeLoadedAmount = (op.feeLoadedAmount || 0) + carried; touch(op, "atTerminal"); }
             else if (job.direction === "load") { op.loadedAmount += carried; touch(op, op.loadedAmount >= transferLoadTarget(op) ? "atTerminal" : "queued"); }
             else if (job.direction === "recover") {
                 op.recoveredAmount = (op.recoveredAmount || 0) + carried;
@@ -1241,22 +1515,36 @@ function runHauler(creep) {
         return true;
     }
     const capacity = typeof creep.store.getFreeCapacity === "function" ? creep.store.getFreeCapacity(job.resourceType) : job.amount;
-    const request = Math.min(job.amount, Math.max(0, capacity));
-    if (request <= 0) return true;
+    const home = owned(creep.memory.homeRoom || op.sourceRoom || op.targetRoom);
+    let available = Infinity;
+    if (home && (from === home.storage || from === home.terminal))
+        available = claims.physicalFree(home, from, job.resourceType, op.id);
+    const request = Math.min(job.amount, Math.max(0, capacity), available);
+    if (request <= 0) { op.error = "carga reservada por outro proprietário"; op.haulerName = null; delete creep.memory.terminalJob; touch(op, "waiting"); return true; }
     const status = creep.withdraw(from, job.resourceType, request);
     if (status === ERR_NOT_IN_RANGE) creep.moveTo(from, { range: 1, reusePath: 10 });
-    else if (status !== OK) { op.error = "withdraw retornou " + status; op.haulerName = null; touch(op, "waiting"); delete creep.memory.terminalJob; }
+    else if (status === OK) claims.withdraw(from, job.resourceType, request);
+    else { op.error = "withdraw retornou " + status; op.haulerName = null; touch(op, "waiting"); delete creep.memory.terminalJob; }
     return true;
 }
 function cancel(id) {
     const op = operation(id); if (!op) return result(false, "operação desconhecida");
-    if (op.haulerName && Game.creeps && Game.creeps[op.haulerName] && storeValue(Game.creeps[op.haulerName].store, op.resourceType) > 0) { op.error = "carga já retirada; aguardando recuperação"; touch(op, "recovering"); return result(true, id); }
+    hydrateMarketFees(op);
+    if (op.pendingDeal || op.pendingExtension) { op.cancelRequested = true; op.error = "aguardando confirmação do intent antes de cancelar"; return result(true, id); }
+    if (op.haulerName && Game.creeps && Game.creeps[op.haulerName] && storeValue(Game.creeps[op.haulerName].store, op.resourceType) > 0) { op.cancelRequested = true; op.error = "carga já retirada; aguardando recuperação"; touch(op, "recovering"); return result(true, id); }
     if (op.marketOrderId && Game.market && typeof Game.market.cancelOrder === "function") {
         const status = Game.market.cancelOrder(op.marketOrderId);
         if (status !== OK && Game.market.orders && Game.market.orders[op.marketOrderId]) {
             op.error = "cancelOrder retornou " + status;
             return result(false, op.error);
         }
+    }
+    if (active(op) && op.orderFeesRemaining > 0) {
+        op.cancelledListingFees = (op.cancelledListingFees || 0) + op.orderFeesRemaining;
+        record(op, 0, 0, 0, op.orderFeesRemaining);
+        const left = Math.max(1, op.remaining || 0);
+        (op.lots || []).forEach((lot) => { lot.fees = (lot.fees || 0) + op.orderFeesRemaining * (lot.remaining || 0) / left; });
+        op.orderFeesRemaining = 0;
     }
     touch(op, "cancelled"); return result(true, id);
 }
@@ -1324,4 +1612,4 @@ global.terminalOperation = (id) => {
     const op = operation(id);
     return op ? JSON.stringify(op, null, 2) : "[terminalOps] operação desconhecida: " + id;
 };
-module.exports = { perf, lockConflict, transfer, buy, sell, cancel, tick, runHauler, operation, activeForRoom, txCost, stats, marketTransactionStats, terminalTransferStats };
+module.exports = { perf, lockConflict, transfer, buy, sell, sellLot, saleAvailable, evaluatePurchase: purchaseCost.evaluate, cancel, tick, runHauler, operation, activeForRoom, txCost, stats, marketTransactionStats, terminalTransferStats };

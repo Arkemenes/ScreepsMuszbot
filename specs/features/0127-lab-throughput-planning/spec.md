@@ -86,6 +86,8 @@ da investigação. Plan/tasks serão escritos após revisão desta spec.
 1. Nos conjuntos 1–3/1–6/1–10, largo seleciona 1/2 e 1/4/8 saídas. Subconjuntos
    sem esses centrais selecionam o melhor par válido ou informam inviabilidade.
    Labs inativos, ausentes e reservados não recebem intents de produção.
+   O executor revalida os dois inputs e o output a cada chamada, inclusive
+   em reação manual/legada já configurada antes da reserva para boost.
 2. Uma cadeia nova de 3.000 XLH2O compara candidatos com valores oficiais de
    `REACTION_TIME` e logística explícita. A seleção inclui rotação de saídas e
    entrada durante cooldown em RCL6/7; largo continua candidato em RCL8.

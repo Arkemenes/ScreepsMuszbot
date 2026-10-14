@@ -29,6 +29,12 @@ function execute(structure) {
     const reaction = reactions.find((r) => outputsOf(r).includes(structure.id));
     if (!reaction || structure.cooldown > 0) return;
     const roomName = structure.room.name;
+    const reserved = Memory.rooms[roomName].labBoostReservations || {};
+    const a = Game.getObjectById(reaction.input1), b = Game.getObjectById(reaction.input2);
+    if (!a || !b || a.id === b.id || structure.id === a.id || structure.id === b.id) return;
+    // A reaction may predate a boost reservation or an RCL change; check every participant live.
+    if (reserved[structure.id] || reserved[a.id] || reserved[b.id] ||
+        structure.isActive && !structure.isActive() || a.isActive && !a.isActive() || b.isActive && !b.isActive()) return;
     if (!ledgers[roomName]) {
         const available = {}, used = {}, outputs = new Set();
         // Capture every source before the first intent: production this tick
@@ -42,8 +48,6 @@ function execute(structure) {
         ledgers[roomName] = { available, used, outputs };
     }
     const ledger = ledgers[roomName];
-    const a = Game.getObjectById(reaction.input1), b = Game.getObjectById(reaction.input2);
-    if (!a || !b || a.id === b.id || structure.id === a.id || structure.id === b.id) return;
     if (a.mineralType !== reaction.a || b.mineralType !== reaction.b ||
         structure.mineralType && structure.mineralType !== reaction.product) return;
     if (structure.pos && (!structure.pos.inRangeTo(a, 2) || !structure.pos.inRangeTo(b, 2))) return;

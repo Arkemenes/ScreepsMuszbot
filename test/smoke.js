@@ -12577,10 +12577,10 @@ Memory.settings = Object.assign({}, Memory.settings, {
         credits: 20000000, incomingTransactions: [],
         orders,
         getAllOrders: () => [],
-        createOrder: () => {
+        createOrder: (request) => {
             createCalls++;
             const id = "fresh-" + (nextOrderId++);
-            orders[id] = { id, price: 63000, remainingAmount: 50, amount: 50, resourceType: "pixel", type: ORDER_SELL, roomName: "W7N23", created: Game.time };
+            orders[id] = { id, price: request.price, remainingAmount: 50, amount: 50, resourceType: "pixel", type: ORDER_SELL, roomName: "W7N23", created: Game.time };
             return OK;
         },
         cancelOrder: () => OK,
@@ -12653,7 +12653,7 @@ Memory.settings = Object.assign({}, Memory.settings, {
     const stranded = run(0, false);
     assert(stranded.calls.cancel === 0 && stranded.calls.create === 0,
         "0098 an operation that cannot afford a fresh order never cancels the one it already paid for");
-    assert(stranded.op.state === "listed" && stranded.op.marketOrderId === "live-1" && /créditos insuficientes/.test(stranded.op.error),
+    assert(stranded.op.state === "listed" && stranded.op.marketOrderId === "live-1" && /changeOrderPrice/.test(stranded.op.error),
         "0098 without changeOrderPrice and without credits the live order survives instead of the op failing");
 
     Game.rooms = oldRooms; Game.market = oldMarket; Memory.terminalOps = oldOps;
@@ -13182,7 +13182,7 @@ function resetMarketFlipState() {
     const marketFlip = marketFlipModule();
     const market = require(path.join(PROJECT, "src/utils/market"));
     const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
-    const oldRooms = Game.rooms, oldMarket = Game.market, oldSettings = Memory.settings, oldSnapshot = market.snapshot, oldBuy = terminalOps.buy, oldSell = terminalOps.sell;
+    const oldRooms = Game.rooms, oldMarket = Game.market, oldSettings = Memory.settings, oldSnapshot = market.snapshot, oldBuy = terminalOps.buy, oldSell = terminalOps.sellLot;
     resetMarketFlipState();
     Game.rooms = { W1N1: marketFlipRoom("W1N1") };
     Memory.settings = Object.assign({}, oldSettings, { marketFlip: { test: true, scanInterval: 1, minProfitRatio: 0.01, guardrailFairPriceRatio: 1.05, maxCreditRatioPerFlip: 0.05, maxHoldingTicks: 1500 } });
@@ -13198,14 +13198,14 @@ function resetMarketFlipState() {
     };
     flipHistoryFromBook();
     terminalOps.buy = () => { buyCalls++; return { ok: true, id: "should-not-happen" }; };
-    terminalOps.sell = () => { sellCalls++; return { ok: true, id: "should-not-happen" }; };
+    terminalOps.sellLot = () => { sellCalls++; return { ok: true, id: "should-not-happen" }; };
     marketFlip.tick();
     const opportunity = Memory.marketFlip.lastOpportunities.find((o) => o.resourceType === "O");
     assert(opportunity && opportunity.quantity > 0 && opportunity.netProfit > 0 && !opportunity.wouldBlockGuardrail,
         "0110 AC1: test mode logs the profitable pair with quantity/profit (got " + JSON.stringify(opportunity) + ")");
     assert(dealCalls === 0 && buyCalls === 0 && sellCalls === 0,
         "0110 AC1: test mode never calls Game.market.deal()/terminalOps.buy()/terminalOps.sell()");
-    Game.rooms = oldRooms; Game.market = oldMarket; Memory.settings = oldSettings; market.snapshot = oldSnapshot; terminalOps.buy = oldBuy; terminalOps.sell = oldSell;
+    Game.rooms = oldRooms; Game.market = oldMarket; Memory.settings = oldSettings; market.snapshot = oldSnapshot; terminalOps.buy = oldBuy; terminalOps.sellLot = oldSell;
 }
 // AC2/AC10: live mode buys once at scan time, sells only once the buy leg
 // reaches "completed"; a thrown exception inside tick() never escapes main.loop().
@@ -13213,7 +13213,7 @@ function resetMarketFlipState() {
     const marketFlip = marketFlipModule();
     const market = require(path.join(PROJECT, "src/utils/market"));
     const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
-    const oldRooms = Game.rooms, oldMarket = Game.market, oldSettings = Memory.settings, oldSnapshot = market.snapshot, oldBuy = terminalOps.buy, oldSell = terminalOps.sell;
+    const oldRooms = Game.rooms, oldMarket = Game.market, oldSettings = Memory.settings, oldSnapshot = market.snapshot, oldBuy = terminalOps.buy, oldSell = terminalOps.sellLot;
     resetMarketFlipState();
     Game.rooms = { W1N1: marketFlipRoom("W1N1") };
     Memory.settings = Object.assign({}, oldSettings, { marketFlip: { test: false, scanInterval: 1, minProfitRatio: 0.01, guardrailFairPriceRatio: 1.05, maxCreditRatioPerFlip: 0.05, maxHoldingTicks: 1500 } });
@@ -13227,7 +13227,7 @@ function resetMarketFlipState() {
     };
     flipHistoryFromBook();
     terminalOps.buy = (room, resourceType, qty, price) => { buyCalls++; buyArgs = { room, resourceType, qty, price }; Memory.terminalOps.operations["buy-1"] = { id: "buy-1", state: "queued" }; return { ok: true, id: "buy-1" }; };
-    terminalOps.sell = () => { sellCalls++; Memory.terminalOps.operations["sell-1"] = { id: "sell-1", state: "queued" }; return { ok: true, id: "sell-1" }; };
+    terminalOps.sellLot = () => { sellCalls++; Memory.terminalOps.operations["sell-1"] = { id: "sell-1", state: "queued" }; return { ok: true, id: "sell-1" }; };
     marketFlip.tick();
     assert(buyCalls === 1 && buyArgs.resourceType === "O" && Memory.marketFlip.active.O && Memory.marketFlip.active.O.state === "buying",
         "0110 AC2: live mode opens exactly one buy at scan time (got " + JSON.stringify(buyArgs) + ")");
@@ -13249,7 +13249,7 @@ function resetMarketFlipState() {
     require(path.join(PROJECT, "src/utils")).marketFlip.tick = originalTick;
     assert(!threw, "0110 AC10: an exception inside marketFlip.tick() does not abort main.loop()");
     assert(capturedLogs.some((l) => l.indexOf("[marketFlip]") === 0), "0110 AC10: guard(\"marketFlip\", ...) logs the caught exception");
-    Game.rooms = oldRooms; Game.market = oldMarket; Memory.settings = oldSettings; market.snapshot = oldSnapshot; terminalOps.buy = oldBuy; terminalOps.sell = oldSell;
+    Game.rooms = oldRooms; Game.market = oldMarket; Memory.settings = oldSettings; market.snapshot = oldSnapshot; terminalOps.buy = oldBuy; terminalOps.sellLot = oldSell;
 }
 // AC3: a pair whose net profit ratio misses minProfitRatio is never logged as an opportunity.
 {
@@ -13540,10 +13540,10 @@ function resetMarketFlipState() {
     Memory.marketFlip.committedCredits = 10000;
     Memory.terminalOps.operations["buy-1"] = { id: "buy-1", state: "completed", dealtAmount: 400 };
     let sellArgs = null;
-    const oldSell = terminalOps.sell;
-    terminalOps.sell = (room, resourceType, qty, price, createListing) => { sellArgs = { room, resourceType, qty, price, createListing }; Memory.terminalOps.operations["sell-1"] = { id: "sell-1", state: "queued" }; return { ok: true, id: "sell-1" }; };
+    const oldSell = terminalOps.sellLot;
+    terminalOps.sellLot = (room, resourceType, qty, price, createListing) => { sellArgs = { room, resourceType, qty, price, createListing }; Memory.terminalOps.operations["sell-1"] = { id: "sell-1", state: "queued" }; return { ok: true, id: "sell-1" }; };
     marketFlip.tick();
-    terminalOps.sell = oldSell;
+    terminalOps.sellLot = oldSell;
     assert(sellArgs && sellArgs.room === "W1N1" && sellArgs.qty === 400 && sellArgs.createListing === false,
         "0110: a partial buy sells exactly what was actually dealt (400) from the SAME room that bought it, not the original plan (1000) or a re-picked room (got " + JSON.stringify(sellArgs) + ")");
     const entry = Memory.marketFlip.active.O;
@@ -13692,6 +13692,11 @@ require(path.join(PROJECT, "src/utils/market")).samples = realFlipMarketSamples;
 function pricingModule() {
     delete require.cache[require.resolve(path.join(PROJECT, "src/utils/marketPricing"))];
     return require(path.join(PROJECT, "src/utils/marketPricing"));
+}
+function craftTestMarket(quotes, credits) {
+    return { credits, calcTransactionCost: () => 0,
+        getAllOrders: () => Object.keys(quotes).map((rt) => ({ id: "fixture-" + rt, type: ORDER_SELL, resourceType: rt,
+            price: quotes[rt][1], amount: 1e9, roomName: "QuoteRoom" })) };
 }
 function priceSamples(bid, ask, n, vol) {
     const rows = [];
@@ -14004,7 +14009,9 @@ function priceSamples(bid, ask, n, vol) {
         Game.time += 1000; // past scanInterval, new tick for caches
         Game.rooms = { CraftRoom: room };
         Game.creeps = extra && extra.noHauler ? {} : { h1: { room: { name: "CraftRoom" }, memory: { role: "hauler" } } };
-        Game.market = { credits: extra && extra.credits !== undefined ? extra.credits : 1000000 };
+        Game.market = { credits: extra && extra.credits !== undefined ? extra.credits : 1000000, calcTransactionCost: () => 0,
+            getAllOrders: () => Object.keys(quotes).map((rt) => ({ id: "candidate-" + rt, type: ORDER_SELL, resourceType: rt,
+                price: quotes[rt][1], amount: 1e9, roomName: "QuoteRoom" })) };
         resetMarketFlipState();
         if (extra && extra.committed) Memory.marketFlip.committedCredits = extra.committed;
         Memory.craft = undefined;
@@ -14140,7 +14147,7 @@ function priceSamples(bid, ask, n, vol) {
     const market = require(path.join(PROJECT, "src/utils/market"));
     const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
     const saved = { rooms: Game.rooms, market: Game.market, creeps: Game.creeps, settings: Memory.settings, samples: market.samples, snapshot: market.snapshot,
-        craft: Memory.craft, bucket: Game.cpu.bucket, time: Game.time, buy: terminalOps.buy, sell: terminalOps.sell, cancel: terminalOps.cancel, memRooms: Memory.rooms, flip: Memory.marketFlip, ops: Memory.terminalOps };
+        craft: Memory.craft, bucket: Game.cpu.bucket, time: Game.time, buy: terminalOps.buy, sell: terminalOps.sellLot, cancel: terminalOps.cancel, memRooms: Memory.rooms, flip: Memory.marketFlip, ops: Memory.terminalOps };
     Game.cpu.bucket = 10000;
     const quotes = { Z: [100, 110], energy: [1, 1.1], widgetA: [5000, 5400] };
     const live = { widgetA: 5000 }; // current bid, moved by the tests
@@ -14153,7 +14160,9 @@ function priceSamples(bid, ask, n, vol) {
         calls = { buy: [], sell: [], cancel: [] }; nextOp = 1;
         Game.rooms = { ChainRoom: room };
         Game.creeps = { h1: { room: { name: "ChainRoom" }, memory: { role: "hauler" } } };
-        Game.market = { credits: 1000000 };
+        Game.market = { credits: 1000000, calcTransactionCost: () => 0,
+            getAllOrders: () => Object.keys(quotes).map((rt) => ({ id: "craft-" + rt, type: ORDER_SELL, resourceType: rt,
+                price: quotes[rt][1], amount: 1e9, roomName: "QuoteRoom" })) };
         Memory.settings = Object.assign({}, saved.settings, { craft: Object.assign({ test: false }, settings || {}) });
         Memory.rooms = {};
         Memory.craft = undefined;
@@ -14163,7 +14172,7 @@ function priceSamples(bid, ask, n, vol) {
         craft.resetScan();
     };
     terminalOps.buy = (r, rt, qty, limit) => { const id = "cb" + nextOp++; calls.buy.push({ r, rt, qty, limit, id }); Memory.terminalOps.operations[id] = { id, state: "queued" }; return { ok: true, id }; };
-    terminalOps.sell = (r, rt, qty, floor, listing) => { const id = "cs" + nextOp++; calls.sell.push({ r, rt, qty, floor, listing, id }); Memory.terminalOps.operations[id] = { id, state: "queued" }; return { ok: true, id }; };
+    terminalOps.sellLot = (r, rt, qty, floor, listing) => { const id = "cs" + nextOp++; calls.sell.push({ r, rt, qty, floor, listing, id }); Memory.terminalOps.operations[id] = { id, state: "queued" }; return { ok: true, id }; };
     terminalOps.cancel = (id) => { calls.cancel.push(id); if (Memory.terminalOps.operations[id]) Memory.terminalOps.operations[id].state = "cancelled"; return { ok: true }; };
     const step = (n) => { for (let i = 0; i < (n || 1); i++) { Game.time += 1; craft.tick(); } };
     const open = (settings) => { reset(settings); Game.time += 1000; craft.tick(); return Memory.craft && Memory.craft.active.ChainRoom; };
@@ -14200,8 +14209,8 @@ function priceSamples(bid, ask, n, vol) {
     delete Game.rooms.ChainRoom2; delete Game.creeps.h2;
     assert(calls.buy.length === 1 && Object.keys(Memory.craft.active).length === 1, "0111 P6: a second scan never opens a second chain while one is active");
     const waiting = slotLines.filter((l) => /ja esta sendo comprado/.test(l));
-    assert(waiting.length === 1 && /Z ja esta sendo comprado por ChainRoom/.test(waiting[0]) && Memory.craft.discards["shared-input:Z"] > 0,
-        "0111 P6: a candidate on an input another chain is still buying says so once, naming it (got " + JSON.stringify(waiting) + ")");
+    assert(waiting.length === 0 && slotLines.filter((l) => /aguardando vaga/.test(l)).length === 1,
+        "0134: global maxActive cap reports a slot wait, never a shared-input lock");
     // buying -> working: factory is configured by the chain, flagged Auto, energy = the batches' energy
     completeBuy();
     step();
@@ -14217,8 +14226,8 @@ function priceSamples(bid, ask, n, vol) {
     console.log = slotLog;
     delete Game.rooms.ChainRoom2; delete Game.creeps.h2;
     const capWaiting = capLines.filter((l) => /aguardando vaga/.test(l));
-    assert(calls.buy.length === 1 && capWaiting.length === 1 && /ChainRoom:widgetA\(working\)/.test(capWaiting[0]),
-        "0111 P6: with the input free, a candidate held back by craft.maxActive says so once, naming the running chain (got " + JSON.stringify(capWaiting) + ")");
+    assert(calls.buy.length === 1 && capWaiting.length === 0,
+        "0134: an unchanged global cap does not repeat its waiting log after buying completes");
     // working -> selling when the target is produced; flags cleared
     factory.store.widgetA = chain.queue[0].target;
     step();
@@ -14388,7 +14397,7 @@ function priceSamples(bid, ask, n, vol) {
     chainMod.recordRun(fake, -50);
     assert(Memory.settings.craft.test === true, "0111 AC14: a net-negative global window puts the planner back in test mode");
 
-    terminalOps.buy = saved.buy; terminalOps.sell = saved.sell; terminalOps.cancel = saved.cancel;
+    terminalOps.buy = saved.buy; terminalOps.sellLot = saved.sell; terminalOps.cancel = saved.cancel;
     market.samples = saved.samples; market.snapshot = saved.snapshot; Game.rooms = saved.rooms; Game.market = saved.market; Game.creeps = saved.creeps;
     Memory.settings = saved.settings; Memory.craft = saved.craft; Memory.rooms = saved.memRooms; Memory.marketFlip = saved.flip; Memory.terminalOps = saved.ops;
     Game.cpu.bucket = saved.bucket; Game.time = saved.time;
@@ -14402,7 +14411,7 @@ function priceSamples(bid, ask, n, vol) {
     const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
     const labSlots = require(path.join(PROJECT, "src/utils/labSlots"));
     const saved = { rooms: Game.rooms, market: Game.market, creeps: Game.creeps, settings: Memory.settings, samples: market.samples, snapshot: market.snapshot,
-        craft: Memory.craft, bucket: Game.cpu.bucket, time: Game.time, buy: terminalOps.buy, sell: terminalOps.sell, memRooms: Memory.rooms, flip: Memory.marketFlip,
+        craft: Memory.craft, bucket: Game.cpu.bucket, time: Game.time, buy: terminalOps.buy, sell: terminalOps.sellLot, memRooms: Memory.rooms, flip: Memory.marketFlip,
         ops: Memory.terminalOps, getObj: Game.getObjectById };
     Game.cpu.bucket = 10000;
     const quotes = { H: [10, 11], O: [10, 11], OH: [60, 70], energy: [1, 1.1] };
@@ -14416,10 +14425,10 @@ function priceSamples(bid, ask, n, vol) {
     const calls = { buy: [] };
     let nextOp = 1;
     terminalOps.buy = (r, rt, qty) => { const id = "lb" + nextOp++; calls.buy.push({ rt, qty, id }); Memory.terminalOps.operations[id] = { id, state: "queued" }; return { ok: true, id }; };
-    terminalOps.sell = () => ({ ok: true, id: "ls" + nextOp++ });
+    terminalOps.sellLot = () => ({ ok: true, id: "ls" + nextOp++ });
     Game.rooms = { LabChainRoom: room };
     Game.creeps = { h1: { room: { name: "LabChainRoom" }, memory: { role: "hauler" } } };
-    Game.market = { credits: 1000000 };
+    Game.market = craftTestMarket(quotes, 1000000);
     Memory.settings = Object.assign({}, saved.settings, { craft: { test: false } });
     Memory.rooms = {}; Memory.craft = undefined;
     Memory.marketFlip = { lastScanTick: null, committedCredits: 0, active: {}, lastOpportunities: [], stats: { completed: 0, netProfit: 0, cancelled: 0, guardrailBlocked: 0 } };
@@ -14452,7 +14461,7 @@ function priceSamples(bid, ask, n, vol) {
     assert(!Memory.craft.active.LabChainRoom && Memory.craft.discards["manual-pin"] > 0 && Memory.rooms.LabChainRoom.labReactionAuto === undefined,
         "0111 AC16: a manual labReaction keeps lab products out of the planner and stays untouched");
 
-    terminalOps.buy = saved.buy; terminalOps.sell = saved.sell; Game.getObjectById = saved.getObj;
+    terminalOps.buy = saved.buy; terminalOps.sellLot = saved.sell; Game.getObjectById = saved.getObj;
     market.samples = saved.samples; market.snapshot = saved.snapshot; Game.rooms = saved.rooms; Game.market = saved.market; Game.creeps = saved.creeps;
     Memory.settings = saved.settings; Memory.craft = saved.craft; Memory.rooms = saved.memRooms; Memory.marketFlip = saved.flip; Memory.terminalOps = saved.ops;
     Game.cpu.bucket = saved.bucket; Game.time = saved.time; labSlots.resetCache();
@@ -14508,7 +14517,7 @@ function priceSamples(bid, ask, n, vol) {
     const labSlots = require(path.join(PROJECT, "src/utils/labSlots"));
     const transientStock = require(path.join(PROJECT, "src/utils/transientStock"));
     const saved = { rooms: Game.rooms, market: Game.market, creeps: Game.creeps, settings: Memory.settings, samples: market.samples, snapshot: market.snapshot,
-        craft: Memory.craft, bucket: Game.cpu.bucket, time: Game.time, buy: terminalOps.buy, sell: terminalOps.sell, memRooms: Memory.rooms, flip: Memory.marketFlip,
+        craft: Memory.craft, bucket: Game.cpu.bucket, time: Game.time, buy: terminalOps.buy, sell: terminalOps.sellLot, memRooms: Memory.rooms, flip: Memory.marketFlip,
         ops: Memory.terminalOps, getObj: Game.getObjectById };
     const reactionsBackup = { P: REACTIONS.P, R: REACTIONS.R, PQ: REACTIONS.PQ };
     REACTIONS.P = { Q: "PQ" }; REACTIONS.R = { S: "RS" }; REACTIONS.PQ = { RS: "PQRS" };
@@ -14524,10 +14533,10 @@ function priceSamples(bid, ask, n, vol) {
     const bought = [];
     let nextOp = 1;
     terminalOps.buy = (r, rt, qty) => { const id = "ib" + nextOp++; bought.push({ rt, qty, id }); Memory.terminalOps.operations[id] = { id, state: "queued" }; return { ok: true, id }; };
-    terminalOps.sell = () => ({ ok: true, id: "is" + nextOp++ });
+    terminalOps.sellLot = () => ({ ok: true, id: "is" + nextOp++ });
     Game.rooms = { InPlaceRoom: room };
     Game.creeps = { h1: { room: { name: "InPlaceRoom" }, memory: { role: "hauler" } } };
-    Game.market = { credits: 1e8 };
+    Game.market = craftTestMarket(quotes, 1e8);
     // 0116: this block is about intermediates kept IN PLACE (waves); the wide strategy has its own block
     Memory.settings = Object.assign({}, saved.settings, { craft: { test: false, maxCashAbsolute: 1e7, labStrategy: "waves" } });
     Memory.rooms = {}; Memory.craft = undefined;
@@ -14600,7 +14609,7 @@ function priceSamples(bid, ask, n, vol) {
 
     REACTIONS.P = reactionsBackup.P; REACTIONS.R = reactionsBackup.R; REACTIONS.PQ = reactionsBackup.PQ;
     ["P", "R", "PQ"].forEach((k) => { if (reactionsBackup[k] === undefined) delete REACTIONS[k]; });
-    terminalOps.buy = saved.buy; terminalOps.sell = saved.sell; Game.getObjectById = saved.getObj;
+    terminalOps.buy = saved.buy; terminalOps.sellLot = saved.sell; Game.getObjectById = saved.getObj;
     market.samples = saved.samples; market.snapshot = saved.snapshot; Game.rooms = saved.rooms; Game.market = saved.market; Game.creeps = saved.creeps;
     Memory.settings = saved.settings; Memory.craft = saved.craft; Memory.rooms = saved.memRooms; Memory.marketFlip = saved.flip; Memory.terminalOps = saved.ops;
     Game.cpu.bucket = saved.bucket; Game.time = saved.time; labSlots.resetCache(); marketPricing.resetCaches();
@@ -14615,7 +14624,7 @@ function priceSamples(bid, ask, n, vol) {
     const labSlots = require(path.join(PROJECT, "src/utils/labSlots"));
     const transientStock = require(path.join(PROJECT, "src/utils/transientStock"));
     const saved = { rooms: Game.rooms, market: Game.market, creeps: Game.creeps, settings: Memory.settings, samples: market.samples, snapshot: market.snapshot,
-        craft: Memory.craft, bucket: Game.cpu.bucket, time: Game.time, buy: terminalOps.buy, sell: terminalOps.sell, memRooms: Memory.rooms, flip: Memory.marketFlip,
+        craft: Memory.craft, bucket: Game.cpu.bucket, time: Game.time, buy: terminalOps.buy, sell: terminalOps.sellLot, memRooms: Memory.rooms, flip: Memory.marketFlip,
         ops: Memory.terminalOps, getObj: Game.getObjectById };
     const reactionsBackup = { P: REACTIONS.P, R: REACTIONS.R, PQ: REACTIONS.PQ };
     REACTIONS.P = { Q: "PQ" }; REACTIONS.R = { S: "RS" }; REACTIONS.PQ = { RS: "PQRS" };
@@ -14631,10 +14640,10 @@ function priceSamples(bid, ask, n, vol) {
     const bought = [];
     let nextOp = 1;
     terminalOps.buy = (r, rt, qty) => { const id = "ib" + nextOp++; bought.push({ rt, qty, id }); Memory.terminalOps.operations[id] = { id, state: "queued" }; return { ok: true, id }; };
-    terminalOps.sell = () => ({ ok: true, id: "is" + nextOp++ });
+    terminalOps.sellLot = () => ({ ok: true, id: "is" + nextOp++ });
     Game.rooms = { InPlaceRoom: room };
     Game.creeps = { h1: { room: { name: "InPlaceRoom" }, memory: { role: "hauler" } } };
-    Game.market = { credits: 1e8 };
+    Game.market = craftTestMarket(quotes, 1e8);
     // 0116: this block is about intermediates kept IN PLACE (waves); the wide strategy has its own block
     Memory.settings = Object.assign({}, saved.settings, { craft: { test: false, maxCashAbsolute: 1e7, labStrategy: "waves" } });
     Memory.rooms = {}; Memory.craft = undefined;
@@ -14694,7 +14703,7 @@ function priceSamples(bid, ask, n, vol) {
     assert(typeof global.craftReplan === "function" && global.craftReplan("InPlaceRoom").indexOf("nenhuma etapa pendente") >= 0, "0116 replan: the console command craftReplan() returns the same report");
     REACTIONS.P = reactionsBackup.P; REACTIONS.R = reactionsBackup.R; REACTIONS.PQ = reactionsBackup.PQ;
     ["P", "R", "PQ"].forEach((k) => { if (reactionsBackup[k] === undefined) delete REACTIONS[k]; });
-    terminalOps.buy = saved.buy; terminalOps.sell = saved.sell; Game.getObjectById = saved.getObj;
+    terminalOps.buy = saved.buy; terminalOps.sellLot = saved.sell; Game.getObjectById = saved.getObj;
     market.samples = saved.samples; market.snapshot = saved.snapshot; Game.rooms = saved.rooms; Game.market = saved.market; Game.creeps = saved.creeps;
     Memory.settings = saved.settings; Memory.craft = saved.craft; Memory.rooms = saved.memRooms; Memory.marketFlip = saved.flip; Memory.terminalOps = saved.ops;
     Game.cpu.bucket = saved.bucket; Game.time = saved.time; labSlots.resetCache(); marketPricing.resetCaches();
@@ -14709,7 +14718,7 @@ function priceSamples(bid, ask, n, vol) {
     const labSlots = require(path.join(PROJECT, "src/utils/labSlots"));
     const transientStock = require(path.join(PROJECT, "src/utils/transientStock"));
     const saved = { rooms: Game.rooms, market: Game.market, creeps: Game.creeps, settings: Memory.settings, samples: market.samples, snapshot: market.snapshot,
-        craft: Memory.craft, bucket: Game.cpu.bucket, time: Game.time, buy: terminalOps.buy, sell: terminalOps.sell, memRooms: Memory.rooms, flip: Memory.marketFlip,
+        craft: Memory.craft, bucket: Game.cpu.bucket, time: Game.time, buy: terminalOps.buy, sell: terminalOps.sellLot, memRooms: Memory.rooms, flip: Memory.marketFlip,
         ops: Memory.terminalOps, getObj: Game.getObjectById };
     const reactionsBackup = { P: REACTIONS.P, R: REACTIONS.R, PQ: REACTIONS.PQ };
     REACTIONS.P = { Q: "PQ" }; REACTIONS.R = { S: "RS" }; REACTIONS.PQ = { RS: "PQRS" };
@@ -14725,10 +14734,10 @@ function priceSamples(bid, ask, n, vol) {
     const bought = [];
     let nextOp = 1;
     terminalOps.buy = (r, rt, qty) => { const id = "ib" + nextOp++; bought.push({ rt, qty, id }); Memory.terminalOps.operations[id] = { id, state: "queued" }; return { ok: true, id }; };
-    terminalOps.sell = () => ({ ok: true, id: "is" + nextOp++ });
+    terminalOps.sellLot = () => ({ ok: true, id: "is" + nextOp++ });
     Game.rooms = { InPlaceRoom: room };
     Game.creeps = { h1: { room: { name: "InPlaceRoom" }, memory: { role: "hauler" } } };
-    Game.market = { credits: 1e8 };
+    Game.market = craftTestMarket(quotes, 1e8);
     Memory.settings = Object.assign({}, saved.settings, { craft: { test: false, maxCashAbsolute: 1e7 } });
     Memory.rooms = {}; Memory.craft = undefined;
     Memory.marketFlip = { lastScanTick: null, committedCredits: 0, active: {}, lastOpportunities: [], stats: { completed: 0, netProfit: 0, cancelled: 0, guardrailBlocked: 0 } };
@@ -14786,7 +14795,7 @@ function priceSamples(bid, ask, n, vol) {
         "0116: the chain reaches selling after the last wide step (state " + chain.state + ")");
     REACTIONS.P = reactionsBackup.P; REACTIONS.R = reactionsBackup.R; REACTIONS.PQ = reactionsBackup.PQ;
     ["P", "R", "PQ"].forEach((k) => { if (reactionsBackup[k] === undefined) delete REACTIONS[k]; });
-    terminalOps.buy = saved.buy; terminalOps.sell = saved.sell; Game.getObjectById = saved.getObj;
+    terminalOps.buy = saved.buy; terminalOps.sellLot = saved.sell; Game.getObjectById = saved.getObj;
     market.samples = saved.samples; market.snapshot = saved.snapshot; Game.rooms = saved.rooms; Game.market = saved.market; Game.creeps = saved.creeps;
     Memory.settings = saved.settings; Memory.craft = saved.craft; Memory.rooms = saved.memRooms; Memory.marketFlip = saved.flip; Memory.terminalOps = saved.ops;
     Game.cpu.bucket = saved.bucket; Game.time = saved.time; labSlots.resetCache(); marketPricing.resetCaches();
@@ -14813,7 +14822,7 @@ function priceSamples(bid, ask, n, vol) {
         buys = 0;
         Game.rooms = { SpendRoom: room };
         Game.creeps = { h1: { room: { name: "SpendRoom" }, memory: { role: "hauler" } } };
-        Game.market = { credits: 1e6 };
+        Game.market = craftTestMarket(quotes, 1e6);
         Memory.settings = Object.assign({}, saved.settings, { craft: Object.assign({ test: false }, settings || {}) });
         Memory.rooms = {}; Memory.craft = undefined;
         Memory.marketFlip = { lastScanTick: null, committedCredits: 0, active: flipActive || {}, lastOpportunities: [], stats: { completed: 0, netProfit: 0, cancelled: 0, guardrailBlocked: 0 } };
@@ -14872,7 +14881,7 @@ function priceSamples(bid, ask, n, vol) {
     const market = require(path.join(PROJECT, "src/utils/market"));
     const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
     const saved = { rooms: Game.rooms, market: Game.market, creeps: Game.creeps, settings: Memory.settings, samples: market.samples, snapshot: market.snapshot,
-        craft: Memory.craft, bucket: Game.cpu.bucket, time: Game.time, buy: terminalOps.buy, sell: terminalOps.sell, memRooms: Memory.rooms, flip: Memory.marketFlip, ops: Memory.terminalOps };
+        craft: Memory.craft, bucket: Game.cpu.bucket, time: Game.time, buy: terminalOps.buy, sell: terminalOps.sellLot, memRooms: Memory.rooms, flip: Memory.marketFlip, ops: Memory.terminalOps };
     Game.cpu.bucket = 10000;
     Game.time += 9000000; // a tick no other block used: census/roomCache start cold
     const book = { Z: priceSamples(100, 110, 72, 1e9), energy: priceSamples(1, 1.1, 72, 1e9), widgetA: priceSamples(5000, 5400, 72, 1e9) };
@@ -14887,7 +14896,8 @@ function priceSamples(bid, ask, n, vol) {
         opened = [];
         Game.rooms = { LotRoom: room };
         Game.creeps = { h1: { room: { name: "LotRoom" }, memory: { role: "hauler" } } };
-        Game.market = { credits: 1e6 };
+        Game.market = craftTestMarket(Object.fromEntries(Object.keys(book).map((r) =>
+            [r, [book[r][0].buyPrice, liveAsk[r] || book[r][0].sellPrice]])), 1e6);
         Memory.settings = Object.assign({}, saved.settings, { craft: Object.assign({ test: true }, settings || {}) });
         Memory.rooms = {}; Memory.craft = undefined;
         Memory.marketFlip = { lastScanTick: null, committedCredits: 0, active: flipActive || {}, lastOpportunities: [], stats: { completed: 0, netProfit: 0, cancelled: 0, guardrailBlocked: 0 } };
@@ -14916,7 +14926,7 @@ function priceSamples(bid, ask, n, vol) {
             lastOpportunities: [], stats: { completed: 0, netProfit: 0, cancelled: 0, guardrailBlocked: 0 } };
         Memory.terminalOps = { nextId: 1, operations: { fb1: { id: "fb1", state: "completed", dealtAmount: 10 } }, seenIncoming: {}, events: [], terminalBalance: {} };
         Memory.settings = Object.assign({}, saved.settings, { marketFlip: { test: true, scanInterval: 99999 } });
-        terminalOps.sell = () => ({ ok: true, id: "fs1" });
+        terminalOps.sellLot = () => ({ ok: true, id: "fs1" });
         Game.time += 1; flip.tick();
         assert(Memory.marketFlip.active.Z && Memory.marketFlip.active.Z.state === "selling" && Memory.marketFlip.active.Z.sellStartTick === Game.time,
             "0111: the flip stamps sellStartTick when it starts selling (got " + JSON.stringify(Memory.marketFlip.active.Z) + ")");
@@ -14947,7 +14957,7 @@ function priceSamples(bid, ask, n, vol) {
     assert(opened.length === 1 && opened[0].rt === "Z" && Memory.craft.active.LotRoom && Memory.craft.active.LotRoom.est.spend <= 20000,
         "0111: a lot sized to the cap actually opens within it (got " + JSON.stringify(opened) + ")");
 
-    terminalOps.buy = saved.buy; terminalOps.sell = saved.sell; market.samples = saved.samples; market.snapshot = saved.snapshot;
+    terminalOps.buy = saved.buy; terminalOps.sellLot = saved.sell; market.samples = saved.samples; market.snapshot = saved.snapshot;
     Game.rooms = saved.rooms; Game.market = saved.market; Game.creeps = saved.creeps;
     Memory.settings = saved.settings; Memory.craft = saved.craft; Memory.rooms = saved.memRooms; Memory.marketFlip = saved.flip; Memory.terminalOps = saved.ops;
     Game.cpu.bucket = saved.bucket; Game.time = saved.time;
@@ -15294,7 +15304,7 @@ function priceSamples(bid, ask, n, vol) {
     const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
     const labSlots = require(path.join(PROJECT, "src/utils/labSlots"));
     const saved = { rooms: Game.rooms, market: Game.market, creeps: Game.creeps, settings: Memory.settings, samples: market.samples, snapshot: market.snapshot,
-        craft: Memory.craft, bucket: Game.cpu.bucket, time: Game.time, buy: terminalOps.buy, sell: terminalOps.sell, cancel: terminalOps.cancel, memRooms: Memory.rooms,
+        craft: Memory.craft, bucket: Game.cpu.bucket, time: Game.time, buy: terminalOps.buy, sell: terminalOps.sellLot, cancel: terminalOps.cancel, memRooms: Memory.rooms,
         flip: Memory.marketFlip, ops: Memory.terminalOps, getObj: Game.getObjectById };
     Game.cpu.bucket = 10000;
     Game.time += 18000000;
@@ -15309,13 +15319,15 @@ function priceSamples(bid, ask, n, vol) {
     const room = { name: "ParRoom", controller: { my: true }, storage: { store: { energy: 500000 } }, terminal: { store: {} }, find: () => [factory].concat(labs) };
     let calls, nextOp;
     terminalOps.buy = (r, rt, qty, limit) => { const id = "pb" + nextOp++; calls.buy.push({ rt, qty, id }); Memory.terminalOps.operations[id] = { id, state: "queued" }; return { ok: true, id }; };
-    terminalOps.sell = () => ({ ok: true, id: "ps" + nextOp++ });
+    terminalOps.sellLot = () => ({ ok: true, id: "ps" + nextOp++ });
     terminalOps.cancel = (id) => { calls.cancel.push(id); if (Memory.terminalOps.operations[id]) Memory.terminalOps.operations[id].state = "cancelled"; return { ok: true }; };
     const reset = (settings) => {
         calls = { buy: [], cancel: [] }; nextOp = 1;
         Game.rooms = { ParRoom: room };
         Game.creeps = { h1: { room: { name: "ParRoom" }, memory: { role: "hauler" } } };
-        Game.market = { credits: 1e8 };
+        Game.market = { credits: 1e8, calcTransactionCost: () => 0,
+            getAllOrders: () => Object.keys(quotes).map((rt) => ({ id: "limit-" + rt, type: ORDER_SELL, resourceType: rt,
+                price: quotes[rt][1], amount: 1e9, roomName: "QuoteRoom" })) };
         Memory.settings = Object.assign({}, saved.settings, { craft: Object.assign({ test: false }, settings || {}) });
         Memory.rooms = {}; Memory.craft = undefined;
         Memory.marketFlip = { lastScanTick: null, committedCredits: 0, active: {}, lastOpportunities: [], stats: { completed: 0, netProfit: 0, cancelled: 0, guardrailBlocked: 0 } };
@@ -15392,7 +15404,7 @@ function priceSamples(bid, ask, n, vol) {
     assert(Object.keys(Memory.craft.active).some((k) => Memory.craft.active[k].kinds && Memory.craft.active[k].kinds.join() === "lab"),
         "0111: the labs of a room whose factory runs an old-format chain still get their own chain");
 
-    terminalOps.buy = saved.buy; terminalOps.sell = saved.sell; terminalOps.cancel = saved.cancel; Game.getObjectById = saved.getObj;
+    terminalOps.buy = saved.buy; terminalOps.sellLot = saved.sell; terminalOps.cancel = saved.cancel; Game.getObjectById = saved.getObj;
     market.samples = saved.samples; market.snapshot = saved.snapshot; Game.rooms = saved.rooms; Game.market = saved.market; Game.creeps = saved.creeps;
     Memory.settings = saved.settings; Memory.craft = saved.craft; Memory.rooms = saved.memRooms; Memory.marketFlip = saved.flip; Memory.terminalOps = saved.ops;
     Game.cpu.bucket = saved.bucket; Game.time = saved.time; labSlots.resetCache();
@@ -15445,7 +15457,7 @@ function priceSamples(bid, ask, n, vol) {
     const market = require(path.join(PROJECT, "src/utils/market"));
     const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
     const saved = { rooms: Game.rooms, market: Game.market, creeps: Game.creeps, settings: Memory.settings, samples: market.samples, snapshot: market.snapshot,
-        craft: Memory.craft, bucket: Game.cpu.bucket, time: Game.time, buy: terminalOps.buy, sell: terminalOps.sell, cancel: terminalOps.cancel,
+        craft: Memory.craft, bucket: Game.cpu.bucket, time: Game.time, buy: terminalOps.buy, sell: terminalOps.sellLot, cancel: terminalOps.cancel,
         memRooms: Memory.rooms, flip: Memory.marketFlip, ops: Memory.terminalOps };
     Game.cpu.bucket = 10000;
     Game.time += 20000000;
@@ -15459,7 +15471,7 @@ function priceSamples(bid, ask, n, vol) {
     const roomA = mkRoom("LimRoom"), roomB = mkRoom("LimRoom2");
     let calls, nextOp;
     terminalOps.buy = (r, rt, qty, limit) => { const id = "lb" + nextOp++; calls.buy.push({ r, rt, qty, limit, id }); Memory.terminalOps.operations[id] = { id, state: "queued" }; return { ok: true, id }; };
-    terminalOps.sell = () => ({ ok: true, id: "ls" + nextOp++ });
+    terminalOps.sellLot = () => ({ ok: true, id: "ls" + nextOp++ });
     terminalOps.cancel = (id) => { calls.cancel.push(id); if (Memory.terminalOps.operations[id]) Memory.terminalOps.operations[id].state = "cancelled"; return { ok: true }; };
     const reset = (settings, bid, rooms) => {
         calls = { buy: [], cancel: [] }; nextOp = 1;
@@ -15467,7 +15479,7 @@ function priceSamples(bid, ask, n, vol) {
         const list = rooms || [roomA];
         Game.rooms = {}; Game.creeps = {};
         list.forEach((r, i) => { Game.rooms[r.name] = r; Game.creeps["lh" + i] = { room: { name: r.name }, memory: { role: "hauler" } }; });
-        Game.market = { credits: 1e8 };
+        Game.market = craftTestMarket(quotes, 1e8);
         Memory.settings = Object.assign({}, saved.settings, { craft: Object.assign({ test: false }, settings || {}) });
         Memory.rooms = {}; Memory.craft = undefined;
         Memory.marketFlip = { lastScanTick: null, committedCredits: 0, active: {}, lastOpportunities: [], stats: { completed: 0, netProfit: 0, cancelled: 0, guardrailBlocked: 0 } };
@@ -15484,7 +15496,7 @@ function priceSamples(bid, ask, n, vol) {
     const cand = mem.candidates.find((c) => c.product === "widgetA");
     const q = chain.buys.Z.qty, ask = 110;
     const headroom = Math.max(0, cand.revenue / (1 + cand.margin) - cand.cost);
-    const expected = ask * 1.02 + headroom * 0.5 / 1 / q;
+    const expected = ask * 1.02 + Math.max(0, headroom - ask * q * 0.02) * 0.5 / q;
     assert(chain && Math.abs(chain.buys.Z.limit - expected) < 0.5 && chain.buys.Z.limit > ask * 1.02 && chain.buys.Z.limit < ask * 1.5 && calls.buy[0].limit === chain.buys.Z.limit,
         "0111: the purchase limit is ask+2% plus half the chain's break-even headroom (expected " + expected.toFixed(2) + ", got " + (chain && chain.buys.Z.limit) + ")");
     assert(Math.abs(chain.reserved - (chain.est.spend + q * (chain.buys.Z.limit - ask))) < 250,
@@ -15517,17 +15529,43 @@ function priceSamples(bid, ask, n, vol) {
     mem = run({ maxCashAbsolute: 60000, test: true, priceDriftReserve: 0 }, 5000);
     assert(mem.candidates.find((c) => c.product === "widgetA").spend > 60000 * 0.9, "0111: craft.priceDriftReserve 0 sizes the lot to the whole ceiling again");
 
-    // two chains on the same input are not opened in the same scan, and the second waits for the first to stop buying it
+    // Shared inputs use quantitative depth, not a global resource lock.
     mem = run({}, 5000, [roomA, roomB]);
-    assert(Object.keys(mem.active).length === 1 && mem.active.LimRoom && mem.discards["shared-input:Z"] > 0 && calls.buy.length === 1,
-        "0111: two candidates on the same input open one chain in a scan, the other waits (active " + Object.keys(mem.active) + ", discards " + JSON.stringify(mem.discards) + ")");
+    assert(Object.keys(mem.active).length === 2 && mem.active.LimRoom && mem.active.LimRoom2 && calls.buy.length === 2,
+        "0134: two candidates sharing an input open together when residual depth funds both");
     const firstOp = Memory.terminalOps.operations[calls.buy[0].id];
     firstOp.state = "completed"; firstOp.dealtAmount = calls.buy[0].qty;
     Game.time += 1; craft.tick();
     assert(mem.active.LimRoom.state === "working", "0111: the first chain leaves 'buying' once its input arrives");
     craft.resetScan(); Game.time += 400; craft.tick();
     assert(Object.keys(Memory.craft.active).sort().join() === "LimRoom,LimRoom2" && calls.buy.length === 2,
-        "0111: with the input no longer being bought, the second chain opens on the next scan (active " + Object.keys(Memory.craft.active) + ")");
+        "0134: both shared-input chains stay active on subsequent scans (active " + Object.keys(Memory.craft.active) + ")");
+    reset({}, 5000, [roomA, roomB]);
+    Game.market.getAllOrders = () => [{ id: "finite-Z", resourceType: "Z", type: ORDER_SELL, roomName: "QuoteRoom", price: 110, amount: 12000 }];
+    Game.time += 1000; craft.tick();
+    assert(calls.buy.length === 2 && calls.buy.reduce((sum, b) => sum + b.qty, 0) <= 12000 && calls.buy[1].qty < calls.buy[0].qty,
+        "0134: later opening shrinks to residual depth instead of reusing the first allocation");
+    reset({}, 5000);
+    Game.market.getAllOrders = () => [
+        { id: "reserved-Z", resourceType: "Z", type: ORDER_SELL, roomName: "QuoteRoom", price: 110, amount: 10000 },
+        { id: "expensive-Z", resourceType: "Z", type: ORDER_SELL, roomName: "QuoteRoom", price: 1000, amount: 100000 },
+    ];
+    Memory.terminalOps.operations.external = { id: "external", kind: "buy", sourceRoom: "OtherRoom", resourceType: "Z",
+        state: "waiting", remaining: 10000, limit: 110, createdTick: Game.time };
+    Game.time += 1000; craft.tick();
+    assert(!calls.buy.length && Memory.craft.discards.margin > 0 && !Memory.craft.discards["shared-input:Z"],
+        "0134: expensive residual supply that erases profit is rejected for margin");
+    reset({ buyHeadroomUse: 0 }, 2500);
+    Game.market.calcTransactionCost = (q) => q * 10;
+    Game.time += 1000; craft.tick();
+    chain = only(Memory.craft);
+    const effectiveBase = 110 + 10 * 1.1;
+    assert(chain && chain.buys.Z.limit >= effectiveBase && chain.reserved <= 1000000,
+        "0134: craft buy ceiling includes actual freight even with headroom premium disabled");
+    const freightCand = Memory.craft.candidates.find((c) => c.product === "widgetA");
+    const maxCost = freightCand.cost + chain.buys.Z.qty * (chain.buys.Z.limit - effectiveBase);
+    assert((freightCand.revenue - maxCost) / maxCost >= freightCand.margin - 1e-3,
+        "0134: freight-inclusive worst-case purchase still preserves required craft margin");
     // a different input does not clash (a chain buying Z does not hold back one that buys something else)
     reset({}, 5000, [roomA, roomB]);
     Game.time += 1000;
@@ -15551,7 +15589,7 @@ function priceSamples(bid, ask, n, vol) {
     Game.time += 300; craft.tick();
     assert(Memory.craft.active.LimRoom && Memory.craft.stats.aborted === 0, "0111 P6: a buy that already traded is never aborted by the idle rule (that is the patience rule's case)");
 
-    terminalOps.buy = saved.buy; terminalOps.sell = saved.sell; terminalOps.cancel = saved.cancel;
+    terminalOps.buy = saved.buy; terminalOps.sellLot = saved.sell; terminalOps.cancel = saved.cancel;
     market.samples = saved.samples; market.snapshot = saved.snapshot; Game.rooms = saved.rooms; Game.market = saved.market; Game.creeps = saved.creeps;
     Memory.settings = saved.settings; Memory.craft = saved.craft; Memory.rooms = saved.memRooms; Memory.marketFlip = saved.flip; Memory.terminalOps = saved.ops;
     Game.cpu.bucket = saved.bucket; Game.time = saved.time;
@@ -15632,7 +15670,7 @@ function priceSamples(bid, ask, n, vol) {
     const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
     const labSlots = require(path.join(PROJECT, "src/utils/labSlots"));
     const saved = { rooms: Game.rooms, market: Game.market, creeps: Game.creeps, settings: Memory.settings, samples: market.samples, snapshot: market.snapshot,
-        craft: Memory.craft, bucket: Game.cpu.bucket, time: Game.time, buy: terminalOps.buy, sell: terminalOps.sell, memRooms: Memory.rooms, flip: Memory.marketFlip,
+        craft: Memory.craft, bucket: Game.cpu.bucket, time: Game.time, buy: terminalOps.buy, sell: terminalOps.sellLot, memRooms: Memory.rooms, flip: Memory.marketFlip,
         ops: Memory.terminalOps, getObj: Game.getObjectById };
     Game.cpu.bucket = 10000;
     Game.time += 22000000;
@@ -15648,12 +15686,12 @@ function priceSamples(bid, ask, n, vol) {
     const bought = [];
     let nextOp = 1;
     terminalOps.buy = (r, rt, qty) => { const id = "wb" + nextOp++; bought.push({ rt, qty, id }); Memory.terminalOps.operations[id] = { id, state: "queued" }; return { ok: true, id }; };
-    terminalOps.sell = () => ({ ok: true, id: "ws" + nextOp++ });
+    terminalOps.sellLot = () => ({ ok: true, id: "ws" + nextOp++ });
     const setup = (settings, builtSlots) => {
         bought.length = 0; nextOp = 1;
         labs = (builtSlots || labSlots.SLOT_NUMBERS).map(mkLab); idx = byId();
         Game.rooms = { WideChainRoom: room }; Game.creeps = { h1: { room: { name: "WideChainRoom" }, memory: { role: "hauler" } } };
-        Game.market = { credits: 1e8 };
+        Game.market = craftTestMarket(quotes, 1e8);
         Memory.settings = Object.assign({}, saved.settings, { craft: Object.assign({ test: false }, settings || {}) });
         Memory.rooms = {}; Memory.craft = undefined;
         Memory.marketFlip = { lastScanTick: null, committedCredits: 0, active: {}, lastOpportunities: [], stats: { completed: 0, netProfit: 0, cancelled: 0, guardrailBlocked: 0 } };
@@ -15696,7 +15734,7 @@ function priceSamples(bid, ask, n, vol) {
     open({}, [1, 2, 3]);
     assert(Memory.craft.active.WideChainRoom && Memory.craft.active.WideChainRoom.queue[0].outputs.length === 1, "0111: with 3 labs the final step has just its one output lab");
 
-    terminalOps.buy = saved.buy; terminalOps.sell = saved.sell; Game.getObjectById = saved.getObj;
+    terminalOps.buy = saved.buy; terminalOps.sellLot = saved.sell; Game.getObjectById = saved.getObj;
     market.samples = saved.samples; market.snapshot = saved.snapshot; Game.rooms = saved.rooms; Game.market = saved.market; Game.creeps = saved.creeps;
     Memory.settings = saved.settings; Memory.craft = saved.craft; Memory.rooms = saved.memRooms; Memory.marketFlip = saved.flip; Memory.terminalOps = saved.ops;
     Game.cpu.bucket = saved.bucket; Game.time = saved.time; labSlots.resetCache();
@@ -15710,7 +15748,7 @@ function priceSamples(bid, ask, n, vol) {
     const market = require(path.join(PROJECT, "src/utils/market"));
     const terminalOps = require(path.join(PROJECT, "src/utils/terminalOps"));
     const saved = { rooms: Game.rooms, market: Game.market, creeps: Game.creeps, settings: Memory.settings, samples: market.samples, snapshot: market.snapshot,
-        craft: Memory.craft, bucket: Game.cpu.bucket, time: Game.time, buy: terminalOps.buy, sell: terminalOps.sell, cancel: terminalOps.cancel,
+        craft: Memory.craft, bucket: Game.cpu.bucket, time: Game.time, buy: terminalOps.buy, sell: terminalOps.sellLot, cancel: terminalOps.cancel,
         memRooms: Memory.rooms, flip: Memory.marketFlip, ops: Memory.terminalOps };
     Game.cpu.bucket = 10000;
     Game.time += 23000000;
@@ -15722,13 +15760,21 @@ function priceSamples(bid, ask, n, vol) {
     const room = { name: "PartRoom", controller: { my: true }, storage: { store: { energy: 500000 } }, terminal: { store: {} }, find: () => [factory] };
     let calls, nextOp;
     terminalOps.buy = (r, rt, qty, limit) => { const id = "pb" + nextOp++; calls.buy.push({ rt, qty, limit, id }); Memory.terminalOps.operations[id] = { id, state: "queued" }; return { ok: true, id }; };
-    terminalOps.sell = (r, rt, qty, floor, listing) => { const id = "pS" + nextOp++; calls.sell.push({ r, rt, qty, floor, listing, id }); Memory.terminalOps.operations[id] = { id, state: "queued" }; return { ok: true, id }; };
+    terminalOps.sellLot = (r, rt, cumulative, floor, listing) => {
+        const live = calls.sell.find((call) => !["completed", "cancelled", "failed"].includes(Memory.terminalOps.operations[call.id].state));
+        if (live) return { ok: true, id: live.id };
+        const sold = calls.sell.reduce((n, call) => n + (Memory.terminalOps.operations[call.id].dealtAmount || 0), 0);
+        const qty = cumulative - sold, id = "pS" + nextOp++;
+        calls.sell.push({ r, rt, qty, floor, listing, id });
+        Memory.terminalOps.operations[id] = { id, state: "queued" };
+        return { ok: true, id };
+    };
     terminalOps.cancel = (id) => { calls.cancel.push(id); if (Memory.terminalOps.operations[id]) Memory.terminalOps.operations[id].state = "cancelled"; return { ok: true }; };
     const step = (n) => { for (let i = 0; i < (n || 1); i++) { Game.time += 1; craft.tick(); } };
     const workingChain = (settings, pre) => {
         calls = { buy: [], sell: [], cancel: [] }; nextOp = 1; delete live.widgetA;
         Game.rooms = { PartRoom: room }; Game.creeps = { h1: { room: { name: "PartRoom" }, memory: { role: "hauler" } } };
-        Game.market = { credits: 1e8 };
+        Game.market = craftTestMarket(quotes, 1e8);
         Memory.settings = Object.assign({}, saved.settings, { craft: Object.assign({ test: false }, settings || {}) });
         Memory.rooms = {}; Memory.craft = undefined;
         Memory.marketFlip = { lastScanTick: null, committedCredits: 0, active: {}, lastOpportunities: [], stats: { completed: 0, netProfit: 0, cancelled: 0, guardrailBlocked: 0 } };
@@ -15866,7 +15912,7 @@ function priceSamples(bid, ask, n, vol) {
     factory.store.widgetA = target + 5; step();
     assert(chain.state === "selling" && chain.produced === target + 5 && (chain.sold || 0) === 0, "0111: without partial sales the totals are unchanged (produced " + chain.produced + ", sold " + (chain.sold || 0) + ")");
 
-    terminalOps.buy = saved.buy; terminalOps.sell = saved.sell; terminalOps.cancel = saved.cancel;
+    terminalOps.buy = saved.buy; terminalOps.sellLot = saved.sell; terminalOps.cancel = saved.cancel;
     market.samples = saved.samples; market.snapshot = saved.snapshot; Game.rooms = saved.rooms; Game.market = saved.market; Game.creeps = saved.creeps;
     Memory.settings = saved.settings; Memory.craft = saved.craft; Memory.rooms = saved.memRooms; Memory.marketFlip = saved.flip; Memory.terminalOps = saved.ops;
     Game.cpu.bucket = saved.bucket; Game.time = saved.time;
@@ -16028,3 +16074,6 @@ require("./nativePathCases")(PROJECT, assert);
 require("./routingBudgetCases")(PROJECT, assert);
 require("./movementCpuCases")(PROJECT, assert);
 require("./economyCpuCases")(PROJECT, assert);
+require("./terminalLotCases")(PROJECT, assert);
+require("./craftPurchaseCases")(PROJECT, assert);
+require("./assetStatsCases")(PROJECT, assert);

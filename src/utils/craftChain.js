@@ -292,31 +292,38 @@ function open(room, candidate) {
     for (const resourceType of buyKeys) {
         const qty = Math.ceil(candidate.buys[resourceType]);
         const res = snapshotResource(resourceType);
-        const ask = res && marketPricing.conservativeAsk(resourceType, res.currentSell);
+        const effectiveQuote = candidate.purchaseQuotes && candidate.purchaseQuotes[resourceType];
+        const ask = effectiveQuote ? effectiveQuote.ceiling : res && marketPricing.conservativeAsk(resourceType, res.currentSell);
         if (!(ask > 0) || qty <= 0) return { ok: false, reason: "no-quote:" + resourceType };
-        quotes[resourceType] = { ask, qty };
+        quotes[resourceType] = { ask, qty, cost: effectiveQuote ? effectiveQuote.cost : ask * qty };
     }
     const slack = config.get("craft.buySlack", 0.02);
-    const slackCost = buyKeys.reduce((sum, r) => sum + quotes[r].ask * quotes[r].qty * slack, 0);
+    const uplift = buyKeys.reduce((sum, r) => sum + quotes[r].ask * quotes[r].qty - quotes[r].cost, 0);
     const headroom = Math.max(0, candidate.revenue / (1 + candidate.margin) - candidate.cost);
+    if (uplift > headroom) return { ok: false, reason: "purchase-margin" };
+    const baseCost = buyKeys.reduce((sum, r) => sum + quotes[r].ask * quotes[r].qty, 0);
+    const safeSlack = baseCost > 0 ? Math.min(slack, (headroom - uplift) / baseCost) : 0;
+    const slackCost = uplift + baseCost * safeSlack;
     const cashRoom = config.get("craft.maxCashAbsolute", 1000000) - spend - slackCost;
     const chainRoom = credits * config.get("craft.maxChainRatio", 0.05) - spend - slackCost;
     const committedRoom = credits * config.get("craft.maxCommittedRatio", 0.25) - marketFlip.committed() - spend - slackCost;
-    const allowance = Math.max(0, Math.min(headroom * config.get("craft.buyHeadroomUse", 0.5), cashRoom, chainRoom, committedRoom));
+    const allowance = Math.max(0, Math.min((headroom - slackCost) * config.get("craft.buyHeadroomUse", 0.5), cashRoom, chainRoom, committedRoom));
     const premium = config.get("craft.maxBuyPremium", 0.5);
     const limits = {};
     let overpay = 0;
     buyKeys.forEach((r) => {
         const q = quotes[r];
-        const raw = q.ask * (1 + slack) + allowance / buyKeys.length / q.qty;
-        limits[r] = Math.max(q.ask * (1 + slack), Math.min(raw, q.ask * (1 + premium)));
-        overpay += q.qty * (limits[r] - q.ask);
+        const raw = q.ask * (1 + safeSlack) + allowance / buyKeys.length / q.qty;
+        limits[r] = Math.max(q.ask * (1 + safeSlack), Math.min(raw, q.ask * (1 + premium)));
+        overpay += q.qty * limits[r] - q.cost;
     });
     const reserve = spend + overpay;
+    if (reserve > config.get("craft.maxCashAbsolute", 1000000) + 1e-6 || reserve > credits * config.get("craft.maxChainRatio", 0.05) + 1e-6 ||
+        marketFlip.committed() + reserve > credits * config.get("craft.maxCommittedRatio", 0.25) + 1e-6) return { ok: false, reason: "purchase-budget" };
     if (reserve > require("./marketAccounting").available()) return { ok: false, reason: "credit-reserve" };
     // Check all resources before registering any part of the batch.
     for (const resourceType of buyKeys) {
-        if (terminalOps.lockConflict("buy", room.name, null, resourceType, false, { automaticPurchase: true }))
+        if (terminalOps.lockConflict("buy", room.name, null, resourceType, false, { automaticPurchase: true, owner: { kind: "craft", id: room.name + "-" + Game.time } }))
             return { ok: false, reason: "buy-refused:" + resourceType,
                 detail: "já existe uma operação concorrente para este terminal/recurso" };
     }
@@ -324,7 +331,7 @@ function open(room, candidate) {
     const placed = [];
     for (const resourceType of buyKeys) {
         const q = quotes[resourceType];
-        const attempt = terminalOps.buy(room.name, resourceType, q.qty, limits[resourceType], false, true, { automaticPurchase: true });
+        const attempt = terminalOps.buy(room.name, resourceType, q.qty, limits[resourceType], false, true, { automaticPurchase: true, owner: { kind: "craft", id: room.name + "-" + Game.time } });
         if (!attempt.ok) { placed.forEach((id) => terminalOps.cancel(id)); return { ok: false, reason: "buy-refused:" + resourceType, detail: attempt.error }; }
         placed.push(attempt.id);
         buys[resourceType] = { opId: attempt.id, qty: q.qty, limit: limits[resourceType] };
@@ -440,18 +447,19 @@ function itemDone(room, item, chain) {
     return madeSoFar(room, chain, item) >= item.target;
 }
 
-function eventsSince(roomName, resourceType, kind, tick) {
+function eventsSince(roomName, resourceType, kind, tick, ownerId) {
     const events = (Memory.terminalOps && Memory.terminalOps.events) || [];
-    return events.filter((e) => e.room === roomName && e.resourceType === resourceType && e.kind === kind && e.tick >= tick);
+    return events.filter((e) => e.room === roomName && e.resourceType === resourceType && e.kind === kind && e.tick >= tick &&
+        (!e.owner || !ownerId || e.owner === "craft:" + ownerId));
 }
 
 function realized(chain, room) {
     const energy = snapshotResource(RESOURCE_ENERGY);
     const energyAsk = (energy && energy.currentSell) || 0;
     let revenue = 0, spent = 0, energyUnits = 0;
-    eventsSince(chain.room, chain.product, "sell", chain.firstSaleTick || chain.sellStart || chain.openedTick).forEach((e) => { revenue += e.credits; energyUnits += e.transactionEnergy || 0; });
+    eventsSince(chain.room, chain.product, "sell", chain.firstSaleTick || chain.sellStart || chain.openedTick, chain.id).forEach((e) => { revenue += e.credits; spent += e.marketFees || 0; energyUnits += e.transactionEnergy || 0; });
     Object.keys(chain.buys).forEach((resourceType) => {
-        eventsSince(chain.room, resourceType, "buy", chain.openedTick).forEach((e) => { spent += -e.credits; energyUnits += e.transactionEnergy || 0; });
+        eventsSince(chain.room, resourceType, "buy", chain.openedTick, chain.id).forEach((e) => { spent += -e.credits + (e.marketFees || 0); energyUnits += e.transactionEnergy || 0; });
     });
     return revenue - spent - energyUnits * energyAsk - chain.ownCost;
 }
@@ -479,8 +487,8 @@ function saleFloor(chain) {
         if (!chain.buyCost) {
             const tally = { credits: 0, energy: 0 };
             Object.keys(chain.buys).forEach((resourceType) => {
-                eventsSince(chain.room, resourceType, "buy", chain.openedTick).forEach((e) => {
-                    tally.credits += -e.credits;
+                eventsSince(chain.room, resourceType, "buy", chain.openedTick, chain.id).forEach((e) => {
+                    tally.credits += -e.credits + (e.marketFees || 0);
                     tally.energy += e.transactionEnergy || 0;
                 });
             });
@@ -602,9 +610,9 @@ function partialSales(chain, room, item) {
         }
     }
     chain.sold = (chain.soldBase || 0) + (chain.partialDealt || 0);
-    if (!config.get("craft.partialSales", true) || item.product !== chain.product || chain.partialOpId) return;
+    if (!config.get("craft.partialSales", true) || item.product !== chain.product) return;
     const product = chain.product;
-    const reach = ((room.storage && room.storage.store[product]) || 0) + ((room.terminal && room.terminal.store[product]) || 0);
+    const reach = terminalOps.saleAvailable(room, product, { kind: "craft", id: chain.id });
     const unsold = item.policy ? Math.min(Math.max(0, stockAnywhere(room, product) - item.base),
         Math.max(0, madeSoFar(room, chain, item) - (chain.sold || 0))) : Math.max(0, stockAnywhere(room, product) - item.base);
     const sellable = Math.min(unsold, reach);
@@ -614,9 +622,13 @@ function partialSales(chain, room, item) {
     const floor = saleFloor(chain);
     if (!(res && res.currentBuy >= floor)) return; // never below the profit floor, and do not park an order that cannot fill
     if (chain.sellRetryTick > Game.time) return;
-    const attempt = terminalOps.sell(chain.room, product, Math.floor(sellable), floor, false, true);
-    if (!attempt.ok) { chain.sellRetryTick = Game.time + config.get("craft.sellRetryTicks", 25); return; }
+    const prior = chain.partialOpId && opState(chain.partialOpId);
+    const attempt = terminalOps.sellLot(chain.room, product, Math.floor((chain.sold || 0) + sellable), floor, false, true,
+        { owner: { kind: "craft", id: chain.id }, lotId: chain.id + ":" + product });
+    if (!attempt.ok) { chain.saleBlock = attempt; chain.sellRetryTick = Game.time + config.get("craft.sellRetryTicks", 25); return; }
+    delete chain.saleBlock;
     chain.partialOpId = attempt.id;
+    if (prior && prior.id === attempt.id && prior.remaining >= sellable) return;
     chain.firstSaleTick = chain.firstSaleTick || Game.time;
     log(chain.room + " " + product + ": vendendo " + Math.floor(sellable) + " ja produzidos (piso " + floor.toFixed(2) +
         ", vendido " + chain.sold + "/" + item.target + ")");
@@ -625,13 +637,15 @@ function partialSales(chain, room, item) {
 // Production is over: stop the order in flight (its trades are kept) and let the
 // normal selling state handle whatever is left, holding / listing at the floor.
 function finishPartials(chain) {
-    if (!chain.partialOpId) return;
+    if (!chain.partialOpId) return true;
     const op = opState(chain.partialOpId);
     if (op && FINAL.indexOf(op.state) < 0) terminalOps.cancel(op.id);
+    if (op && FINAL.indexOf(op.state) < 0) return false;
     chain.soldBase = (chain.soldBase || 0) + ((op && op.dealtAmount) || chain.partialDealt || 0);
     chain.partialOpId = null;
     chain.partialDealt = 0;
     chain.sold = chain.soldBase;
+    return true;
 }
 
 function advance(chain, room) {
@@ -753,6 +767,7 @@ function advance(chain, room) {
 
 function sellStep(chain, room) {
     const mem = craft();
+    if (!finishPartials(chain)) { chain.saleBlock = "aguardando confirmação da venda parcial/recuperação"; return; }
     const floor = saleFloor(chain);
     if (chain.sellOpId) {
         const op = opState(chain.sellOpId);
@@ -778,8 +793,11 @@ function sellStep(chain, room) {
         chain.sellOpId = null; // failed/cancelled: retry below
     }
     const remaining = Math.max(0, (chain.produced || chain.qty) - (chain.sold || 0));
-    const sellable = Math.min(remaining, stockAnywhere(room, chain.product));
-    if (sellable <= 0) { finish(chain, room, realized(chain, room), { sold: 0 }); return; }
+    const sellable = Math.min(remaining, terminalOps.saleAvailable(room, chain.product, { kind: "craft", id: chain.id }));
+    if (sellable <= 0) {
+        if (remaining > 0 && stockAnywhere(room, chain.product) > 0) { chain.saleBlock = "aguardando produto próprio em storage/terminal"; return; }
+        finish(chain, room, realized(chain, room), { sold: 0 }); return;
+    }
     const res = snapshotResource(chain.product);
     const bid = res && res.currentBuy;
     const holdFor = config.get("craft.retentionTicks", 259200);
@@ -797,9 +815,10 @@ function sellStep(chain, room) {
     if (listing) chain.forceListing = true;
     chain.holding = false;
     if (chain.sellRetryTick > Game.time) return;
-    const attempt = terminalOps.sell(chain.room, chain.product, Math.floor(sellable), floor, listing, true);
-    if (attempt.ok) chain.sellOpId = attempt.id;
-    else chain.sellRetryTick = Game.time + config.get("craft.sellRetryTicks", 25); // refused (e.g. a concurrent op): do not retry, and print, every tick
+    const attempt = terminalOps.sellLot(chain.room, chain.product, Math.floor((chain.sold || 0) + sellable), floor, listing, true,
+        { owner: { kind: "craft", id: chain.id }, lotId: chain.id + ":" + chain.product });
+    if (attempt.ok) { chain.sellOpId = attempt.id; delete chain.saleBlock; }
+    else { chain.saleBlock = attempt; chain.sellRetryTick = Game.time + config.get("craft.sellRetryTicks", 25); }
 }
 
 // --- replanning chains already running (console craftReplan) ------------------

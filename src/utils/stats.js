@@ -1,6 +1,7 @@
 // Call this function at the end of your main loop
 
 const roomCache = require("./roomCache");
+const census = require("./census");
 const config = require("./config");
 const cpuMeter = require("./cpuMeter");
 const energyLedger = require("./energyLedger");
@@ -77,6 +78,43 @@ function minerals(room) {
     return result;
 }
 
+// Sparse physical inventory: reservations and orders are not additional assets.
+function resourceAssets() {
+    const resources = {};
+    const seen = new Set();
+    function addStore(store) {
+        if (!store) return;
+        for (const type of Object.keys(store)) {
+            const amount = store[type];
+            if (typeof amount === "number" && Number.isFinite(amount) && amount > 0) {
+                resources[type] = (resources[type] || 0) + amount;
+            }
+        }
+    }
+    function addObject(object) {
+        if (!object || object.my === false) return;
+        const key = object.id || object;
+        if (seen.has(key)) return;
+        seen.add(key);
+        addStore(object.store);
+    }
+    for (const roomName in Game.rooms) {
+        const room = Game.rooms[roomName];
+        if (!room.controller || !room.controller.my) continue;
+        for (const structure of roomCache.structures(room)) addObject(structure);
+        // Also support sparse room mocks; the Set prevents counting these twice.
+        addObject(room.storage);
+        addObject(room.terminal);
+    }
+    for (const creep of census.allOwned()) addObject(creep);
+    for (const name in Game.powerCreeps) {
+        const creep = Game.powerCreeps[name];
+        if (creep.pos) addObject(creep);
+    }
+    addStore(Game.resources);
+    return { resources };
+}
+
 function exportStats() {
     // Grafana samples Memory.stats once a minute (60 ticks), so rebuilding the whole
     // object every tick (~0.9 CPU/tick, 2026-10-03) published numbers nobody read.
@@ -141,6 +179,7 @@ function exportStats() {
     // real server, but guarded the same way hauler.js already guards
     // Game.market.incomingTransactions (constitution §3).
     Memory.stats.market.credits = (Game.market && Game.market.credits) || 0;
+    Memory.stats.assets = resourceAssets();
 
     // ROADMAP 0079 follow-up (2026-09-24): market.transactions/
     // terminalNetwork.transfers were "out of scope" because the bot never

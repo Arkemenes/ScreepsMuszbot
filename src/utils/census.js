@@ -3,13 +3,16 @@
 
 let builtTick = -1;
 let byRoomRole = {};
+let ownedCreeps = [];
 
 function build() {
     builtTick = Game.time;
     byRoomRole = {};
+    ownedCreeps = [];
 
     for (const name in Game.creeps) {
         const creep = Game.creeps[name];
+        ownedCreeps.push(creep);
         const roomName = creep.room.name;
         const role = creep.memory.role;
         if (!role) continue;
@@ -21,6 +24,12 @@ function build() {
 
 function ensure() {
     if (builtTick !== Game.time) build();
+}
+
+// All owned cargo, including creeps without a role and creeps in transit.
+function allOwned() {
+    ensure();
+    return ownedCreeps;
 }
 
 // All creeps of `role` whose current room is `roomName`.
@@ -77,4 +86,4 @@ global.findCreeps = function (role) {
     return list.map((creep) => ({ name: creep.name, room: creep.room.name }));
 };
 
-module.exports = { creepsByRole, allInRoom, count, all, total, build };
+module.exports = { creepsByRole, allInRoom, allOwned, count, all, total, build };

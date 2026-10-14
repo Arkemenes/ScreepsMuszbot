@@ -34,11 +34,11 @@ function getIntel(room) {
     }
 
     if (mem.sourceNumber == undefined) {
-        mem.sourceNumber = room.find(FIND_SOURCES).length;
+        mem.sourceNumber = roomCache.sources(room).length;
     }
 
     if (mem.mineral == undefined) {
-        let mineral = room.find(FIND_MINERALS)[0];
+        let mineral = roomCache.minerals(room)[0];
         mem.mineral = mineral ? mineral.mineralType : null;
     }
 
@@ -63,7 +63,7 @@ function getIntel(room) {
     cpuMeter.span("intel.transitSafety", () => transitSafety.observeRoom(room));
     const hostiles = cpuMeter.span("intel.hostiles", () => getHostiles(room));
     mem.enemies = hostiles.length;
-    cpuMeter.span("intel.keeperTransit", () => keeperTransit.observe(room, hostiles));
+    cpuMeter.span("intel.keeperTransit", () => keeperTransit.observe(room));
     if (room.controller && room.controller.my) {
         mem.defenseActive = hostiles.length > 0;
     }

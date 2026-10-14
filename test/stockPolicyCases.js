@@ -31,7 +31,7 @@ module.exports = function (project, assert) {
         Memory.marketFlip = { committedCredits: 0, active: {} };
         Memory.craft = { active: {}, stranded: {} };
         Memory.swing = undefined;
-        deals = []; creates = []; cancelCalls = []; orders = [];
+        deals = []; creates = []; cancelCalls = []; orders = []; reprices = 0;
         book.reset(); swing.resetScan(); census.build();
     };
     try {
@@ -255,8 +255,8 @@ module.exports = function (project, assert) {
         const fixedPrice = sale.listedPrice;
         Game.market.orders.fixed = { id: "fixed", created: sale.listedTick, type: ORDER_SELL, resourceType: "O", roomName: room.name, price: fixedPrice, remainingAmount: 100 };
         Game.time += 1300; refs.O.buyPrice = 20; ops.tick();
-        assert(sale.marketOrderId === "fixed" && sale.listedPrice === fixedPrice && reprices === 0 && creates.length === 1,
-            "0124: fixed listing preserves its approved price when historical reference rises");
+        assert(sale.marketOrderId === "fixed" && sale.listedPrice > fixedPrice && reprices === 1 && creates.length === 1,
+            "0132: swing listing follows the current valid reference without recreating the order");
         refs.O.buyPrice = 10;
         Game.market.orders.fixed.remainingAmount = 60; room.terminal.store.O -= 40;
         Game.time++; ops.tick();
@@ -315,8 +315,8 @@ module.exports = function (project, assert) {
         Game.rooms[concurrentTarget.name] = concurrentTarget;
         fresh(); orders = [q(7)]; book.reset();
         const outgoing = ops.transfer(room.name, concurrentTarget.name, "energy", 25000);
-        assert(!ops.buy(room.name, "energy", 1000, 9.9, false, true).ok,
-            "0124: legacy manual purchases retain their resource-conflict semantics");
+        assert(ops.buy(room.name, "energy", 1000, 9.9, false, true).ok,
+            "0132: manual purchases coexist with a reserved outgoing shipment");
         const fuelProtected = ops.buy(room.name, "energy", 1000, 9.9, false, true,
             { policy: "swing", effectiveLimit: true, automaticPurchase: true });
         const shipment = ops.operation(outgoing.id);
@@ -508,7 +508,7 @@ module.exports = function (project, assert) {
             delete Memory.craft.active[room.name];
             const pendingOp = ops.operation(Object.values(Memory.terminalOps.operations).find(o => o.kind === "buy").id);
             pendingOp.state = "cancelled";
-            const secondBlocker = ops.buy(room.name, "Z", 20, 13, false, true, { automaticPurchase: true });
+            const secondBlocker = ops.buy(room.name, "Z", 20, 13, false, true, { automaticPurchase: true, owner: { kind: "craft", id: room.name + "-" + Game.time } });
             const countBefore = Object.keys(Memory.terminalOps.operations).length;
             const refused = chain.open(room, Object.assign({}, candidate, { buys: { O: 540, Z: 20 }, spend: 6720 }));
             assert(secondBlocker.ok && !refused.ok && refused.reason === "buy-refused:Z" &&

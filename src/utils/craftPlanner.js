@@ -151,7 +151,7 @@ function phasePlan(product, steps, built) {
     return phaseMemo[key];
 }
 
-function buildContext(room, snapshot) {
+function buildContext(room, snapshot, purchaseBook) {
     const labInfo = labPlanInfo(room);
     const commitments = config.get("stockPolicy.enabled", true) ? require("./resourcePolicy").commitments(room) : null;
     const feeUnits = config.get("craft.deliveryEnergyPerUnit", 0.3);
@@ -174,6 +174,7 @@ function buildContext(room, snapshot) {
         return estimates[key] = result && result.best ? result.best : null;
     }
     return {
+        buyQuote: purchaseBook ? (r, q) => purchaseBook.quote(room.name, r, q) : null,
         labPolicyInfo(steps) {
             if (!labPolicy.descriptor(steps)) return null;
             const best = policyEstimate(steps);
@@ -215,7 +216,7 @@ function buildContext(room, snapshot) {
             const ask = energy && energy.currentSell;
             if (!(ask > 0)) return 0;
             let units = qty;
-            Object.keys(plan.buys).forEach((k) => { units += plan.buys[k]; });
+            if (!purchaseBook) Object.keys(plan.buys).forEach((k) => { units += plan.buys[k]; });
             return units * feeUnits * ask;
         },
         // a lab chain needs a phase plan on the labs actually built
@@ -291,8 +292,8 @@ function sizeLot(product, recipe, ctx, credits) {
     return last && last.cash === undefined ? { verdict: last } : null;
 }
 
-function scanRoom(room, snapshot, mem, found) {
-    const ctx = buildContext(room, snapshot);
+function scanRoom(room, snapshot, mem, found, purchaseBook, onlyProduct) {
+    const ctx = buildContext(room, snapshot, purchaseBook);
     const credits = availableCredits();
     // labs that exist but cannot form a plan (too few, or not on the stamp):
     // say so once per room instead of silently never listing lab products
@@ -301,6 +302,7 @@ function scanRoom(room, snapshot, mem, found) {
     }
     const busy = craftChain.busyKinds(room.name);
     productsFor(room).forEach((product) => {
+        if (onlyProduct && product !== onlyProduct) return;
         const recipe = marketPricing.recipeOf(product);
         if (!recipe) return;
         if (busy[recipe.kind]) return; // that structure already runs a chain: nothing to report
@@ -321,6 +323,7 @@ function scanRoom(room, snapshot, mem, found) {
             ratio: +verdict.ratio.toFixed(4), margin: +verdict.margin.toFixed(4), T: Math.round(verdict.T),
             steps: verdict.plan.steps.map((s) => ({ product: s.product, kind: s.kind, batches: s.batches })),
             buys: verdict.plan.buys, owns: verdict.plan.owns,
+            purchaseQuotes: verdict.plan.purchaseQuotes,
             labPolicy: ctx.labPolicyInfo(verdict.plan.steps),
         });
     });
@@ -339,10 +342,11 @@ function scan() {
     mem.discards = {};
     mem.discardSample = [];
     const found = [];
+    const purchaseBook = require("./craftPurchaseBook").create(snapshot);
     ownedRooms().forEach((room) => {
         const taken = craftChain.busyKinds(room.name);
         if (taken.factory && taken.lab) return; // both structure kinds are taken
-        scanRoom(room, snapshot, mem, found);
+        scanRoom(room, snapshot, mem, found, purchaseBook);
     });
     found.sort((a, b) => b.ratio - a.ratio || b.profit - a.profit);
     mem.candidates = found.slice(0, 10);
@@ -351,33 +355,23 @@ function scan() {
     // a safety cap says stop (craftChain.open re-checks every cap itself).
     if (!config.get("craft.test", true)) {
         mem.opened = [];
-        // Inputs a chain is still BUYING (this scan's openings included): every
-        // candidate was priced against the same order book, so a second chain on the
-        // same input would count the cheap orders the first one is about to eat.
-        // It waits for a later scan, which sees the book after that purchase.
-        const buying = {};
-        Object.keys(mem.active).forEach((k) => {
-            const c = mem.active[k];
-            if (c && c.state === "buying") Object.keys(c.buys || {}).forEach((r) => { buying[r] = k; });
-        });
         for (const candidate of mem.candidates) {
             const room = Game.rooms[candidate.room];
             if (!room) continue;
-            const clash = Object.keys(candidate.buys || {}).find((r) => buying[r]);
-            if (clash) {
-                discard(mem, candidate.product, room, "shared-input:" + clash);
-                const key = "shared:" + candidate.room + ":" + candidate.product + ":" + clash + ":" + buying[clash];
-                if (!openFailLogged[key]) {
-                    openFailLogged[key] = true;
-                    log("candidato " + candidate.room + " " + candidate.product + " x" + candidate.qty + " espera: " + clash +
-                        " ja esta sendo comprado por " + buying[clash] + " (o livro so vale depois dessa compra)");
-                }
+            if ((candidate.steps || []).some((s) => craftChain.busyKinds(room.name)[s.kind])) continue;
+            // Re-size against volume consumed by earlier openings in this scan.
+            const refreshed = [];
+            scanRoom(room, snapshot, mem, refreshed, purchaseBook, candidate.product);
+            const current = refreshed.find((c) => c.product === candidate.product);
+            if (!current) {
+                candidate.wait = "purchase-revalidation";
                 continue;
             }
+            Object.assign(candidate, current);
             const result = craftChain.open(room, candidate);
             if (result.ok) {
                 mem.opened.push(candidate.room + ":" + candidate.product);
-                Object.keys(candidate.buys || {}).forEach((r) => { buying[r] = candidate.room + ":" + candidate.product; });
+                Object.values(candidate.purchaseQuotes || {}).forEach((q) => purchaseBook.reserve(q));
             }
             else if (result.reason === "room-busy") continue;
             else if (result.reason === "max-active") {

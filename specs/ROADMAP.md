@@ -12,7 +12,9 @@ detalhe.
 
 | #    | Feature | Status | Notas |
 |------|---------|--------|-------|
-| 0131 | [Claim: trânsito SK fora dos tiles perigosos](features/0131-claim-keeper-transit/spec.md) | done | ARK-111/ARK-112/ARK-113/ARK-115: máscaras de keeper/lair, observer e cache; core isolado bloqueia apenas seu tile, leitor de path nativo e orçamento/backoff de buscas corrigidos; bans preservados. Publicação e validação em jogo pendentes. |
+| 0134 | [Craft: profundidade de compras concorrentes](features/0134-craft-purchase-depth/spec.md) | done | ARK-123: saldo quantitativo de SELL orders substitui shared-input global; revalida lote, lucro e limite efetivo com frete. Smoke/check/build/diff/graphify verdes; sem commit, publicação e validação de W7N49 pendentes. |
+| 0133 | [Patrimônio estimado em créditos](features/0133-credit-assets/spec.md) | done | ARK-122: inventário em estruturas/cargo/conta, gráfico com Sell Value e desconto de 5% apenas nos recursos; indicador de recursos sem preço. Smoke, exporter e build verdes; ativação do exporter/dashboard pendente. |
+| 0131 | [Claim: trânsito SK fora dos tiles perigosos](features/0131-claim-keeper-transit/spec.md) | done | ARK-111/ARK-112/ARK-113/ARK-115: máscaras de keeper/lair, observer e cache; core isolado bloqueia apenas seu tile, leitor de path nativo e orçamento/backoff de buscas corrigidos; bans preservados. ARK-124: jogadores neutros/aliados bloqueiam SK e primeiro intel compartilha scans. Publicação e validação em jogo pendentes. |
 | 0001 | [CPU & Memory foundation](features/0001-cpu-memory-foundation/spec.md) | done | fix do cache de Memory, `census`, `roomCache`, `terrain`, índice do plano, `guard` no `main`, flag do profiler |
 | 0002 | [Economy roles & spawning](features/0002-economy-and-spawning/spec.md) | done | harvester como máquina de estados, fila de spawn priorizada, scout por último, intel em varredura única |
 | 0003 | [Base defense layout](features/0003-base-defense-layout/spec.md) | done | torres + ramparts dos clusters de source fora do perímetro, rebalanceamento do orçamento de torres |
@@ -343,11 +345,13 @@ individuais.
 | 0124 | [Estoque de uso e mercado oportunista](features/0124-swing-trade/spec.md) | implementado | ARK-32; storage de consumo, terminal de materiais, reservas quantitativas, piso global, compra/venda com frete e margem de 1%; mercado em simulação por padrão, mínimo temporário de 30 amostras (retornar a 48 após validar); histórico paginado preserva a janela após resets; coleta com bucket ≥500 e cadência sem drift ; diagnóstico de referência via `swingReference` ; mercado antes dos consumidores e recuperação imediata da hidratação ; reposição concorrente com consumo/transferências, descontando entradas pendentes |
 | 0125 | [Powered terminal relay aliado](features/0125-powered-terminal-relay/spec.md) | planned | ARK-90: cotação direta/relay implementada e plano pronto; ARK-91: execução e integração ao balanceamento não crítico em Backlog. |
 | 0126 | [Hauler: energia caída sob containers](features/0126-hauler-container-energy-drops/spec.md) | done | ARK-95: exclui drops cobertos, preserva cache de links e compartilha índice por sala/tick; regressões no smoke. |
-| 0127 | [Política de labs por vazão efetiva](features/0127-lab-throughput-planning/spec.md) | done | ARK-98: catálogo de 596 planos/1.950 cenários, avaliação incremental, executor híbrido, confirmação/reservas, hauler e migração; smoke/check/build verdes. |
+| 0127 | [Política de labs por vazão efetiva](features/0127-lab-throughput-planning/spec.md) | done | ARK-98: catálogo de 596 planos/1.950 cenários, avaliação incremental, executor híbrido, confirmação/reservas, hauler e migração; smoke/check/build verdes. ARK-124: executor revalida reservas/atividade nos dois inputs e output, inclusive reação manual já iniciada. |
 | 0128 | [Busca offline de estratégias de labs](features/0128-lab-strategy-search/spec.md) | done | ARK-99: 1.950 cenários, 119.704 avaliações, 596 planos; 18 ótimos pequenos e 2 limites. Smoke/build verdes; runtime preservado. |
 | 0130 | [Reservas por direção no terminal](features/0130-terminal-directional-reservations/spec.md) | done | ARK-108: compras automáticas convivem com saídas sem tomar estoque listado; reservas de entradas futuras, proteção de cargo/intents no hauler e preflight de craft. |
 
 0124 / ARK-32: reserva de energia do terminal passa a ser dinâmica (duas transações +20%, zero quando ocioso), com proteção quantitativa de carga/frete, prioridade de reposição, escassez, hysteresis e diagnóstico `terminalFuelStatus`. Validada no smoke, incluindo executor e haulers.
+| 0132 | [Lotes do terminal e custo efetivo](features/0132-terminal-lots-effective-cost/spec.md) | done | ARK-120: reservas por proprietário/lote, agregação idempotente, compras por custo efetivo com frete opcional, instantâneo antes de listing e confirmação de taxas/ordens. ARK-124: teto BUY inclui taxas anteriores/incrementais ao reprecificar/estender; validação live após publicação. |
+
 # Correção concluída — 0064 / ARK-102 (2026-10-12)
 
 Claim para E5N41: perda das entradas validadas reproduzida offline e corrigida.
