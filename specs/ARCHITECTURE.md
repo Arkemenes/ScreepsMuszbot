@@ -837,7 +837,9 @@ permanecem elegíveis; expiração reavalia limites/cooldown/créditos/capacidad
 Sucesso limpa histórico; legado deadOrderIds ganha uma janela finita uma vez,
 preservada em reset. Seleção, swing e diagnóstico usam as mesmas exclusões.
 Reprodução offline confirmou retirada de frete por job antigo; não se afirma
-causa exata dos ticks históricos sem sua telemetria. Validação live ainda pendente.
+causa exata dos ticks históricos sem sua telemetria. Live83650615 confirmou
+terminal-12441 completed:UH2O1460 em885+575, créditos324420.76/frete1117,
+accounting confirmed e última evidência transaction.
 
 ## Estoque e recuperação do craft (0135 / ARK-125)
 
