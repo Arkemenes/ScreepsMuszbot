@@ -31,7 +31,7 @@ function create(snapshot) {
             return { o, q, evaluation: q > 0 ? evaluate(o, q) : null };
         }).filter((x) => x.evaluation && x.evaluation.ok)
             .sort((a, b) => a.evaluation.effective - b.evaluation.effective || a.o.id.localeCompare(b.o.id));
-        let remaining = quantity, cost = 0, freight = 0, ceiling = 0;
+        let remaining = quantity, cost = 0, freight = 0, ceiling = 0, netAmount = 0;
         const allocations = [];
         for (const item of sorted) {
             const q = Math.min(remaining, available(item.o));
@@ -39,7 +39,8 @@ function create(snapshot) {
             const ev = evaluate(item.o, q);
             if (!ev.ok) continue;
             allocations.push({ orderId: item.o.id, quantity: q, effective: ev.effective });
-            cost += ev.effective * q;
+            cost += ev.effective * ev.netAmount;
+            netAmount += ev.netAmount;
             freight += ev.cost;
             ceiling = Math.max(ceiling, ev.effective);
             remaining -= q;
@@ -47,7 +48,7 @@ function create(snapshot) {
         }
         const result = { ok: remaining === 0, reason: remaining ? "liq-depth" : null,
             quantity, available: quantity - remaining, cost, unit: cost / quantity,
-            ceiling, freight, allocations };
+            ceiling, freight, netAmount, allocations };
         quotes.set(key, result);
         return result;
     }
@@ -75,6 +76,19 @@ function create(snapshot) {
         const quantity = Math.max(0, (op.remaining || 0) - pending);
         if (quantity && op.sourceRoom) reserve(quote(op.sourceRoom, op.resourceType, quantity, op.limit, false));
     });
-    return { quote, reserve };
+    function quoteNet(room, resource, needed) {
+        if (resource !== RESOURCE_ENERGY) return quote(room, resource, needed);
+        let low = needed, high = orders(resource).reduce((n, o) => n + available(o), 0);
+        let result = quote(room, resource, high);
+        if (!result.ok || result.netAmount < needed) return Object.assign({}, result, { ok: false, reason: "liq-depth" });
+        for (let pass = 0; pass < 32 && low < high; pass++) {
+            const middle = Math.floor((low + high) / 2), candidate = quote(room, resource, middle);
+            if (candidate.ok && candidate.netAmount >= needed) high = middle;
+            else low = middle + 1;
+        }
+        result = quote(room, resource, high);
+        return Object.assign({}, result, { ok: result.ok && result.netAmount >= needed, neededNet: needed, unit: result.cost / needed });
+    }
+    return { quote, quoteNet, reserve };
 }
 module.exports = { create };

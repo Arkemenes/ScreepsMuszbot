@@ -572,6 +572,22 @@ function pickLoadNow(creep) {
         }
     }
 
+    // A funded recipe gets its own cargo after essential consumers. Preserve
+    // the ordinary room floor and all other owners, including same-tick loads.
+    const fundedOwner = craftOwner(creep.room, "factory");
+    if (fundedOwner && resourceTiers.aboveReserve(creep.room)) {
+        const factory = roomCache.structuresByType(creep.room, STRUCTURE_FACTORY)[0];
+        const needed = factory && Math.min(transientStock.energyNeed(factory), reservations.availableDeliver(creep, factory)) || 0;
+        const source = [creep.room.storage, creep.room.terminal].find((s) => s &&
+            stockPolicy.consumerAvailable(creep.room, s, RESOURCE_ENERGY, fundedOwner) > 0);
+        if (needed > 0 && source) {
+            const q = Math.min(needed, creep.store.getFreeCapacity(RESOURCE_ENERGY),
+                stockPolicy.consumerAvailable(creep.room, source, RESOURCE_ENERGY, fundedOwner),
+                source === creep.room.storage ? Math.max(0, source.store.energy - resourceTiers.reserveFloor(creep.room)) : Infinity);
+            if (q > 0) return { id: source.id, act: "withdraw", amount: q, dest: factory.id, craftOwner: fundedOwner };
+        }
+    }
+
     const minDrop = config.get("hauler.minDropLoad", 100);
     const dropped = biggestEnergyDrop(creep.room) <= minDrop ? null : creep.pos.findClosestByPath(FIND_DROPPED_RESOURCES, {
         filter: (r) =>
@@ -843,8 +859,13 @@ function mineralDeliveryTarget(room, resourceType) {
     return null;
 }
 
-function mineralWithdrawSource(room, resourceType) {
-    const available = (source) => config.get("stockPolicy.enabled", true) ? stockPolicy.consumerAvailable(room, source, resourceType) : source.store[resourceType] || 0;
+function craftOwner(room, kind) {
+    const c = Object.values(Memory.craft && Memory.craft.active || {}).find((c) => c.room === room.name && c.state === "working" &&
+        (c.queue || []).slice(c.qi || 0).some((i) => i.kind === kind && i.started && !i.finished));
+    return c ? "craft:" + (c.ownerId || c.id) : null;
+}
+function mineralWithdrawSource(room, resourceType, owner) {
+    const available = (source) => config.get("stockPolicy.enabled", true) ? stockPolicy.consumerAvailable(room, source, resourceType, owner) : source.store[resourceType] || 0;
     if (room.storage && available(room.storage) > 0) {
         return room.storage;
     }
@@ -936,7 +957,7 @@ function labReagentJob(room) {
             if (reaction.owner && (!limits || !limits[labId] || limits[labId][2] === false)) continue;
             if ((lab.store[resourceType] || 0) >= target) continue;
             if (feedTaken(room, resourceType, lab.id)) continue;
-            if (!sources.has(resourceType)) sources.set(resourceType, mineralWithdrawSource(room, resourceType));
+            if (!sources.has(resourceType)) sources.set(resourceType, mineralWithdrawSource(room, resourceType, craftOwner(room, "lab")));
             const from = sources.get(resourceType);
             if (!from) continue;
             return { kind: "labReagent", resourceType, from, to: lab,
@@ -988,7 +1009,7 @@ function factoryComponentJob(room) {
         const need = recipe.components[resourceType];
         if ((factory.store[resourceType] || 0) >= need) continue;
         if (feedTaken(room, resourceType, factory.id)) continue;
-        const from = mineralWithdrawSource(room, resourceType);
+        const from = mineralWithdrawSource(room, resourceType, craftOwner(room, "factory"));
         if (!from) continue;
         return { kind: "factoryComponent", resourceType, from, to: factory };
     }
@@ -1358,7 +1379,7 @@ function runMineralJobNow(creep) {
         Math.max(0, from === creep.room.terminal ? fuel.releasable(creep.room) - fuel.transit(creep.room, false, creep.name) :
             fuel.keep(creep.room) - stockPolicy.value(creep.room.terminal, RESOURCE_ENERGY) - fuel.transit(creep.room, true, creep.name)) : Infinity;
     const stockLimit = config.get("stockPolicy.enabled", true) && resourceType !== RESOURCE_ENERGY ?
-        stockPolicy.consumerAvailable(creep.room, from, resourceType) : Infinity;
+        stockPolicy.consumerAvailable(creep.room, from, resourceType, craftOwner(creep.room, job.kind === "factoryComponent" ? "factory" : job.kind === "labReagent" ? "lab" : "none")) : Infinity;
     const request = Math.min(fuelLimit, stockLimit, from.store[resourceType], creep.store.getFreeCapacity(resourceType), job.amount === undefined ? Infinity : job.amount,
         config.get("stockPolicy.enabled", true) && job.toId === (creep.room.terminal && creep.room.terminal.id) && resourceType !== RESOURCE_ENERGY ? stockPolicy.terminalFree(creep.room) : Infinity);
     if (!(request > 0)) { clearMineralJob(creep); return; }
@@ -1376,12 +1397,29 @@ function runMineralJobNow(creep) {
 function loadEnergy(creep, src) {
     const target = Game.getObjectById(src.id);
     if (!target) return false;
+    let borrowed = 0;
+    if (src.act === "withdraw" && (target === creep.room.storage || target === creep.room.terminal) &&
+        Object.values(Memory.craft && Memory.craft.active || {}).some((c) => c.room === creep.room.name && c.inventory)) {
+        const free = stockPolicy.consumerAvailable(creep.room, target, RESOURCE_ENERGY, src.craftOwner);
+        const request = Math.min(target.store.energy || 0, creep.store.getFreeCapacity(RESOURCE_ENERGY), src.amount === undefined ? Infinity : src.amount);
+        const essential = !src.craftOwner && essentialConsumer(creep);
+        const quantity = essential ? request : Math.min(request, free);
+        if (!quantity) return false;
+        if (essential) borrowed = Math.max(0, quantity - free);
+        src = Object.assign({}, src, { amount: quantity });
+    }
     reservations.claim(creep, src.id);
     if (src.dest) creep.memory.forcedDeliver = src.dest;
+    if (src.craftOwner) { creep.memory.fundedCraft = src.craftOwner; reservations.claimDeliver(creep, src.dest); }
     const status =
         src.act === "pickup"
             ? creep.pickup(target)
             : creep.withdraw(target, RESOURCE_ENERGY, src.amount);
+    if (status === OK && src.craftOwner) stockPolicy.recordConsumerWithdraw(target, RESOURCE_ENERGY, src.amount);
+    if (status === OK && borrowed) {
+        require("../utils/craftLedger").preempt(creep.room, target, RESOURCE_ENERGY, borrowed);
+        stockPolicy.recordConsumerWithdraw(target, RESOURCE_ENERGY, src.amount);
+    }
     if (status === ERR_NOT_IN_RANGE) creep.moveTo(target, { range: 1 });
     return true;
 }
@@ -1470,6 +1508,7 @@ var hauler = {
             // whatever forced this delivery (e.g. terminal -> storage) is
             // done once the tank is empty again - the next load starts fresh
             delete creep.memory.forcedDeliver;
+            delete creep.memory.fundedCraft;
             reservations.releaseDeliver(creep);
         } else if (creep.memory.job !== "deliver" && free === 0) {
             creep.memory.job = "deliver";
@@ -1561,6 +1600,10 @@ var hauler = {
             creep.room.storage.store.getFreeCapacity(RESOURCE_ENERGY) > 0
         ) {
             id = creep.room.storage.id;
+        } else if (creep.memory.fundedCraft && creep.memory.fundedCraft === craftOwner(creep.room, "factory") &&
+            !essentialConsumer(creep) && resourceTiers.aboveReserve(creep.room) && Game.getObjectById(creep.memory.forcedDeliver) &&
+            transientStock.energyNeed(Game.getObjectById(creep.memory.forcedDeliver)) > 0) {
+            id = creep.memory.forcedDeliver;
         } else {
             id = pickDeliver(creep);
         }

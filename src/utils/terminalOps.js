@@ -131,6 +131,7 @@ function create(kind, from, to, resourceType, value, options) {
     const mem = memory();
     const id = "terminal-" + mem.nextId++;
     mem.operations[id] = Object.assign({ id, kind, sourceRoom: from || null, targetRoom: to || null, resourceType, amount: value, remaining: value, state: "queued", createdTick: Game.time, updatedTick: Game.time, loadedAmount: 0, sentAmount: 0, receivedAmount: 0, transactionCost: 0 }, options || {});
+    mem.operations[id].accounting = { credits: 0, energy: 0, amount: 0, confidence: "confirmed" };
     claims.owner(mem.operations[id]);
     if (kind === "sell") mem.operations[id].lots = [{ id: options && options.lotId || id, amount: value, remaining: value, limit: options && options.limit }];
     return id;
@@ -214,7 +215,7 @@ function sellLot(roomName, resourceType, cumulative, limit, createListing, skipF
     const sales = activeForRoom(roomName).filter((op) => op.kind === "sell" && op.resourceType === resourceType && claims.owner(op) === claims.key(options.owner));
     if (!mem.lotTargets[key]) {
         let sold = 0;
-        Object.values(Memory.craft && Memory.craft.active || {}).forEach((c) => { if (claims.key(options.owner) === "craft:" + c.id && options.lotId === c.id + ":" + resourceType) sold = Math.max(sold, c.sold || 0); });
+        Object.values(Memory.craft && Memory.craft.active || {}).forEach((c) => { if (claims.key(options.owner) === "craft:" + (c.ownerId || c.id) && options.lotId === c.id + ":" + resourceType) sold = Math.max(sold, c.sold || 0); });
         let remaining = 0;
         sales.forEach((op) => {
             if (!op.lots || !op.lotManaged) {
@@ -274,7 +275,7 @@ function activeForRoom(roomName) { return activeIds().map(operation).filter((op)
 // separate so a transfer's two rooms don't collapse into one another and a
 // market deal keeps which resource actually traded (ROADMAP 0079 follow-up:
 // the dashboard's "Mercado"/"Terminal Network" panels need both).
-function record(op, value, credits, energy, fees = 0) { memory().events.push({ tick: Game.time, operationId: op.id, owner: claims.owner(op), room: op.sourceRoom || op.targetRoom, from: op.sourceRoom || null, to: op.targetRoom || null, kind: op.kind, resourceType: op.resourceType, amount: value || 0, credits: credits || 0, transactionEnergy: energy || 0, marketFees: fees }); }
+function record(op, value, credits, energy, fees = 0) { require("./craftLedger").record(op, value, credits, energy); memory().events.push({ tick: Game.time, operationId: op.id, owner: claims.owner(op), room: op.sourceRoom || op.targetRoom, from: op.sourceRoom || null, to: op.targetRoom || null, kind: op.kind, resourceType: op.resourceType, amount: value || 0, credits: credits || 0, transactionEnergy: energy || 0, marketFees: fees }); }
 
 function findHauler(roomName) { return census.creepsByRole(roomName, "hauler").find((creep) => !creep.memory.terminalJob && creep.store.getUsedCapacity() === 0); }
 function assign(op, home, direction, from, to, value, resourceType) {
@@ -613,6 +614,7 @@ function dealTraded(op, source, pending) {
     return orderAmount(verify) < pending.orderRemaining ? pending.quantity : 0;
 }
 function settleDeal(op, source) {
+    require("./craftLedger").economic(op);
     const pending = op.pendingDeal;
     if (!pending) { touch(op, "waiting"); return; }
     if (Game.time <= pending.tick) return; // the engine has not run the intent yet
@@ -906,6 +908,7 @@ function bindCreatedOrders() {
 function syncManagedOrders() {
     if (!Game.market || !Game.market.orders) return;
     activeIds().map(operation).forEach((op) => {
+        require("./craftLedger").economic(op);
         // op.listedAmount is only set by listResidual() right after it
         // actually creates the order being tracked here - it is the real
         // size of *that* order, needed as the baseline for how much of it
@@ -1303,13 +1306,14 @@ function gcOperations() {
     const retention = config.get("terminalOps.operationRetentionTicks", 10000);
     Object.keys(memory().operations).forEach((id) => {
         const op = operation(id);
-        if (op && FINAL_STATES.indexOf(op.state) >= 0 && Game.time - (op.updatedTick || op.createdTick || Game.time) >= retention) delete memory().operations[id];
+        const linked = Object.values(Memory.craft && Memory.craft.active || {}).some((c) => (c.tradeIds || []).includes(id) || c.sellOpId === id || c.partialOpId === id || c.energyOpId === id || c.energyTransferId === id || Object.values(c.buys || {}).some((b) => b.opId === id));
+        if (!linked && op && FINAL_STATES.indexOf(op.state) >= 0 && Game.time - (op.updatedTick || op.createdTick || Game.time) >= retention) delete memory().operations[id];
     });
     const targets = memory().lotTargets || {};
     if (!Object.keys(targets).length) return;
     const liveOwners = new Set(Object.values(memory().operations).filter(active).map((op) => claims.owner(op)));
     const chains = Memory.craft && Memory.craft.active || {};
-    Object.values(chains).forEach((c) => liveOwners.add("craft:" + c.id));
+    Object.values(chains).forEach((c) => liveOwners.add("craft:" + (c.ownerId || c.id)));
     Object.keys(targets).forEach((key) => {
         if (Game.time - targets[key].updatedTick >= retention && !Array.from(liveOwners).some((owner) => key.startsWith(owner + ":"))) delete targets[key];
     });

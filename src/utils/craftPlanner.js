@@ -174,7 +174,7 @@ function buildContext(room, snapshot, purchaseBook) {
         return estimates[key] = result && result.best ? result.best : null;
     }
     return {
-        buyQuote: purchaseBook ? (r, q) => purchaseBook.quote(room.name, r, q) : null,
+        buyQuote: purchaseBook ? (r, q) => purchaseBook.quoteNet(room.name, r, q) : null,
         labPolicyInfo(steps) {
             if (!labPolicy.descriptor(steps)) return null;
             const best = policyEstimate(steps);
@@ -309,6 +309,7 @@ function scanRoom(room, snapshot, mem, found, purchaseBook, onlyProduct) {
         const why = viability(room, recipe);
         if (why) { discard(mem, product, room, why); return; }
         const suspendedUntil = mem.suspended[product];
+        if (mem.retryAfter && mem.retryAfter[room.name + ":" + product] > Game.time) { discard(mem, product, room, "recovery-backoff"); return; }
         if (config.get("craft.breakers", false) && suspendedUntil && Game.time < suspendedUntil) { discard(mem, product, room, "suspended"); return; }
         const sized = sizeLot(product, recipe, ctx, credits);
         if (!sized) { discard(mem, product, room, "credits"); return; }
@@ -405,6 +406,7 @@ let lastChainTick = null;
 function tick() {
     const chainInterval = config.get("craft.tickInterval", 10);
     const active = memory().active;
+    require("./craftLedger").tick();
     const policyActive = Object.keys(active).some((key) => {
         const chain = active[key], item = chain && chain.queue && chain.queue[chain.qi || 0];
         return item && item.policy && chain.state === "working";

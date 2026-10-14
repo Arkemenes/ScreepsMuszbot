@@ -306,6 +306,7 @@ module.exports.loop = function () {
                 guard("defense:" + r.name, () => roomLogic.checkSafeMode(r))
             );
             // run each creep role see /roles/index.js
+            guard("craftLedger", () => require("./utils/craftLedger").tick());
             for (var name in Game.creeps) {
                 var creep = Game.creeps[name];
                 let role = creep.memory.role;

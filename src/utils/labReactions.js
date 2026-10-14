@@ -70,6 +70,7 @@ function execute(structure) {
     ledger.available[a.id] -= 5; ledger.available[b.id] -= 5;
     ledger.used[group] = (ledger.used[group] || 0) + 5;
     ledger.outputs.add(structure.id);
+    require("./craftLedger").production(structure, reaction.product, 5);
     if (state) state.pending.push({ tick: Game.time, product: reaction.product, out: structure.id, inputs: [a.id, b.id] });
 }
 let deliveryTick = -1, deliveries = {};

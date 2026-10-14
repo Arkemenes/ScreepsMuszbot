@@ -89,6 +89,10 @@ const defaults = {
         logisticsTicksPerMove: 50,
         // teto de ticks por estado da cadeia antes de abortar (stall guard)
         stallTicks: 3000,
+        recoveryBackoffTicks: 3000,
+        legacyRecoveryGraceTicks: 3000,
+        recoveredKeep: 20,
+        energyRetryTicks: 30,
         maxDepth: 6,
         // energia gasta para entregar/receber cada unidade negociada (taxa de
         // terminal) - estimativa, calibrada pelo ledger

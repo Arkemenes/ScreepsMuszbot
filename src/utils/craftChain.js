@@ -29,6 +29,7 @@ const terminalOps = require("./terminalOps");
 const labSlots = require("./labSlots");
 const labPolicy = require("./labPolicy");
 const labPolicyRuntime = require("./labPolicyRuntime");
+const lotLedger = require("./craftLedger");
 
 const FINAL = ["completed", "failed", "cancelled"];
 
@@ -257,7 +258,17 @@ function activeCount() { return Object.keys(craft().active).length; }
 
 function open(room, candidate) {
     const mem = craft();
+    const recoveredPlan = lotLedger.recoveredBasis(room, candidate.owns), recoveredCost = recoveredPlan.extra;
+    if (recoveredCost) {
+        candidate = Object.assign({}, candidate, { cost: candidate.cost + recoveredCost, profit: candidate.profit - recoveredCost });
+        candidate.ratio = candidate.profit / candidate.cost;
+        if (candidate.ratio < candidate.margin || candidate.profit < config.get("craft.minProfit", 5000)) return { ok: false, reason: "recovered-cost-margin" };
+    }
     const kinds = Array.from(new Set((candidate.steps || []).map((step) => step.kind))).sort();
+    let chainId = room.name + "-" + Game.time + (mem.active[room.name] ? "-" + kinds.join("+") : "");
+    if (mem.stranded[chainId] || Object.values(mem.active).some((c) => c.id === chainId)) {
+        mem.nextChainSerial = (mem.nextChainSerial || 0) + 1; chainId += "-" + mem.nextChainSerial;
+    }
     const busy = busyKinds(room.name);
     if (kinds.some((kind) => busy[kind])) return { ok: false, reason: "room-busy" };
     const cap = config.get("craft.maxActive", 0);
@@ -295,7 +306,7 @@ function open(room, candidate) {
         const effectiveQuote = candidate.purchaseQuotes && candidate.purchaseQuotes[resourceType];
         const ask = effectiveQuote ? effectiveQuote.ceiling : res && marketPricing.conservativeAsk(resourceType, res.currentSell);
         if (!(ask > 0) || qty <= 0) return { ok: false, reason: "no-quote:" + resourceType };
-        quotes[resourceType] = { ask, qty, cost: effectiveQuote ? effectiveQuote.cost : ask * qty };
+        quotes[resourceType] = { ask, qty, gross: effectiveQuote ? effectiveQuote.quantity : qty, cost: effectiveQuote ? effectiveQuote.cost : ask * qty };
     }
     const slack = config.get("craft.buySlack", 0.02);
     const uplift = buyKeys.reduce((sum, r) => sum + quotes[r].ask * quotes[r].qty - quotes[r].cost, 0);
@@ -323,7 +334,7 @@ function open(room, candidate) {
     if (reserve > require("./marketAccounting").available()) return { ok: false, reason: "credit-reserve" };
     // Check all resources before registering any part of the batch.
     for (const resourceType of buyKeys) {
-        if (terminalOps.lockConflict("buy", room.name, null, resourceType, false, { automaticPurchase: true, owner: { kind: "craft", id: room.name + "-" + Game.time } }))
+        if (terminalOps.lockConflict("buy", room.name, null, resourceType, false, { automaticPurchase: true, owner: { kind: "craft", id: chainId } }))
             return { ok: false, reason: "buy-refused:" + resourceType,
                 detail: "já existe uma operação concorrente para este terminal/recurso" };
     }
@@ -331,23 +342,26 @@ function open(room, candidate) {
     const placed = [];
     for (const resourceType of buyKeys) {
         const q = quotes[resourceType];
-        const attempt = terminalOps.buy(room.name, resourceType, q.qty, limits[resourceType], false, true, { automaticPurchase: true, owner: { kind: "craft", id: room.name + "-" + Game.time } });
+        const attempt = terminalOps.buy(room.name, resourceType, q.gross, limits[resourceType], false, true, { automaticPurchase: true, owner: { kind: "craft", id: chainId } });
         if (!attempt.ok) { placed.forEach((id) => terminalOps.cancel(id)); return { ok: false, reason: "buy-refused:" + resourceType, detail: attempt.error }; }
         placed.push(attempt.id);
-        buys[resourceType] = { opId: attempt.id, qty: q.qty, limit: limits[resourceType] };
+        buys[resourceType] = { opId: attempt.id, qty: q.qty, grossQty: q.gross, limit: limits[resourceType] };
     }
     marketFlip.commit(reserve);
     // first chain of a room keeps the plain room name as its key; a second one
     // (the other structure kind) gets the kinds appended
     const key = mem.active[room.name] ? room.name + ":" + kinds.join("+") : room.name;
     mem.active[key] = {
-        id: room.name + "-" + Game.time, key, kinds, room: room.name, product: candidate.product, qty: candidate.qty,
+        id: chainId, key, kinds, room: room.name, product: candidate.product, qty: candidate.qty,
         openedTick: Game.time, state: Object.keys(buys).length ? "buying" : "working", stateTick: Game.time,
         queue, qi: 0, buys, reserved: reserve,
         est: { cash: candidate.cash, spend, cost: candidate.cost, revenue: candidate.revenue, profit: candidate.profit, floor: candidate.cost / candidate.qty },
         ownCost: Math.max(0, candidate.cost - candidate.cash),
         holds: {},
     };
+    lotLedger.ensure(mem.active[key], candidate.owns || {});
+    lotLedger.recoveredBasis(room, candidate.owns, chainId);
+    if (recoveredPlan.estimated) { mem.active[key].recoveredBasis = recoveredCost; mem.active[key].recoveredCostEstimated = true; mem.active[key].costConfidence = "estimated-recovered"; }
     log(room.name + " abriu " + candidate.product + " x" + candidate.qty + ": compra " +
         (Object.keys(buys).map((k) => k + " x" + buys[k].qty + " (limite " + buys[k].limit.toFixed(1) + ")").join(", ") || "nada (so estoque proprio)") +
         ", gasto " + Math.round(spend) + ", custo " + Math.round(candidate.cost) + ", lucro estimado +" + Math.round(candidate.profit) +
@@ -391,6 +405,28 @@ function startItem(room, chain) {
     // ROADMAP 0115: the whole wave starts together (a group of one for everything else)
     const group = groupAt(chain, chain.qi);
     const item = group[0];
+    if (!require("./craftEnergy").ready(room, chain, item)) {
+        const wait = chain.energyWait || {}, signature = wait.reason + ":" + (wait.detail || "");
+        if (chain.energyWaitLog !== signature) {
+            chain.energyWaitLog = signature;
+            log(chain.room + " " + chain.product + ": " + wait.reason + ", deficit liquido " + (wait.deficit || 0) + (wait.opId ? ", op " + wait.opId : ""));
+        }
+        return false;
+    }
+    delete chain.energyWaitLog;
+    if (item.kind === "factory") {
+        const recipe = marketPricing.recipeOf(item.product), factory = roomCache.structuresByType(room, STRUCTURE_FACTORY)[0];
+        const batches = Math.ceil(Math.max(0, item.target - (item.progress || 0)) / recipe.amount);
+        const owner = "craft:" + (chain.ownerId || chain.id), claims = require("./terminalClaims");
+        const missing = Object.keys(recipe.components).filter((r) => r !== RESOURCE_ENERGY).map((r) => {
+            const need = batches * recipe.components[r];
+            const have = claims.physicalFree(room, room.storage, r, null, owner) + claims.physicalFree(room, room.terminal, r, null, owner) +
+                (factory && factory.store[r] || 0);
+            return { resource: r, needed: need, available: have, deficit: Math.max(0, need - have) };
+        }).filter((r) => r.deficit > 0);
+        if (missing.length) { chain.materialWait = { reason: "component-stock-deficit", missing }; return false; }
+        delete chain.materialWait;
+    }
     const mem = roomMem(room.name);
     if (item.policy) {
         if (item.base === undefined) item.base = stockAnywhere(room, item.product);
@@ -431,6 +467,7 @@ function startItem(room, chain) {
         it.base = stockAnywhere(room, it.product);
         it.started = true;
         it.startTick = Game.time;
+        it.productionBase = chain.inventory && chain.inventory.production[it.product] || 0;
     });
     return true;
 }
@@ -439,7 +476,8 @@ function startItem(room, chain) {
 // plus what the chain has already sold on the way (partial sales).
 function madeSoFar(room, chain, item) {
     if (item.policy) return item.run && item.run.produced[item.product] || 0;
-    return stockAnywhere(room, item.product) - item.base + (item.product === chain.product ? chain.sold || 0 : 0);
+    const confirmed = chain.inventory && chain.inventory.production[item.product];
+    return confirmed === undefined ? stockAnywhere(room, item.product) - item.base + (item.product === chain.product ? chain.sold || 0 : 0) : confirmed - (item.productionBase || 0);
 }
 
 function itemDone(room, item, chain) {
@@ -447,21 +485,13 @@ function itemDone(room, item, chain) {
     return madeSoFar(room, chain, item) >= item.target;
 }
 
-function eventsSince(roomName, resourceType, kind, tick, ownerId) {
-    const events = (Memory.terminalOps && Memory.terminalOps.events) || [];
-    return events.filter((e) => e.room === roomName && e.resourceType === resourceType && e.kind === kind && e.tick >= tick &&
-        (!e.owner || !ownerId || e.owner === "craft:" + ownerId));
-}
-
 function realized(chain, room) {
-    const energy = snapshotResource(RESOURCE_ENERGY);
-    const energyAsk = (energy && energy.currentSell) || 0;
-    let revenue = 0, spent = 0, energyUnits = 0;
-    eventsSince(chain.room, chain.product, "sell", chain.firstSaleTick || chain.sellStart || chain.openedTick, chain.id).forEach((e) => { revenue += e.credits; spent += e.marketFees || 0; energyUnits += e.transactionEnergy || 0; });
-    Object.keys(chain.buys).forEach((resourceType) => {
-        eventsSince(chain.room, resourceType, "buy", chain.openedTick, chain.id).forEach((e) => { spent += -e.credits + (e.marketFees || 0); energyUnits += e.transactionEnergy || 0; });
-    });
-    return revenue - spent - energyUnits * energyAsk - chain.ownCost;
+    const totals = lotLedger.totals(chain);
+    if (!totals.known || chain.recoveredCostEstimated) { chain.costConfidence = "estimated"; return null; }
+    const reference = snapshotResource(RESOURCE_ENERGY);
+    if (chain.inventory.confidence === "confirmed" && chain.inventory.production[chain.product] > 0)
+        return totals.revenue - chain.inventory.soldBasis - (chain.inventory.preemptedBasis || 0) - totals.salesFees - totals.salesEnergy * ((reference && reference.currentSell) || 0);
+    return totals.revenue - totals.spent - totals.energy * ((reference && reference.currentSell) || 0) - chain.ownCost;
 }
 
 // Unit price below which the product is never sold (user request 2026-10-02: always
@@ -479,20 +509,19 @@ function saleFloor(chain) {
     const energyAsk = (energy && energy.currentSell) || 0;
     const saleEnergy = config.get("craft.saleEnergyPerUnit", 1);
     const units = Math.max(1, chain.produced || chain.qty);
+    const inv = lotLedger.sync(chain);
+    if (inv.confidence === "confirmed" && inv.production[chain.product] > 0 && inv.balances[chain.product] > 0)
+        return ((inv.costs[chain.product] || 0) / inv.balances[chain.product] + (inv.preemptedBasis || 0) / units + saleEnergy * energyAsk) * (1 + margin);
     let cost;
     if (chain.state === "buying") {
         const planned = config.get("craft.deliveryEnergyPerUnit", 0.3);
         cost = chain.est.cost + chain.qty * Math.max(0, saleEnergy - planned) * energyAsk;
     } else {
-        if (!chain.buyCost) {
-            const tally = { credits: 0, energy: 0 };
-            Object.keys(chain.buys).forEach((resourceType) => {
-                eventsSince(chain.room, resourceType, "buy", chain.openedTick, chain.id).forEach((e) => {
-                    tally.credits += -e.credits + (e.marketFees || 0);
-                    tally.energy += e.transactionEnergy || 0;
-                });
-            });
-            chain.buyCost = tally;
+        const totals = lotLedger.totals(chain);
+        if (totals.known) chain.buyCost = { credits: totals.spent, energy: totals.energy };
+        else {
+            chain.costConfidence = "estimated";
+            return (Math.max(chain.est.cost, totals.spent + chain.ownCost) / units + saleEnergy * energyAsk) * (1 + margin);
         }
         cost = chain.buyCost.credits + (chain.buyCost.energy + units * saleEnergy) * energyAsk + chain.ownCost;
     }
@@ -502,12 +531,12 @@ function saleFloor(chain) {
 function recordRun(chain, profit, extra) {
     const mem = craft();
     const keep = config.get("craft.ledgerKeep", 20);
-    const run = Object.assign({ tick: Game.time, product: chain.product, room: chain.room, estimated: Math.round(chain.est.profit), profit: Math.round(profit) }, extra || {});
+    const run = Object.assign({ tick: Game.time, product: chain.product, room: chain.room, estimated: Math.round(chain.est.profit), profit: profit === null ? null : Math.round(profit), confidence: profit === null ? "estimated" : "confirmed" }, extra || {});
     mem.ledger.runs.push(run);
     if (mem.ledger.runs.length > keep) mem.ledger.runs.shift();
     const entry = mem.ledger.products[chain.product] || (mem.ledger.products[chain.product] = { runs: 0, profit: 0, last: [] });
-    entry.runs++; entry.profit += run.profit;
-    entry.last.push(run.profit);
+    entry.runs++; if (run.profit !== null) entry.profit += run.profit;
+    if (run.profit !== null) entry.last.push(run.profit);
     if (entry.last.length > config.get("craft.productLosses", 3)) entry.last.shift();
     // breakers: N losses in a row suspend the product; a net-negative global
     // window puts the whole planner back into test mode
@@ -528,12 +557,19 @@ function recordRun(chain, profit, extra) {
 
 function finish(chain, room, profit, extra) {
     const mem = craft();
+    const inventory = lotLedger.sync(chain), items = {}, costs = {};
+    Object.entries(inventory.balances).forEach(([r, q]) => {
+        if (q > 0) { items[r] = Math.min(q, lotLedger.physical(room, r)); costs[r] = inventory.costs[r] || 0; }
+    });
+    if (Object.keys(items).length) mem.stranded[chain.ownerId || chain.id] = { room: chain.room, tick: Game.time, product: chain.product, items, costs,
+        spent: Object.values(costs).reduce((n, cost) => n + cost, 0), inventoryVersion: 1,
+        confidence: inventory.confidence === "confirmed" ? "confirmed" : "estimated" };
     log(chain.room + " " + chain.product + " concluida: lucro real " + Math.round(profit) + " (estimado " + Math.round(chain.est.profit) + ")");
     marketFlip.release(chain.reserved);
     clearChainFlags(chain);
     delete mem.active[chain.key || chain.room];
     mem.stats.completed++;
-    mem.stats.profit += profit;
+    if (profit !== null) mem.stats.profit += profit;
     // the lot is sold: let the planner pick the next one on the next tick
     // instead of waiting up to craft.scanInterval (only after a SUCCESSFUL
     // lot - an abort never retriggers itself)
@@ -542,6 +578,13 @@ function finish(chain, room, profit, extra) {
 }
 
 function abort(chain, room, reason) {
+    lotLedger.sync(chain);
+    const ids = Object.values(chain.buys || {}).map((b) => b.opId).concat(chain.sellOpId, chain.partialOpId, chain.energyOpId, chain.energyTransferId).filter(Boolean);
+    ids.forEach((id) => { const op = opState(id); if (op && FINAL.indexOf(op.state) < 0) terminalOps.cancel(id); });
+    const pending = ids.some((id) => { const op = opState(id); return op && FINAL.indexOf(op.state) < 0; });
+    if (pending || chain.inventory.pending.length) {
+        chain.abortReason = reason; chain.state = "recovering"; chain.wait = "cancel-confirmation"; clearChainFlags(chain); return;
+    }
     const mem = craft();
     // cancel whatever is still in flight; delivered inputs stay as own stock
     Object.keys(chain.buys).forEach((resourceType) => {
@@ -561,32 +604,16 @@ function abort(chain, room, reason) {
     delete mem.active[chain.key || chain.room];
     mem.stats.aborted++;
     const items = {};
-    Object.keys(chain.buys).forEach((resourceType) => { items[resourceType] = chain.buys[resourceType].qty; });
-    // Retain the whole cancelled chain, including material produced before abort.
-    const retain = (r, q) => { if (r && Number.isFinite(q)) items[r] = Math.max(items[r] || 0, q); };
-    retain(chain.product, chain.qty);
-    const demand = {};
-    (chain.queue || []).forEach((step) => {
-        if (step.policy) {
-            step.order.forEach((p) => {
-                retain(p, step.targets[p]);
-                const recipe = marketPricing.recipeOf(p);
-                if (recipe) Object.keys(recipe.components).forEach((r) => {
-                    demand[r] = (demand[r] || 0) + Math.ceil(step.targets[p] / recipe.amount) * recipe.components[r];
-                });
-            });
-            return;
-        }
-        retain(step.product, step.target);
-        const recipe = marketPricing.recipeOf(step.product);
-        if (recipe) Object.keys(recipe.components).forEach((r) => {
-            demand[r] = (demand[r] || 0) + Math.ceil((step.target || 0) / recipe.amount) * recipe.components[r];
-        });
-    });
-    Object.keys(demand).forEach((r) => retain(r, demand[r]));
-    const spent = chain.est.spend;
-    mem.stranded[chain.room + "-" + Game.time] = { room: chain.room, tick: Game.time, product: chain.product, items, spent };
-    recordRun(chain, 0, { aborted: reason });
+    Object.entries(chain.inventory.balances).forEach(([r, q]) => { if (q > 0) items[r] = Math.min(q, lotLedger.physical(room, r)); });
+    const totals = lotLedger.totals(chain);
+    const costs = Object.fromEntries(Object.keys(items).map((r) => [r, chain.inventory.costs[r] || 0]));
+    const knownBasis = totals.known && chain.inventory.confidence === "confirmed";
+    const spent = knownBasis ? Object.values(costs).reduce((n, cost) => n + cost, 0) : totals.spent;
+    mem.stranded[chain.ownerId || chain.id] = { room: chain.room, tick: Game.time, product: chain.product, items, spent, inventoryVersion: 1,
+        costs: knownBasis ? costs : null, confidence: knownBasis ? "confirmed" : "estimated" };
+    if (!mem.retryAfter) mem.retryAfter = {};
+    mem.retryAfter[chain.room + ":" + chain.product] = Game.time + config.get("craft.recoveryBackoffTicks", 3000);
+    recordRun(chain, null, { aborted: reason });
     log(chain.room + " " + chain.product + " abortado (" + reason + ") - insumos ficam em estoque");
 }
 
@@ -612,7 +639,7 @@ function partialSales(chain, room, item) {
     chain.sold = (chain.soldBase || 0) + (chain.partialDealt || 0);
     if (!config.get("craft.partialSales", true) || item.product !== chain.product) return;
     const product = chain.product;
-    const reach = terminalOps.saleAvailable(room, product, { kind: "craft", id: chain.id });
+    const reach = terminalOps.saleAvailable(room, product, { kind: "craft", id: (chain.ownerId || chain.id) });
     const unsold = item.policy ? Math.min(Math.max(0, stockAnywhere(room, product) - item.base),
         Math.max(0, madeSoFar(room, chain, item) - (chain.sold || 0))) : Math.max(0, stockAnywhere(room, product) - item.base);
     const sellable = Math.min(unsold, reach);
@@ -624,7 +651,7 @@ function partialSales(chain, room, item) {
     if (chain.sellRetryTick > Game.time) return;
     const prior = chain.partialOpId && opState(chain.partialOpId);
     const attempt = terminalOps.sellLot(chain.room, product, Math.floor((chain.sold || 0) + sellable), floor, false, true,
-        { owner: { kind: "craft", id: chain.id }, lotId: chain.id + ":" + product });
+        { owner: { kind: "craft", id: (chain.ownerId || chain.id) }, lotId: chain.id + ":" + product });
     if (!attempt.ok) { chain.saleBlock = attempt; chain.sellRetryTick = Game.time + config.get("craft.sellRetryTicks", 25); return; }
     delete chain.saleBlock;
     chain.partialOpId = attempt.id;
@@ -649,6 +676,8 @@ function finishPartials(chain) {
 }
 
 function advance(chain, room) {
+    lotLedger.settle(chain);
+    if (chain.state === "recovering") { abort(chain, room, chain.abortReason || "recovery"); return; }
     if (manualPin(room.name, kindsOf(chain))) {
         const item = chain.queue[chain.qi || 0];
         if (item && item.policy) labPolicyRuntime.reconcile(room, chain, item);
@@ -671,7 +700,8 @@ function advance(chain, room) {
             }
         });
     }
-    if (Game.time - chain.stateTick > config.get("craft.stallTicks", 3000) && chain.state !== "selling") {
+    if (Game.time - chain.stateTick > config.get("craft.stallTicks", 3000) && chain.state !== "selling" &&
+        !(chain.recoveryGraceUntil > Game.time)) {
         abort(chain, room, "stall:" + chain.state);
         return;
     }
@@ -680,7 +710,7 @@ function advance(chain, room) {
         for (const resourceType of Object.keys(chain.buys)) {
             const entry = chain.buys[resourceType];
             const op = opState(entry.opId);
-            const dealt = (op && op.dealtAmount) || 0;
+            const dealt = (op && (resourceType === RESOURCE_ENERGY && typeof op.netBought === "number" ? op.netBought : op.dealtAmount)) || 0;
             let final = !!op && FINAL.indexOf(op.state) >= 0;
             // An order without a listing never closes by itself once the book runs
             // out: it sits in "waiting" for a new eligible order, and the whole chain
@@ -793,9 +823,18 @@ function sellStep(chain, room) {
         chain.sellOpId = null; // failed/cancelled: retry below
     }
     const remaining = Math.max(0, (chain.produced || chain.qty) - (chain.sold || 0));
-    const sellable = Math.min(remaining, terminalOps.saleAvailable(room, chain.product, { kind: "craft", id: chain.id }));
+    const sellable = Math.min(remaining, terminalOps.saleAvailable(room, chain.product, { kind: "craft", id: (chain.ownerId || chain.id) }));
     if (sellable <= 0) {
-        if (remaining > 0 && stockAnywhere(room, chain.product) > 0) { chain.saleBlock = "aguardando produto próprio em storage/terminal"; return; }
+        if (remaining > 0 && stockAnywhere(room, chain.product) > 0) {
+            const physical = (room.storage.store[chain.product] || 0) + (room.terminal.store[chain.product] || 0);
+            chain.saleBlock = { reason: physical > 0 ? "stock-reserved" : "product-in-production-structures", physical,
+                owned: Math.max(0, lotLedger.sync(chain).balances[chain.product] || 0),
+                blockers: terminalOps.activeForRoom(room.name).filter((op) => op.resourceType === chain.product &&
+                    require("./terminalClaims").owner(op) !== "craft:" + (chain.ownerId || chain.id)).map((op) => ({ id: op.id, owner: op.owner, remaining: op.remaining }))
+                    .concat(Object.values(mem.active).filter((c) => c !== chain && c.room === room.name && c.inventory && c.inventory.balances[chain.product] > 0)
+                        .map((c) => ({ owner: "craft:" + (c.ownerId || c.id), remaining: c.inventory.balances[chain.product] }))) };
+            return;
+        }
         finish(chain, room, realized(chain, room), { sold: 0 }); return;
     }
     const res = snapshotResource(chain.product);
@@ -816,7 +855,7 @@ function sellStep(chain, room) {
     chain.holding = false;
     if (chain.sellRetryTick > Game.time) return;
     const attempt = terminalOps.sellLot(chain.room, chain.product, Math.floor((chain.sold || 0) + sellable), floor, listing, true,
-        { owner: { kind: "craft", id: chain.id }, lotId: chain.id + ":" + chain.product });
+        { owner: { kind: "craft", id: (chain.ownerId || chain.id) }, lotId: chain.id + ":" + chain.product });
     if (attempt.ok) { chain.sellOpId = attempt.id; delete chain.saleBlock; }
     else { chain.saleBlock = attempt; chain.sellRetryTick = Game.time + config.get("craft.sellRetryTicks", 25); }
 }
@@ -934,6 +973,7 @@ function tick() {
         const state = ["buying", "working", "selling"].includes(chain.state) ? chain.state : "other";
         cpuMeter.span("craft.chain." + state, () => advance(chain, room));
     });
+    Object.values(Game.rooms || {}).filter((r) => r.controller && r.controller.my && r.storage && r.terminal).forEach(lotLedger.releaseRecovered);
     cpuMeter.span("craft.strandedSweep", () => strandedSweep());
 }
 

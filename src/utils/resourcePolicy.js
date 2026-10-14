@@ -83,8 +83,8 @@ function pendingPurchase(room, resource, id) {
 }
 // Consumers may use newly arrived excess, but never outgoing cargo. Allocate
 // staged/listed stock to the terminal and the unstaged remainder to storage.
-function consumerAvailable(room, source, resource) {
-    return terminalClaims.physicalFree(room, source, resource);
+function consumerAvailable(room, source, resource, owner) {
+    return terminalClaims.physicalFree(room, source, resource, null, owner);
 }
 function commitments(room, excludeId) {
     const sums = {}, coveredOps = {};
@@ -105,12 +105,22 @@ function commitments(room, excludeId) {
     Object.keys(chains).forEach((key) => {
         const c = chains[key];
         if ((c.room || key.split(":")[0]) !== room.name) return;
-        if (excludeId && (c.id === excludeId || excludedOwner === "craft:" + c.id)) {
+        if (excludeId && (c.id === excludeId || excludedOwner === "craft:" + (c.ownerId || c.id))) {
             Object.keys(c.buys || {}).forEach((r) => { coveredOps[c.buys[r].opId] = true; });
             coveredOps[c.sellOpId] = coveredOps[c.partialOpId] = true;
             return;
         }
         const local = {};
+        if (c.inventory) {
+            Object.keys(c.inventory.balances).forEach((r) => add(r, require("./craftLedger").warehouse(c, room, r)));
+            Object.keys(c.buys || {}).forEach((r) => { coveredOps[c.buys[r].opId] = true; });
+            coveredOps[c.sellOpId] = coveredOps[c.partialOpId] = coveredOps[c.energyOpId] = true;
+            operations(room).forEach((op) => {
+                const parent = op.parentId && Memory.terminalOps.operations[op.parentId];
+                if (op.kind === "receipt" && parent && parent.kind === "buy" && terminalClaims.owner(op) === "craft:" + (c.ownerId || c.id)) coveredOps[op.id] = true;
+            });
+            return;
+        }
         const protect = (r, q) => { if (r) local[r] = Math.max(local[r] || 0, q || 0); };
         protect(c.product, c.qty);
         Object.keys(c.buys || {}).forEach((r) => { protect(r, c.buys[r].qty); coveredOps[c.buys[r].opId] = true; });

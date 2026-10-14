@@ -12,6 +12,7 @@ detalhe.
 
 | #    | Feature | Status | Notas |
 |------|---------|--------|-------|
+| 0135 | [Craft: estoque, custos e recuperação](features/0135-craft-inventory-recovery/spec.md) | done | ARK-125: inventory/custos por lote, confirmação de produção, recovery/migração de stranded, energia líquida/reposição/bootstrapping e diagnóstico. Smoke/check/build/diff/graphify validados; publicação e verificação live pendentes. |
 | 0134 | [Craft: profundidade de compras concorrentes](features/0134-craft-purchase-depth/spec.md) | done | ARK-123: saldo quantitativo de SELL orders substitui shared-input global; revalida lote, lucro e limite efetivo com frete. Smoke/check/build/diff/graphify verdes; sem commit, publicação e validação de W7N49 pendentes. |
 | 0133 | [Patrimônio estimado em créditos](features/0133-credit-assets/spec.md) | done | ARK-122: inventário em estruturas/cargo/conta, gráfico com Sell Value e desconto de 5% apenas nos recursos; indicador de recursos sem preço. Smoke, exporter e build verdes; ativação do exporter/dashboard pendente. |
 | 0131 | [Claim: trânsito SK fora dos tiles perigosos](features/0131-claim-keeper-transit/spec.md) | done | ARK-111/ARK-112/ARK-113/ARK-115: máscaras de keeper/lair, observer e cache; core isolado bloqueia apenas seu tile, leitor de path nativo e orçamento/backoff de buscas corrigidos; bans preservados. ARK-124: jogadores neutros/aliados bloqueiam SK e primeiro intel compartilha scans. Publicação e validação em jogo pendentes. |

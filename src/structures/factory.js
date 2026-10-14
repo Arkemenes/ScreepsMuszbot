@@ -14,13 +14,15 @@ const factory = {
 
         const recipe = COMMODITIES[product];
         if (!recipe) return;
+        if (!require("../utils/craftLedger").canProduce(structure, product, recipe.amount)) return;
 
         for (const resourceType in recipe.components) {
             const need = recipe.components[resourceType];
             if ((structure.store[resourceType] || 0) < need) return;
         }
 
-        structure.produce(product);
+        const status = structure.produce(product);
+        if (status === OK) require("../utils/craftLedger").production(structure, product, recipe.amount);
     },
 };
 

@@ -14179,6 +14179,7 @@ function priceSamples(bid, ask, n, vol) {
     const completeBuy = (dealt) => {
         const op = Memory.terminalOps.operations[calls.buy[0].id];
         op.state = "completed"; op.dealtAmount = dealt === undefined ? calls.buy[0].qty : dealt;
+        room.storage.store[calls.buy[0].rt] = op.dealtAmount;
     };
 
     // opens exactly one chain: buys the missing input at a bounded price and reserves the cash.
@@ -14230,6 +14231,7 @@ function priceSamples(bid, ask, n, vol) {
         "0134: an unchanged global cap does not repeat its waiting log after buying completes");
     // working -> selling when the target is produced; flags cleared
     factory.store.widgetA = chain.queue[0].target;
+    room.storage.store.Z = 0; chain.inventory.balances.Z = 0;
     step();
     assert(chain.state === "selling" && !Memory.rooms.ChainRoom.factoryProduct && !Memory.rooms.ChainRoom.factoryEnergy, "0111 AC7: finishing the production clears the factory flags");
     // selling: bid >= break-even floor -> instant sell at the floor, never listed
@@ -14240,6 +14242,8 @@ function priceSamples(bid, ask, n, vol) {
     Memory.terminalOps.operations[calls.sell[0].id].state = "completed"; Memory.terminalOps.operations[calls.sell[0].id].dealtAmount = qty;
     Memory.terminalOps.events.push({ tick: Game.time, room: "ChainRoom", kind: "sell", resourceType: "widgetA", amount: chain.queue[0].target, credits: 5000 * chain.queue[0].target, transactionEnergy: 0 });
     Memory.terminalOps.events.push({ tick: chain.openedTick, room: "ChainRoom", kind: "buy", resourceType: "Z", amount: qty, credits: -110 * qty, transactionEnergy: 0 });
+    Object.assign(Memory.terminalOps.operations[calls.buy[0].id], { kind: "buy", resourceType: "Z", accounting: { credits: -110 * qty, energy: 0, amount: qty, confidence: "confirmed" } });
+    Object.assign(Memory.terminalOps.operations[calls.sell[0].id], { kind: "sell", resourceType: "widgetA", accounting: { credits: 5000 * chain.queue[0].target, energy: 0, amount: qty, confidence: "confirmed" } });
     step();
     assert(!Memory.craft.active.ChainRoom && Memory.marketFlip.committedCredits === 0 && Memory.craft.stats.completed === 1,
         "0111 AC5: a finished chain releases its reserved credits and is recorded");
@@ -15338,7 +15342,7 @@ function priceSamples(bid, ask, n, vol) {
     };
     const run = (settings) => { reset(settings); Game.time += 1000; craft.tick(); return Memory.craft; };
     const step = (n) => { for (let i = 0; i < (n || 1); i++) { Game.time += 1; craft.tick(); } };
-    const completeBuys = () => calls.buy.forEach((b) => { const op = Memory.terminalOps.operations[b.id]; op.state = "completed"; op.dealtAmount = b.qty; });
+    const completeBuys = () => calls.buy.forEach((b) => { const op = Memory.terminalOps.operations[b.id]; op.state = "completed"; op.dealtAmount = b.qty; room.storage.store[b.rt] = b.qty; });
 
     // default: no global cap - the room's factory AND its labs each get a chain in the same scan
     let mem = run();
@@ -15784,7 +15788,7 @@ function priceSamples(bid, ask, n, vol) {
         craft.resetScan(); craft.resetLog();
         Game.time += 1000; craft.tick();
         const chain = Memory.craft.active.PartRoom;
-        calls.buy.forEach((b) => { const op = Memory.terminalOps.operations[b.id]; op.state = "completed"; op.dealtAmount = b.qty; });
+        calls.buy.forEach((b) => { const op = Memory.terminalOps.operations[b.id]; op.state = "completed"; op.dealtAmount = b.qty; room.storage.store[b.rt] = b.qty; });
         step();
         return chain;
     };
@@ -15813,6 +15817,7 @@ function priceSamples(bid, ask, n, vol) {
     finishOp(calls.sell[0].id, lot + 2);
     room.storage.store.widgetA -= lot + 2;
     Memory.terminalOps.events.push({ tick: Game.time, room: "PartRoom", kind: "sell", resourceType: "widgetA", amount: lot + 2, credits: 1000, transactionEnergy: 0 });
+    Object.assign(Memory.terminalOps.operations[calls.sell[0].id], { kind: "sell", resourceType: "widgetA", accounting: { credits: 1000, energy: 0, amount: lot + 2, confidence: "confirmed" } });
     step();
     assert(chain.sold === lot + 2 && chain.partialOpId === calls.sell[1].id && calls.sell.length === 2 && calls.sell[1].qty === 3 * lot,
         "0111: the filled order is booked (sold " + chain.sold + ") and the next one takes what is in storage now (got qty " + (calls.sell[1] && calls.sell[1].qty) + ")");
@@ -15838,6 +15843,8 @@ function priceSamples(bid, ask, n, vol) {
     finishOp(finalSell.id, finalSell.qty);
     Memory.terminalOps.events.push({ tick: Game.time, room: "PartRoom", kind: "sell", resourceType: "widgetA", amount: finalSell.qty, credits: 5000, transactionEnergy: 0 });
     Memory.terminalOps.events.push({ tick: chain.openedTick, room: "PartRoom", kind: "buy", resourceType: "Z", amount: 100, credits: -300, transactionEnergy: 0 });
+    Object.assign(Memory.terminalOps.operations[calls.buy[0].id], { kind: "buy", resourceType: "Z", accounting: { credits: -300, energy: 0, amount: 100, confidence: "confirmed" } });
+    Object.assign(Memory.terminalOps.operations[finalSell.id], { kind: "sell", resourceType: "widgetA", accounting: { credits: 5000, energy: 0, amount: finalSell.qty, confidence: "confirmed" } });
     const ownCost = chain.ownCost;
     step();
     const run = Memory.craft.ledger.runs[Memory.craft.ledger.runs.length - 1];
@@ -15874,6 +15881,7 @@ function priceSamples(bid, ask, n, vol) {
     // fee of the purchases as traded, own stock, and the sale's own energy at the worst case
     chain = workingChain();
     Memory.terminalOps.events.push({ tick: chain.openedTick, room: "PartRoom", kind: "buy", resourceType: "Z", amount: 100, credits: -1000, transactionEnergy: 30 });
+    Object.assign(Memory.terminalOps.operations[calls.buy[0].id], { kind: "buy", resourceType: "Z", accounting: { credits: -1000, energy: 30, amount: 100, confidence: "confirmed" } });
     delete chain.buyCost;
     const units = chain.qty;
     const base = (1000 + (30 + units) * 1.1 + chain.ownCost) / units;
@@ -15884,6 +15892,7 @@ function priceSamples(bid, ask, n, vol) {
     assert(Math.abs(chainMod.saleFloor(chain) - base * 1.05) < 1e-9, "0111: craft.minSaleMargin sets the margin on top of the cost");
     Memory.settings.craft.minSaleMargin = 0.01;
     Memory.terminalOps.events.push({ tick: chain.openedTick, room: "PartRoom", kind: "buy", resourceType: "Z", amount: 100, credits: -500, transactionEnergy: 0 });
+    Memory.terminalOps.operations[calls.buy[0].id].accounting.credits -= 500;
     chain.buyCost = undefined;
     assert(chainMod.saleFloor(chain) > base * 1.01 + 400 / units, "0111: buying above the estimate raises the floor - the sale still covers what was really paid");
     // switches
@@ -16076,4 +16085,5 @@ require("./movementCpuCases")(PROJECT, assert);
 require("./economyCpuCases")(PROJECT, assert);
 require("./terminalLotCases")(PROJECT, assert);
 require("./craftPurchaseCases")(PROJECT, assert);
+require("./craftRecoveryCases")(PROJECT, assert);
 require("./assetStatsCases")(PROJECT, assert);

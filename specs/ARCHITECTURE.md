@@ -815,6 +815,47 @@ O fast gate de grandes drops ignora essas pilhas, preservando picks cacheados
 de links; pickups cacheados são revalidados contra o índice. Sem nova coleta
 de estruturas, sem `lookForAt` e sem Memory. A ordem restante é preservada.
 
+## Estoque e recuperação do craft (0135 / ARK-125)
+
+`craftLedger` mantém inventory por cadeia com balances, costs, production,
+pending intents, confirmação cumulativa de compras/vendas e soldBasis. Targets
+não são saldo físico. Factory/labs publicam intents e o guard `craftLedger` no
+main confirma seus efeitos antes dos haulers, mesmo se o planejamento for
+preterido por CPU. Claims compartilham o saldo dos lotes com consumidores e
+deduplicam receipts vinculados a compras. Prioridades essenciais podem usar
+energia do lote; essa preempção retira quantidade e preserva seu custo como
+despesa, para não financiar produção futura com energia já consumida.
+
+`terminalOps.accounting` acumula crédito, energia e quantidade confirmados;
+taxas seguem `marketFees`. `tradeIds` e economics por cadeia conservam compras
+e vendas parciais independentes de `events` (janela de métricas), com GC de
+operações vinculadas protegido. Custos passam dos insumos ao produto produzido
+e ao saldo vendido; sobra mantém custo. Legado sem evidência financeira usa
+piso conservador e lucro null/estimated, nunca custo zero presumido.
+
+Abort aguarda cancelamentos/intents em recovering. Somente saldo adquirido
+entra em stranded; a migração reconcilia registros legados depois de claims
+ativos/listings. O saldo recuperado é transferido ao pool da sala com custo e
+proveniência em recovered; adoção por nova cadeia é explícita e revalida margem.
+Custos confirmados são proporcionais à quantidade adotada. Base histórica
+incompleta é carregada conservativamente e permanece estimada. Owner aliases
+distinguem cadeias legadas com IDs iguais, preservando IDs/key e vínculos.
+
+`craftPurchaseBook.quoteNet` dimensiona compras internas de energia por ganho
+líquido. terminalBuy manual continua bruto. `craftEnergy` revalida energia e
+reserva operacional por etapa, deduplica reposição, respeita limite efetivo,
+créditos/caps/margem e informa energyWait. Pode usar transferência interna ou
+programar conversão de batteries antes de uma etapa não iniciada quando houver
+bootstrap, lastro e custo favorável. Não reconfigura factory em andamento.
+Haulers transportam energia financiada depois das prioridades essenciais.
+Ingredientes ausentes aparecem em materialWait; vendas distinguem material
+em produção de stock-reserved, com proprietários bloqueadores. Abort aplica
+backoff por sala/produto para evitar ciclos de recompra. Logs de espera de
+energia só repetem quando o motivo muda. Novos tunables: recoveryBackoffTicks,
+energyRetryTicks, recoveredKeep e legacyRecoveryGraceTicks. A migração concede
+uma única janela de recuperação à cadeia legada working sem falsear seu tick
+de último progresso. Sem options.urgency.
+
 ## Disponibilidade de insumos do craft (0134 / ARK-123)
 
 `craftPurchaseBook` mantém no heap, por scan, as quantidades restantes das

@@ -14,7 +14,7 @@ function owner(op) {
     for (const id in chains) {
         const c = chains[id];
         if (c.sellOpId === op.id || c.partialOpId === op.id || Object.keys(c.buys || {}).some((r) => c.buys[r].opId === op.id))
-            return key(op.owner = { kind: "craft", id: c.id || id });
+            return key(op.owner = { kind: "craft", id: c.ownerId || c.id || id });
     }
     const flips = Memory.marketFlip && Memory.marketFlip.active || {};
     for (const r in flips) {
@@ -70,6 +70,16 @@ function physicalFree(room, source, resource, excludeId, excludeOwner) {
             terminal += Math.max(0, order.remainingAmount === undefined ? order.amount || 0 : order.remainingAmount);
     });
     // Existing physical storage backs unstaged cargo; excess spills into the terminal.
+    Object.values(Memory.craft && Memory.craft.active || {}).forEach((c) => {
+        if (c.room !== room.name || !c.inventory || excludeOwner && key(excludeOwner) === "craft:" + (c.ownerId || c.id)) return;
+        const backed = ops.filter((op) => active(op) && owner(op) === "craft:" + (c.ownerId || c.id) && op.resourceType === resource)
+            .reduce((n, op) => {
+                if (outgoing(op, room, resource)) return n + Math.max(0, op.remaining || 0);
+                const parent = op.parentId && Memory.terminalOps.operations[op.parentId];
+                return n + (op.kind === "receipt" && parent && parent.kind === "buy" ? Math.max(0, op.amount - (op.receivedAmount || 0)) : 0);
+            }, 0);
+        unstaged += Math.max(0, require("./craftLedger").warehouse(c, room, resource) - backed);
+    });
     const storage = Math.min(unstaged, value(room.storage, resource));
     terminal += unstaged - storage;
     return Math.max(0, value(source, resource) - (source === room.terminal ? terminal : storage) - pending);
