@@ -10,6 +10,7 @@ const marketAccounting = require("./marketAccounting");
 const cpuMeter = require("./cpuMeter");
 const claims = require("./terminalClaims");
 const purchaseCost = require("./purchaseCost");
+const orderRetry = require("./terminalOrderRetry");
 
 const FINAL_STATES = ["completed", "failed", "cancelled"];
 
@@ -314,7 +315,7 @@ function scoredOrders(op, candidatesOnly = false) {
     // volume no book mas caía sempre em listagem própria).
     const currentPrices = (op.effectiveLimit || op.kind === "buy") && priceData(op.resourceType, !op.marketOnly);
     if (currentPrices) op.energyFairPrice = currentPrices.energy;
-    const dead = op.deadOrderIds || [];
+    const dead = orderRetry.excluded(op);
     const freight = new Map();
     return cpuMeter.span("terminalOps.scoreOrders", () => orders.filter((order) => {
         if (!order || (Game.market.orders || {})[order.id] || !(order.price > 0) ||
@@ -356,6 +357,7 @@ function scoredOrders(op, candidatesOnly = false) {
 // aqui de novo seria redundante e mais restritivo que o desenho do flip.
 function candidateOrders(op) {
     delete op.fuelQuote;
+    orderRetry.excluded(op);
     if (op.policy === "swing" && !op.cancelledListingFees && op.state !== "cancellingListing") {
         const target = owned(op.sourceRoom);
         if (!target) return [];
@@ -372,7 +374,7 @@ function candidateOrders(op) {
     // executeDeal()) - without this, a permanently-broken order would keep
     // winning the sort every tick and the operation would never move on to
     // an order that actually works.
-    const dead = op.deadOrderIds || [];
+    const dead = orderRetry.excluded(op);
     const maxFeeRatio = config.get("terminalOps.maxFeeRatio", 0.05);
     const candidates = scoredOrders(op, true).filter((item) => item.quantity > 0 && dead.indexOf(item.order.id) < 0 &&
         (op.kind === "buy" ? item.ok : (op.effectiveLimit ? item.effective : item.order.price) >= op.limit) &&
@@ -397,12 +399,16 @@ function reportNoCandidate(op) {
     const recordDue = !op.noCandidate || Game.time - op.noCandidate.tick >= recordEvery;
     if (!logDue && !recordDue) return;
     const outcome = op.createListing ? "indo para listagem própria" : "aguardando nova ordem elegível (createListing:false, sem listar o restante)";
-    const scored = scoredOrders(op).filter((item) => item.quantity > 0);
+    const evaluated = scoredOrders(op).filter((item) => item.quantity > 0);
+    const dead = orderRetry.excluded(op);
+    const scored = evaluated.filter((item) => !dead.includes(item.order.id));
     const head = "[terminalOps] " + op.id + " (" + op.kind + " " + op.resourceType + " em " + op.sourceRoom + "): ";
     if (!scored.length) {
-        const text = "nenhuma ordem no mercado, " + outcome + " (limite " + op.limit + ")";
-        op.noCandidate = { tick: Game.time, limit: op.limit, reason: "nenhuma ordem no mercado", best: null };
-        if (logDue) { op.noCandidateLogTick = Game.time; console.log(head + text); }
+        const reason = evaluated.length ? "orders-without-confirmed-trade" : "nenhuma ordem no mercado";
+        const changed = !op.noCandidate || op.noCandidate.reason !== reason;
+        op.noCandidate = { ok: false, tick: Game.time, limit: op.limit, reason, best: null,
+            excludedOrders: evaluated.map((item) => item.order.id), nextOrderRetryTick: op.nextOrderRetryTick, owner: claims.owner(op) };
+        if (logDue || changed) { op.noCandidateLogTick = Game.time; console.log(head + reason + ", " + outcome + " (limite " + op.limit + ")"); }
         return;
     }
     const best = scored.sort((a, b) => op.kind === "buy" ? a.effective - b.effective : b.effective - a.effective)[0];
@@ -492,9 +498,11 @@ function executeDeal(op, target, selected) {
     // (ou sem nenhum) para sempre.
     if (!candidate) {
         reportNoCandidate(op);
+        if (op.noCandidate) op.error = op.noCandidate.reason;
         if (op.policy === "swing" && op.kind === "buy") { cancel(op.id); return; }
         touch(op, op.createListing ? "listing" : "waiting"); return;
     }
+    delete op.noCandidate;
     if (!op.marketOnly && target.terminal.cooldown) { op.error = "terminal em cooldown"; touch(op, "waiting"); return; }
     const fuel = require("./terminalFuel");
     if (candidate && op.policy === "swing" && op.kind === "sell" && !fuel.optionalAllowed(target, candidate.cost)) {
@@ -584,9 +592,12 @@ function executeDeal(op, target, selected) {
         orderId: candidate.order.id, quantity: candidate.quantity, cost: candidate.cost,
         price: candidate.order.price, tick: Game.time,
         orderRemaining: orderAmount(candidate.order),
+        orderRoom: candidate.order.roomName,
+        energyBefore: op.marketOnly ? 0 : storeValue(target.terminal.store, RESOURCE_ENERGY),
         terminalBefore: op.marketOnly ? 0 : storeValue(target.terminal.store, op.resourceType),
         sunkFees: op.kind === "buy" ? op.cancelledListingFees || 0 : 0,
     };
+    delete op.error;
     touch(op, "settling");
 }
 // Did the trade the engine was asked for last tick actually happen? The
@@ -597,21 +608,23 @@ function executeDeal(op, target, selected) {
 // cargo was never released, so no receipt and no further load can touch it.
 function dealTraded(op, source, pending) {
     const transactions = Game.market && Game.market[op.kind === "buy" ? "incomingTransactions" : "outgoingTransactions"];
-    if (Array.isArray(transactions) && transactions.some((tx) => tx && tx.order && tx.order.id === pending.orderId &&
-        tx.time === pending.tick && tx.amount >= pending.quantity &&
-        (op.marketOnly || tx[op.kind === "buy" ? "to" : "from"] === op.sourceRoom))) return pending.quantity;
+    const tx = Array.isArray(transactions) && transactions.find((tx) => tx && tx.order && tx.order.id === pending.orderId &&
+        tx.time === pending.tick && tx.amount > 0 && (!tx.resourceType || tx.resourceType === op.resourceType) &&
+        (op.marketOnly || tx[op.kind === "buy" ? "to" : "from"] === op.sourceRoom));
+    if (tx) { pending.evidence = "transaction"; return Math.min(pending.quantity, tx.amount); }
     if (!op.marketOnly && source && source.terminal) {
         const now = storeValue(source.terminal.store, op.resourceType);
         const moved = op.kind === "buy" ? now - pending.terminalBefore : pending.terminalBefore - now;
         const expected = op.kind === "buy" && op.resourceType === RESOURCE_ENERGY ? pending.quantity - pending.cost : pending.quantity;
-        return moved >= expected ? pending.quantity : 0;
+        if (moved >= expected) { pending.evidence = "terminal-balance"; return pending.quantity; }
+        return 0;
     }
     // marketOnly (pixel / CPU unlock): no terminal is involved at all, so the
     // order book is the only signal. A real trade can only ever lower
     // remainingAmount, and a fully consumed order disappears outright.
     const verify = typeof Game.market.getOrderById === "function" ? Game.market.getOrderById(pending.orderId) : null;
-    if (!verify) return pending.quantity;
-    return orderAmount(verify) < pending.orderRemaining ? pending.quantity : 0;
+    if (!verify || orderAmount(verify) < pending.orderRemaining) { pending.evidence = "order-book"; return pending.quantity; }
+    return 0;
 }
 function settleDeal(op, source) {
     require("./craftLedger").economic(op);
@@ -619,29 +632,36 @@ function settleDeal(op, source) {
     if (!pending) { touch(op, "waiting"); return; }
     if (Game.time <= pending.tick) return; // the engine has not run the intent yet
     const traded = dealTraded(op, source, pending);
+    const cost = traded === pending.quantity ? pending.cost : traded > 0 && !op.marketOnly ?
+        pending.orderRoom ? txCost(traded, op.sourceRoom, pending.orderRoom) : Math.ceil(pending.cost * traded / pending.quantity) : 0;
+    op.lastDealObservation = { tick: Game.time, orderId: pending.orderId, requested: pending.quantity, traded,
+        evidence: pending.evidence || "none", orderRemainingBefore: pending.orderRemaining,
+        freight: cost, netAmount: traded - (op.kind === "buy" && op.resourceType === RESOURCE_ENERGY ? cost : 0),
+        energyBefore: pending.energyBefore, energyAfter: source && source.terminal ? storeValue(source.terminal.store, RESOURCE_ENERGY) : null,
+        resourceBefore: pending.terminalBefore, resourceAfter: source && source.terminal ? storeValue(source.terminal.store, op.resourceType) : null };
     delete op.pendingDeal;
     if (traded) delete op.noCandidate;
     if (!traded) {
-        // The deal was accepted and then silently did nothing. Blacklist the
-        // order so the next attempt picks a different one instead of burning
-        // the same dead deal forever, and fall back without touching any
-        // bookkeeping so the staged cargo/fee stay claimed and protected.
+        // Keep alternatives eligible while this order backs off temporarily.
+        // No observed trade means no quantity, credit or energy entry.
         op.error = "deal retornou OK mas nenhuma troca foi observada";
-        op.deadOrderIds = (op.deadOrderIds || []).concat(pending.orderId).slice(-10);
+        orderRetry.failed(op, pending.orderId);
+        delete op.noCandidate;
         touch(op, op.kind === "sell" && !op.marketOnly ? "atTerminal" : "waiting");
         if (op.cancelRequested) cancel(op.id);
         return;
     }
-    op.remaining = Math.max(0, op.remaining - traded); op.dealtAmount = (op.dealtAmount || 0) + traded; op.transactionCost += pending.cost;
+    op.remaining = Math.max(0, op.remaining - traded); op.dealtAmount = (op.dealtAmount || 0) + traded; op.transactionCost += cost;
     op.lastSuccessfulDealTick = Game.time;
+    orderRetry.succeeded(op, pending.orderId);
     if (op.kind === "buy") {
-        op.netBought = (op.netBought || 0) + (op.resourceType === RESOURCE_ENERGY ? traded - pending.cost : traded);
+        op.netBought = (op.netBought || 0) + (op.resourceType === RESOURCE_ENERGY ? traded - cost : traded);
         op.buyCredits = (op.buyCredits || 0) + pending.price * traded;
-        op.cancelledListingFees = Math.max(0, (op.cancelledListingFees || 0) - (pending.sunkFees || 0));
-    } else settleLots(op, traded, pending.price, pending.cost * (op.energyFairPrice || 0));
-    op.feeLoadedAmount = Math.max(0, (op.feeLoadedAmount || 0) - pending.cost);
+        op.cancelledListingFees = Math.max(0, (op.cancelledListingFees || 0) - (pending.sunkFees || 0) * traded / pending.quantity);
+    } else settleLots(op, traded, pending.price, cost * (op.energyFairPrice || 0));
+    op.feeLoadedAmount = Math.max(0, (op.feeLoadedAmount || 0) - cost);
     if (op.kind === "sell") op.loadedAmount = Math.max(0, (op.loadedAmount || 0) - traded);
-    record(op, traded, pending.price * traded * (op.kind === "buy" ? -1 : 1), pending.cost, pending.sunkFees || 0);
+    record(op, traded, pending.price * traded * (op.kind === "buy" ? -1 : 1), cost, (pending.sunkFees || 0) * traded / pending.quantity);
     if (op.kind === "buy" && config.get("stockPolicy.enabled", true) && !stockPolicy.used(source, op.resourceType))
         op.receivedAmount = Math.max(op.receivedAmount || 0, op.dealtAmount);
     touch(op, op.remaining ? (op.marketOrderId ? "listed" : "queued") : (op.kind === "buy" && !op.marketOnly ? "awaitingReceipt" : "completed"));
@@ -1034,7 +1054,7 @@ function managedTerminalIncrease(roomName, resourceType, roomOps) {
     return (roomOps || activeForRoom(roomName)).reduce((sum, op) => {
         if (!active(op) || op.sourceRoom !== roomName) return sum;
         if (op.resourceType === resourceType && (op.kind === "sell" || op.kind === "transfer")) sum += Math.max(0, op.loadedAmount || 0);
-        if (resourceType === RESOURCE_ENERGY) sum += Math.max(0, op.feeLoadedAmount || 0);
+        if (resourceType === RESOURCE_ENERGY) sum += claims.feeClaim(op);
         return sum;
     }, 0);
 }
@@ -1047,20 +1067,23 @@ function managedTerminalIncrease(roomName, resourceType, roomOps) {
 // because cargo in a creep's hands is legitimately absent from the terminal.
 function reconcileClaims(name, resourceType, terminal) {
     const ops = activeForRoom(name).filter((op) => op.resourceType === resourceType);
-    const claims = ops.filter((op) => op.targetRoom === name && (op.kind === "receipt" || (op.kind === "transfer" && op.sentAmount > 0)))
+    const receipts = ops.filter((op) => op.targetRoom === name && (op.kind === "receipt" || (op.kind === "transfer" && op.sentAmount > 0)))
         .sort((a, b) => (a.createdTick || 0) - (b.createdTick || 0));
-    if (!claims.length) return;
-    const busy = claims.some((op) => op.state === "recovering" || op.state === "unloading" || (op.haulerName && Game.creeps && Game.creeps[op.haulerName]) ||
+    if (!receipts.length) return;
+    const busy = receipts.some((op) => op.state === "recovering" || op.state === "unloading" || (op.haulerName && Game.creeps && Game.creeps[op.haulerName]) ||
         (op.kind === "transfer" && Game.time - (op.sentTick || 0) < 3));
-    if (busy) { claims.forEach((op) => { delete op.deficitSinceTick; }); return; }
-    const staged = ops.reduce((sum, op) => {
+    if (busy) { receipts.forEach((op) => { delete op.deficitSinceTick; }); return; }
+    const staged = activeForRoom(name).reduce((sum, op) => {
         if (op.sourceRoom !== name) return sum;
-        if (op.kind === "sell" || (op.kind === "transfer" && !(op.sentAmount > 0))) sum += Math.max(0, op.loadedAmount || 0);
-        if (resourceType === RESOURCE_ENERGY) sum += Math.max(0, op.feeLoadedAmount || 0);
+        if (op.resourceType === resourceType && (op.kind === "sell" || (op.kind === "transfer" && !(op.sentAmount > 0)))) sum += Math.max(0, op.loadedAmount || 0);
+        if (resourceType === RESOURCE_ENERGY) sum += claims.feeClaim(op);
         return sum;
     }, 0);
+    // Reserved stock is not evidence of lost receipt cargo. Wait for the
+    // source-side claim/intent to settle before declaring a physical deficit.
+    if (staged > 0) { receipts.forEach((op) => { delete op.deficitSinceTick; }); return; }
     let free = Math.max(0, storeValue(terminal.store, resourceType) - staged);
-    claims.forEach((op) => {
+    receipts.forEach((op) => {
         const owed = op.kind === "receipt" ? Math.max(0, op.amount - (op.receivedAmount || 0) - (op.recoveredAmount || 0)) : Math.max(0, op.amount - (op.receivedAmount || 0));
         const covered = Math.min(owed, free);
         free -= covered;

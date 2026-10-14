@@ -459,6 +459,10 @@ const defaults = {
         // Optional BUY guardrail; the effective price ceiling always applies.
         maxBuyFreightShare: null,
         orderConfirmationTicks: 10,
+        // No observable trade suspends this order, never blacklists it forever.
+        orderRetryBaseTicks: 25,
+        orderRetryMaxTicks: 300,
+        orderRetryHistory: 10,
     },
     hauler: {
         // a load pick is kept this many ticks while its target still holds 50+ energy

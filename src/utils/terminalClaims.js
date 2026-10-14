@@ -25,6 +25,7 @@ function owner(op) {
     return key(op.owner = op.policy === "swing" ? { kind: "swing", id: op.sourceRoom + ":" + op.resourceType } : { kind: "manual", id: op.id });
 }
 function active(op) { return op && FINAL.indexOf(op.state) < 0; }
+function feeClaim(op) { return Math.max(0, op.feeLoadedAmount || 0, op.pendingDeal && op.pendingDeal.cost || 0); }
 function outgoing(op, room, resource) {
     return active(op) && op.sourceRoom === room.name && op.resourceType === resource &&
         (op.kind === "sell" || op.kind === "transfer" && !(op.sentAmount > 0));
@@ -50,8 +51,13 @@ function physicalFree(room, source, resource, excludeId, excludeOwner) {
     const managed = new Set(ops.filter(active).map((op) => op.marketOrderId).filter(Boolean));
     let terminal = 0, unstaged = 0;
     ops.forEach((op) => {
-        if (!active(op) || op.id === excludeId || excludeOwner && owner(op) === key(excludeOwner)) return;
-        if (resource === RESOURCE_ENERGY && op.sourceRoom === room.name) terminal += Math.max(0, op.feeLoadedAmount || 0);
+        if (!active(op)) return;
+        // Accepted intents remain funded even against their own owner's jobs.
+        const intentFee = op.sourceRoom === room.name && resource === RESOURCE_ENERGY ? Math.max(0, op.pendingDeal && op.pendingDeal.cost || 0) : 0;
+        const intentCargo = op.sourceRoom === room.name && op.kind === "sell" && op.resourceType === resource ? Math.max(0, op.pendingDeal && op.pendingDeal.quantity || 0) : 0;
+        terminal += intentFee + intentCargo;
+        if (op.id === excludeId || excludeOwner && owner(op) === key(excludeOwner)) return;
+        if (resource === RESOURCE_ENERGY && op.sourceRoom === room.name) terminal += Math.max(0, feeClaim(op) - intentFee);
         if (op.targetRoom === room.name && op.resourceType === resource && (op.kind === "receipt" || op.kind === "transfer" && op.sentAmount > 0)) {
             terminal += Math.max(0, op.amount - (op.receivedAmount || 0) - (op.recoveredAmount || 0));
             return;
@@ -61,7 +67,7 @@ function physicalFree(room, source, resource, excludeId, excludeOwner) {
         const order = op.marketOrderId && Game.market && Game.market.orders && Game.market.orders[op.marketOrderId];
         const published = order ? Math.max(0, order.remainingAmount === undefined ? order.amount || 0 : order.remainingAmount) : 0;
         const staged = Math.min(left, Math.max(op.loadedAmount || 0, published));
-        terminal += staged;
+        terminal += Math.max(0, staged - intentCargo);
         if (op.kind === "transfer" && resource === RESOURCE_ENERGY && op.loadedAmount > left) terminal += op.loadedAmount - left;
         unstaged += Math.max(0, left - staged - carried(op, room, resource));
     });
@@ -84,4 +90,4 @@ function physicalFree(room, source, resource, excludeId, excludeOwner) {
     terminal += unstaged - storage;
     return Math.max(0, value(source, resource) - (source === room.terminal ? terminal : storage) - pending);
 }
-module.exports = { key, owner, active, outgoing, physicalFree, withdrawn, withdraw, carried };
+module.exports = { key, owner, active, outgoing, feeClaim, physicalFree, withdrawn, withdraw, carried };

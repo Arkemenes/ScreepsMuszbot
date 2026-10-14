@@ -16086,4 +16086,5 @@ require("./economyCpuCases")(PROJECT, assert);
 require("./terminalLotCases")(PROJECT, assert);
 require("./craftPurchaseCases")(PROJECT, assert);
 require("./craftRecoveryCases")(PROJECT, assert);
+require("./terminalIntentCases")(PROJECT, assert);
 require("./assetStatsCases")(PROJECT, assert);

@@ -53,6 +53,67 @@ module.exports = function (project, assert) {
             "0135: energy inventory is net and its freight is not charged twice");
         reset(); c = chain(); c.buys.X = { opId: "missing", qty: 100 };
         assert(!ledger.totals(c).known, "0135: missing financial evidence remains unknown instead of becoming zero cost");
+        reset(); room.terminal.cooldown = 0; room.terminal.store.energy = 10000;
+        market.snapshot = () => ({ resources: { X: { currentSell: 10, currentBuy: 9, fairPrice: 10 }, energy: { fairPrice: 1 } } });
+        let diagnosticOrders = [{ id: "excluded", resourceType: "X", type: ORDER_SELL, price: 10, amount: 100, roomName: "Far" },
+            { id: "expensive", resourceType: "X", type: ORDER_SELL, price: 30, amount: 100, roomName: "Far" }];
+        Game.market.getAllOrders = () => diagnosticOrders;
+        let diagnosticDeals = 0; Game.market.deal = () => { diagnosticDeals++; return OK; };
+        const diagnosticBuy = Memory.terminalOps.operations.diagnostic = { id: "diagnostic", kind: "buy", sourceRoom: room.name,
+            resourceType: "X", amount: 100, remaining: 100, limit: 20, state: "waiting", createdTick: Game.time,
+            updatedTick: Game.time, transactionCost: 0, createListing: false, skipFeeCap: true, deadOrderIds: ["excluded"],
+            error: "terminal já usado neste tick" };
+        ops.tick();
+        assert(diagnosticBuy.noCandidate.best.id === "expensive" && diagnosticBuy.noCandidate.reason === "effective-price-limit",
+            "0135: purchase diagnostic excludes the same rejected orders as execution");
+        assert(diagnosticBuy.error === "effective-price-limit", "0135: current economic wait replaces stale execution error");
+        diagnosticBuy.deadOrderIds.push("expensive"); delete diagnosticBuy.noCandidate;
+        Game.time += 20; book.reset(); ops.tick();
+        assert(diagnosticBuy.noCandidate.ok === false && diagnosticBuy.noCandidate.reason === "orders-without-confirmed-trade" &&
+            diagnosticBuy.noCandidate.best === null && diagnosticDeals === 0,
+            "0135: an entirely rejected book is not diagnosed as executable or traded");
+        diagnosticOrders = [{ id: "fresh", resourceType: "X", type: ORDER_SELL, price: 10, amount: 100, roomName: "Far" }];
+        Game.time += 20; book.reset(); ops.tick();
+        assert(diagnosticBuy.state === "settling" && !diagnosticBuy.noCandidate && !diagnosticBuy.error && diagnosticDeals === 1,
+            "0135: a newly selected offer clears prior no-candidate and execution errors");
+        Game.time++; ops.tick();
+        assert(!diagnosticBuy.dealtAmount && diagnosticBuy.remaining === 100 && !diagnosticBuy.accounting.amount,
+            "0135: an accepted intent without receipt never creates purchased stock or expense");
+        reset(); c = chain(); c.product = "XLH2O"; c.soldBase = 50; c.sold = 50;
+        c.queue = [{ product: "XLH2O", started: true, progress: 360 }];
+        Memory.craft.active.Recovery = c;
+        Memory.terminalOps.operations.oldSale = { id: "oldSale", owner: { kind: "craft", id: c.id }, kind: "sell",
+            resourceType: "XLH2O", dealtAmount: 50, state: "completed", accounting: { amount: 50, credits: 1000, energy: 0, confidence: "confirmed" } };
+        ledger.sync(c);
+        assert(c.inventory.balances.XLH2O === 310, "0135: legacy soldBase and its historical sale debit the same50 only once");
+        c = JSON.parse(JSON.stringify(c)); Memory.craft.active.Recovery = c; ledger.sync(c);
+        assert(c.inventory.balances.XLH2O === 310, "0135: reset preserves reconciled legacy sale inventory");
+        c.partialOpId = "newSale";
+        Memory.terminalOps.operations.newSale = { id: "newSale", kind: "sell", resourceType: "XLH2O", dealtAmount: 10,
+            accounting: { amount: 10, credits: 200, energy: 0, confidence: "confirmed" } };
+        ledger.sync(c);
+        assert(c.inventory.balances.XLH2O === 300, "0135: a later sale still debits repaired legacy inventory once");
+        reset(); c = chain(); c.product = "XLH2O"; c.soldBase = 50; c.queue = [{ product: "XLH2O", progress: 360 }];
+        ledger.sync(c); ledger.sync(c);
+        assert(c.inventory.balances.XLH2O === 310, "0135: retired legacy sales without operation history remain deducted once");
+        reset(); c = chain(); c.product = "XLH2O"; c.soldBase = 50;
+        c.inventory = { version: 1, confidence: "reconstructed", balances: { XLH2O: 260, O: -500 }, costs: {}, costSeen: {},
+            production: { XLH2O: 360 }, buys: {}, sales: { oldSale: 50 }, pending: [], soldBasis: 0 };
+        c.economics = { operations: { oldSale: { kind: "sell", resource: "XLH2O", amount: 50, credits: 1000, energy: 0, fees: 0, confidence: "incomplete" } } };
+        ledger.sync(c); ledger.sync(c);
+        assert(c.inventory.balances.XLH2O === 310, "0135: already migrated v1 ledger repairs its duplicate sale once even after operation GC");
+        assert(c.inventory.balances.O === 0 && c.inventory.legacyUntrackedInputs.O === 500,
+            "0135: untracked consumed legacy inputs create no negative physical balance or invented remaining stock");
+        reset(); c = chain(); c.product = "XLH2O"; c.soldBase = 50;
+        c.inventory = { version: 1, confidence: "reconstructed", balances: { XLH2O: 310 }, costs: {}, costSeen: {},
+            production: { XLH2O: 360 }, buys: {}, sales: {}, pending: [], soldBasis: 0 };
+        ledger.sync(c); ledger.sync(c);
+        assert(c.inventory.balances.XLH2O === 310 && c.inventory.legacyUntrackedSold === 50,
+            "0135: v1 repair preserves a retired sale whose operation history is absent");
+        reset(); c = chain(); c.product = "XLH2O"; c.soldBase = 50; ledger.ensure(c, { XLH2O: 75 });
+        ledger.sync(c);
+        assert(c.inventory.balances.XLH2O === 75 && !c.inventory.legacyReconciled,
+            "0135: legacy reconciliation never rebuilds confirmed lot inventory");
         reset(); c = chain(); c.product = "widgetA"; c.queue = [{ kind: "factory", product: "widgetA", started: true, target: 2 }];
         Memory.craft.active.Recovery = c; ledger.ensure(c, { Z: 40, energy: 40 });
         ledger.production(factory, "widgetA", 1); ledger.production(factory, "widgetA", 1);

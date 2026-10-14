@@ -136,6 +136,31 @@ abort/recompra nem consome a reserva operacional da sala.
 
 ## Entrega após revisão
 
+### Correção após validação live (83650151)
+
+E1N45 produziu360 e vendeu50, mas inventory mostra260: a migração descontou
+soldBase50 e depois a operação histórica novamente. Reconstrução deve aplicar
+cada venda uma vez, inclusive quando o histórico da operação já não existe.
+Ledgers v1 já migrados são reparados uma vez por conservação de produção,
+compras e vendas identificadas; ledgers de lotes novos não são reconstruídos.
+Débitos negativos de insumos consumidos sem histórico são registrados como
+entradas históricas não identificadas, sem criar saldo físico nem custo exato.
+Critérios: saldo310 após produção360/venda50; reset não muda o saldo; venda
+posterior10 deixa300; venda histórica sem operação também deixa310.
+
+Revisão: escopo restrito à migração, preserva IDs, custos e operações; sem
+varreduras novas de creeps/estruturas e sem alteração de prioridade econômica.
+
+### Diagnóstico de negócio não confirmado (83650325)
+
+UH2O de W7N49 não consta no histórico nem em storage/terminal. Não reconhecer
+estoque/custo apenas por deal retornar OK. `noCandidate` deve excluir os mesmos
+deadOrderIds da seleção; se todas as ordens foram descartadas por ausência de
+troca, mostrar esse motivo e seus IDs, sem ok:true/best elegível. Avaliação
+econômica atual substitui error antigo; candidato selecionado limpa diagnóstico
+anterior. Preservar política de retentativa, limites e claims. Revisão: alteração
+restrita ao diagnóstico, sem atribuir uma causa externa ainda não demonstrada.
+
 Seguir plan.md → tasks.md → implementação. Node check, smoke, grunt sem cópia
 live, diff e graphify update; ARCHITECTURE/ROADMAP atualizados. Após publicação,
 validar venda W7N49, energia/produção E1N47 e piso/custo E1N45 em dois momentos.

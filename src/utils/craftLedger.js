@@ -17,7 +17,7 @@ function consume(c, r, q) {
 }
 function ensure(c, owns) {
     if (c.inventory) return c.inventory;
-    c.inventory = { version: 1, balances: Object.assign({}, owns || {}), costs: {}, costSeen: {}, soldBasis: 0,
+    c.inventory = { version: 2, balances: Object.assign({}, owns || {}), costs: {}, costSeen: {}, soldBasis: 0,
         buys: {}, sales: {}, production: {}, pending: [], confidence: owns ? "confirmed" : "reconstructed" };
     const snapshot = require("./market").snapshot();
     let valued = 0;
@@ -34,7 +34,6 @@ function ensure(c, owns) {
             c.inventory.production[r] = (c.inventory.production[r] || 0) + q;
             c.inventory.balances[r] = (c.inventory.balances[r] || 0) + q; consume(c, r, q);
         }));
-        c.inventory.balances[c.product] = (c.inventory.balances[c.product] || 0) - (c.soldBase || 0);
     }
     return c.inventory;
 }
@@ -57,6 +56,31 @@ function record(op, q, credits, energy) {
         if (!c.tradeIds.includes(op.id)) c.tradeIds.push(op.id);
         sync(c);
     }
+}
+function reconcileLegacy(c, ops) {
+    const inv = c.inventory;
+    if (inv.confidence !== "reconstructed" || inv.legacyReconciled) return;
+    const economics = c.economics.operations;
+    const resource = (id) => economics[id] && economics[id].resource || ops[id] && ops[id].resourceType;
+    const sold = Object.entries(inv.sales).filter(([id]) => resource(id) === c.product);
+    const tracked = sold.reduce((n, [, q]) => n + q, 0);
+    const retired = sold.filter(([id]) => id !== c.partialOpId && id !== c.sellOpId).reduce((n, [, q]) => n + q, 0);
+    if (inv.version === 1) {
+        // v1 debited soldBase before replaying the same historical sale. Infer
+        // that initial debit from output conservation, never from room stock.
+        const bought = Object.entries(inv.buys).filter(([id]) => resource(id) === c.product).reduce((n, [, q]) => n + q, 0);
+        const initialDebit = Math.max(0, (inv.production[c.product] || 0) + bought - tracked - (inv.balances[c.product] || 0));
+        inv.balances[c.product] = (inv.balances[c.product] || 0) + Math.min(c.soldBase || 0, initialDebit);
+    }
+    inv.legacyUntrackedSold = Math.max(0, (c.soldBase || 0) - retired);
+    inv.balances[c.product] = (inv.balances[c.product] || 0) - inv.legacyUntrackedSold;
+    // Production proves these inputs existed, but cannot prove their source or
+    // historical price. Record the missing history without claiming new stock.
+    inv.legacyUntrackedInputs = {};
+    Object.entries(inv.balances).forEach(([r, q]) => {
+        if (r !== c.product && q < 0) { inv.legacyUntrackedInputs[r] = -q; inv.balances[r] = 0; }
+    });
+    inv.version = 2; inv.legacyReconciled = true;
 }
 function sync(c) {
     const inv = ensure(c), ops = Memory.terminalOps && Memory.terminalOps.operations || {};
@@ -97,6 +121,7 @@ function sync(c) {
             seen[id] = q;
         }
     });
+    reconcileLegacy(c, ops);
     return inv;
 }
 function totals(c) {

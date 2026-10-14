@@ -815,6 +815,30 @@ O fast gate de grandes drops ignora essas pilhas, preservando picks cacheados
 de links; pickups cacheados são revalidados contra o índice. Sem nova coleta
 de estruturas, sem `lookForAt` e sem Memory. A ordem restante é preservada.
 
+## Intents de mercado e retentativa (0136 / ARK-126)
+
+`terminalClaims.feeClaim` protege max(feeLoadedAmount,pendingDeal.cost). Energia
+pré-existente usada no deal fica reservada mesmo sem job de frete; physicalFree,
+scan de saldo e reconciliação compartilham o claim. Cargo/frete de intent aceito
+não podem ser retirados por jobs antigos, nem pelo mesmo proprietário, antes da
+confirmação. Reconciliação de receipt espera claims de origem resolverem antes
+de declarar estoque ausente. Não duplica frete já staged.
+
+`settleDeal` confirma quantidade parcial pela transação de order/tick/sala/recurso
+correspondente, calcula frete para a quantidade real e atualiza créditos, saldo,
+netBought, lotes e taxas proporcionalmente. Sem transação, conserva fallback
+físico integral anterior e compatibilidade de recursos de conta. `pendingDeal`
+e `lastDealObservation` preservam antes/depois e fonte da evidência; OK sem efeito
+continua sem receita/compra/custo fictício.
+
+`terminalOrderRetry` substitui exclusão vitalícia por suspensão por ordem/operação:
+25ticks inicialmente, dobro até300, histórico10 (configuráveis). Alternativas
+permanecem elegíveis; expiração reavalia limites/cooldown/créditos/capacidade.
+Sucesso limpa histórico; legado deadOrderIds ganha uma janela finita uma vez,
+preservada em reset. Seleção, swing e diagnóstico usam as mesmas exclusões.
+Reprodução offline confirmou retirada de frete por job antigo; não se afirma
+causa exata dos ticks históricos sem sua telemetria. Validação live ainda pendente.
+
 ## Estoque e recuperação do craft (0135 / ARK-125)
 
 `craftLedger` mantém inventory por cadeia com balances, costs, production,
@@ -855,6 +879,20 @@ energia só repetem quando o motivo muda. Novos tunables: recoveryBackoffTicks,
 energyRetryTicks, recoveredKeep e legacyRecoveryGraceTicks. A migração concede
 uma única janela de recuperação à cadeia legada working sem falsear seu tick
 de último progresso. Sem options.urgency.
+
+Validação live83650151 confirmou venda das300 barras de W7N49 e abertura da
+venda XLH2O915. Inventory v2 reconcilia soldBase com operações históricas para
+não descontar vendas duas vezes. Repara v1 reconstructed uma vez por conservação
+do produto e mantém débitos de insumos sem origem em legacyUntrackedInputs,
+sem saldo físico negativo nem preço histórico inventado. Lotes confirmed não
+são reconstruídos. Compras de energia/UH2O de E1N47 ainda exigem diagnóstico live.
+
+Live83650297 confirmou recovery U1500/X1500 e backoff até83653271 em E1N47.
+`terminalOps.noCandidate` exclui deadOrderIds como a seleção e expõe
+orders-without-confirmed-trade/excludedOrders quando não restam alternativas.
+Nova seleção invalida o diagnóstico anterior; espera econômica substitui error
+antigo, e lastDeal* conserva o histórico da tentativa. IntentOK sem confirmação
+não gera estoque nem custo. A ausência de efeito não prova a causa externa.
 
 ## Disponibilidade de insumos do craft (0134 / ARK-123)
 
