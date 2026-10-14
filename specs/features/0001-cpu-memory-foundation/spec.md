@@ -37,11 +37,15 @@ Entregue. Módulos novos: `utils/census`, `utils/roomCache`, `utils/terrain`.
 (seguro sob strict). `utils/plan.js` constrói um índice cacheado por tick.
 `main.js` `guard()` envolve toda chamada de subsistema.
 
-## ARK-116 — pacote de custo recorrente (2026-10-13)
+## ARK-116 — revisão de custo recorrente (2026-10-13)
 
-FloodFill deve indexar coordenadas de blocks e estruturas planejadas não-road
-uma vez por execução, mantendo todos os valores da matriz (inclusive seeds
-sobre bloqueios, bordas, walls e estradas). Nada persistido em Memory.
-Planner separa spans visualização/construção/flood para atribuir plan2,077.
-Aceitação: igualdade da matriz completa, acesso a coordenadas linear no
-tamanho do plano em vez de por tile; smoke/build verdes.
+A proposta de indexar bloqueios do floodFill foi retirada do pacote após
+questionamento do usuário. Nenhum código desse algoritmo foi alterado.
+Leitura live confirmou cinco salas planned=true/planStep13: planCity retorna
+antes do floodFill; o custo recorrente atual exige outra investigação.
+visualizeForceInterval=1 força redesenho completo dos planos a cada tick.
+
+Próximo pacote recomendado: cache da camada visual com reapresentação contínua,
+previsão de combustível usando trabalho ativo e execução efetiva do builder.
+Detalhes, riscos e critérios em docs/cpu-review-2026-10-13.md. A documentação
+da proposta não constitui implementação nem ganho de CPU confirmado.

@@ -733,3 +733,16 @@ moveTo expira _move.time + reusePath em ticks decorridos; fadiga não
 renova essa janela. Antes20ticks, agora prazo central1500; sala/destino
 e falta de progresso continuam invalidando. Política incremental elimina
 a segunda validação da viagem inteira e mantém busca limitada ao par de salas.
+
+## Encerramento e continuidade —2026-10-13
+
+Última janela estável16,670CPU/tick at83632050, entry0,052; probe32060
+bucket489. Após cold start20,169, houve queda no custo recorrente, mas
+meta mais recente<15/preferencial<10 não foi atingida. Leitura adicional
+confirmou cinco salas planned=true/step13 e redraw de visuais a cada tick
+(visualizeForceInterval1). FloodFill ficou fora do pacote por decisão do
+usuário. Revisão detalhada, provas offline e prioridades em
+[cpu-review-2026-10-13.md](cpu-review-2026-10-13.md); estado de checkout,
+bundle, próximos passos e prompt em
+[cpu-handoff-2026-10-13.md](cpu-handoff-2026-10-13.md).
+Nenhum runtime/deploy adicional durante revisão/encerramento.

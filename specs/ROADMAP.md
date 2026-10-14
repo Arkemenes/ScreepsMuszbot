@@ -460,3 +460,12 @@ preservados. Cache verifica sequência escolhida, path vive1500ticks com
 recovery/stall. Smoke reproduz expiração após25ticks de fadiga, avanço por
 hop sem realSearch, ban novo, recuo, mudança de destino e bucket100.
 Ganho live e meta<9 permanecem pendentes.
+
+ARK-116 — encerramento2026-10-13: última janela estável16,670CPU/tick
+(at83632050), bucket489 no probe32060; meta mais recente<15/preferencial<10.
+Cinco salas prontas e visualizeForceInterval1 confirmam alvo de redraw;
+floodFill retirado da prioridade sem alterar algoritmo. Revisão concluída
+em docs/cpu-review-2026-10-13.md; retomada/prompt em
+docs/cpu-handoff-2026-10-13.md. Próximo pacote visual/fuel/builder ainda
+não implementado. Usuário encerrou para retomar em outra sessão; sem novo
+deploy. Ganho sustentado/meta e issue permanecem abertos.
