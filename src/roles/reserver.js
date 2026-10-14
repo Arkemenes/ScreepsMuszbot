@@ -72,24 +72,15 @@ var reserver = {
             const hostileTarget =
                 mission === "claim" && remotes.hasHostiles(targetRoomName);
             if (!hostileTarget) {
-                // never a scout-style exploratory move - always one specific
-                // room, so route through highways and completely avoid any
-                // room with known hostiles (utils/routing). Also validates
-                // the whole trip against real terrain upfront (ROADMAP
-                // 0064) - originally scoped to "claim" only (its fixed
-                // 600-tick CREEP_CLAIM_LIFE_TIME, ROADMAP 0033, can least
-                // afford discovering a dead end reactively, ROADMAP 0063,
-                // before reaching the controller), widened to every mission
-                // (ROADMAP 0064 same-day) once the pioneer role hit the
-                // identical live symptom - a walled intermediate room
-                // needing a detour - proving the fix isn't claim-specific;
-                // now the default for every moveToRoom() caller (ROADMAP
-                // 0075), so the explicit flag is gone.
-                const moveStatus = routing.moveToRoom(creep, targetRoomName, {
+                // Common incremental crossings preserve hostile avoidance.
+                // Claim alone requests upfront terrain validation: its
+                // 600-tick lifetime leaves less room for reactive detours.
+                const moveStatus = routing.travelToRoom(creep, targetRoomName, {
                     range: 20,
                     reusePath: 30,
                     blockHostiles: true,
                     allowSourceKeepers,
+                    realRoute: mission === "claim",
                 });
                 const phase = moveStatus === ERR_BUSY
                     ? "waiting_cpu" : moveStatus === ERR_NO_PATH ? "no_route" : "travelling";

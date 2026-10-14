@@ -184,6 +184,8 @@ const defaults = {
         policyMaxIterations: 50000,
         policyPlanningTicks: 100,
         policyCacheEntries: 64,
+        policyActiveCacheEntries: 64,
+        phaseCacheEntries: 128,
         policyBuffer: 500,
         policyRefillRatio: 0.5,
         policyBandwidth: 0, // 0 = observed; "instant" = explicit offline-style override
@@ -623,6 +625,11 @@ const defaults = {
         // Delay full-trip planning until reserves recover; validated hops stay small.
         realRouteMinBucket: 1000,
         hopMaxOps: 20000,
+        // Crossings should survive slow loaded movement; stalls still repath.
+        crossRoomReusePathTicks: 1500,
+        crossRoomMode: "incremental",
+        graphRouteCacheTicks: 50,
+        graphRouteCacheEntries: 128,
         // ROADMAP 0064 live follow-up: the native creep.moveTo() calls
         // moveToRoom() actually executes movement with never got this -
         // they silently used the engine's own default (2000), regardless of

@@ -61,11 +61,74 @@ module.exports = function (project, assert) {
         delete room.terminal.store.Z; fresh();
         const q = (price, amount = 100000) => ({ id: "energy-sell", resourceType: "energy", type: ORDER_SELL, roomName: "Remote", price, remainingAmount: amount });
         orders = [q(7)];
+        const quoteFetches = [], originalQuoteFetch = Game.market.getAllOrders;
+        Game.market.getAllOrders = (filter) => { quoteFetches.push(filter); return originalQuoteFetch(filter); };
         let candidate = swing.quote(room, "buy", "energy", Infinity);
         assert(candidate.quantity === 62501 && candidate.netAmount === 50000 && candidate.effective === 7 * 62501 / 50000,
             "0124: energy purchase is capped by net gain and priced per net unit: " + JSON.stringify(candidate));
+        assert(quoteFetches.length === 1 && quoteFetches[0] && quoteFetches[0].type === ORDER_SELL &&
+            quoteFetches[0].resourceType === "energy",
+            "ARK-116: real swing quote requests its filtered resource book while preserving net-energy pricing");
+        Game.market.getAllOrders = originalQuoteFetch;
+        {
+            const originalCost = Game.market.calcTransactionCost, originalDeficit = policy.deficit;
+            let costCalls = 0, deficitCalls = 0;
+            const mineralOrders = Array.from({ length: 100 }, (_, i) => ({ id: "mineral-" + i,
+                resourceType: "O", type: ORDER_SELL, roomName: "Remote" + i, price: 1, remainingAmount: 1000 }));
+            try {
+                Memory.settings.stockPolicy.targets = { energy: 100000, O: 600.5 };
+                Game.market.calcTransactionCost = (...args) => { costCalls++; return originalCost(...args); };
+                policy.deficit = (...args) => { deficitCalls++; return originalDeficit(...args); };
+                const mineral = swing.quote(room, "buy", "O", Infinity, { orders: mineralOrders });
+                assert(mineral.quantity === 100 && mineral.cost === 20 && mineral.effective === 3,
+                    "ARK-116: mineral purchase keeps integer deficit cap and freight-adjusted price");
+                assert(costCalls === 100 && deficitCalls === 1,
+                    "ARK-116: mineral quote uses one final freight per order and one deficit per selection: " + costCalls + "/" + deficitCalls);
+                Memory.settings.stockPolicy.targets.O = 550;
+                assert(swing.quote(room, "buy", "O", Infinity, { orders: mineralOrders }).quantity === 50,
+                    "ARK-116: a second quote sees changed targets in the same tick");
+                Memory.settings.stockPolicy.targets.O = 500;
+                costCalls = 0;
+                assert(swing.quote(room, "buy", "O", Infinity, { orders: mineralOrders }).reason === "no-good-price" && costCalls === 0,
+                    "ARK-116: satisfied mineral target needs no freight calculation");
+            } finally {
+                delete Memory.settings.stockPolicy.targets;
+                Game.market.calcTransactionCost = originalCost;
+                policy.deficit = originalDeficit;
+            }
+        }
         orders = [q(8)]; book.reset();
         assert(swing.quote(room, "buy", "energy", Infinity).reason === "no-good-price", "0124: raw discount cannot hide energy freight above the 99% ceiling");
+        {
+            const originalCost = Game.market.calcTransactionCost;
+            let costCalls = 0;
+            Game.market.calcTransactionCost = (...args) => { costCalls++; return originalCost(...args); };
+            try {
+                const rejectedBuys = Array.from({ length: 100 }, (_, i) => Object.assign({}, q(10), { id: "expensive-" + i }));
+                assert(swing.quote(room, "buy", "energy", Infinity, { orders: rejectedBuys }).reason === "no-good-price" && costCalls === 0,
+                    "ARK-116: raw buy prices above the ceiling skip quantity search and freight: " + costCalls);
+                const rejectedSells = rejectedBuys.map((o) => Object.assign({}, o, { type: ORDER_BUY, resourceType: "O", price: 9 }));
+                costCalls = 0;
+                assert(swing.quote(room, "sell", "O", 100, { orders: rejectedSells }).reason === "no-good-price" && costCalls === 0,
+                    "ARK-116: raw sell prices below the floor skip freight: " + costCalls);
+                const mixed = swing.quote(room, "buy", "energy", Infinity, { orders: rejectedBuys.concat(q(7)) });
+                assert(mixed.quantity === 62501 && mixed.order.id === "energy-sell" && mixed.effective === candidate.effective,
+                    "ARK-116: raw-price pruning preserves the eligible net-energy winner");
+                costCalls = 0;
+                const singleEnergy = swing.quote(room, "buy", "energy", Infinity, { orders: [q(7)] });
+                const singleCostCalls = costCalls;
+                costCalls = 0;
+                const sameFreightOrders = Array.from({ length: 100 }, (_, i) => Object.assign({}, q(7), { id: "same-freight-" + i }));
+                const repeatedEnergy = swing.quote(room, "buy", "energy", Infinity, { orders: sameFreightOrders });
+                assert(repeatedEnergy.quantity === singleEnergy.quantity && repeatedEnergy.effective === singleEnergy.effective &&
+                    costCalls === singleCostCalls,
+                    "ARK-116: repeated energy freight is calculated once per destination/quantity within a quote: " + costCalls + "/" + singleCostCalls);
+                costCalls = 0;
+                swing.quote(room, "buy", "energy", Infinity, { orders: [q(7)] });
+                assert(costCalls === singleCostCalls,
+                    "ARK-116: freight reuse does not escape into the next selection in the same tick");
+            } finally { Game.market.calcTransactionCost = originalCost; }
+        }
         assert(swing.effective("sell", "O", 13, 100, 20, 10) === 11, "0124: immediate sale subtracts freight rather than listing fee");
         orders = [q(7)]; book.reset();
         Memory.settings.swing.scanInterval = 120;

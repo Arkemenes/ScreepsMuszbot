@@ -9,6 +9,32 @@
 
 ### Correção de CPU — ARK-116 (2026-10-13)
 
+Orçamento do avaliador: verificar policyCpuPerTick antes de cada avanço do
+generator, não apenas a cada dez passos. Orçamento é compartilhado entre
+jobs no tick; impedir iniciar outro passo após esgotá-lo. Um passo ainda
+é atômico e pode ultrapassar o limite; não declarar preempção estrita.
+Medir craft.policyRequest/craft.policyPoll separadamente no preflight.
+Smoke deve simular passos caros e comprovar parada após o primeiro excesso,
+preservando retomada futura e prioridades/resultados de avaliação.
+
+`labPlanModel.layoutFor` calcula o N-ésimo horário de reação de produtores
+com cooldown comum usando contagem por horário e busca binária para dados
+inteiros válidos. Evitar ordenar os horários uma vez por lote de cinco
+unidades; preservar o mesmo horário, rank e desempate por movimento.
+Entradas fracionárias usam o caminho de referência. Smoke compara escolhas
+com lista independente de eventos, casos de cooldown/ready/delay diferentes
+e número de sorts limitado quando a quantidade cresce. Sem alterar ticks
+simulados, saldo, transporte, cooldowns ou produção do executor.
+
+Revisão após perfil 12:47: `labPolicy.plan` custa 3,695 de 5,516 CPU de
+craft.chains. Engine recria constantes por tick; invalidar geometria pelo
+conteúdo canônico de REACTIONS, não pela identidade do objeto. Comparar
+conteúdo quando a referência mudar; receitas iguais preservam caches,
+receitas diferentes descartam os planos/fases. Cooldowns continuam vivos
+sem invalidar geometria. Smoke deve recriar profundamente as constantes a
+cada tick e comprovar reuso, invalidação por mudança real e timing atualizado.
+Não alterar a política, atribuições, produção ou cadência nesta correção.
+
 Perfil live: `craft.chains` 5,679 CPU/tick; `hauler.pickMineralJob` 2,570;
 `hauler.chainFeed` 1,204. Sem scout/claimer nessa janela. O fallback
 `wide-live` refaz alternativas geométricas e ordenação a cada tick; as
@@ -123,3 +149,24 @@ resultados ARK-99; `node --check` e grunt verdes. Não houve deploy no servidor.
 - Smoke cobre catálogo, estoques intermediários, topologia parcial, vários labs
   em dupla função, falha após `OK`, reset de heap, troca durante cooldown,
   migração e transporte do hauler.
+# ARK-116: cache da atividade dos labs (2026-10-13)
+
+Follow-up: gráficos15min craft.chains1,20, assignments0,475; trecho resolve
+0,154 versus0,761 anteriores com3calls. População pioneer6→2 altera total.
+Assignments reconstrói profile por lab ao ler bandwidth/buffer/refillRatio.
+Compartilhar profile de forma preguiçosa somente dentro da chamada atual;
+próxima chamada recalcula. Bandwidth não depende dos counters de switching
+mutados nesse loop; delay derivado não é consumido nessa função. Não
+cachear demanda/estoques/cooldown/pairs nem alterar intents/frequência.
+
+Após livro filtrado, gráficos15min craft.chains1,90 e resolve0,714;
+trecho37ticks resolve0,761/3calls. Resolve verifica isActive de cada lab
+a cada tick; engine checkStructureAgainstController varre objetos da sala
+para classificar estruturas do mesmo tipo. Cache no heap somente para
+controlador próprio com nível/posição conhecidos, keyed por controlador
+(id/nível/posição/propriedade), ids/posições/propriedade dos labs e métodos
+isActive. Mudança de topologia/RCL/método ou rollback de tick invalida;
+limite configurável64salas. Sem contexto completo manter chamada direta.
+Boost reservations e labLoad manual são filtrados ao vivo, fora do cache.
+Não cachear estoques/cooldowns/reações nem reduzir frequência de intents.
+Fonte: https://github.com/screeps/engine/blob/master/src/utils.js

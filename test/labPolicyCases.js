@@ -150,13 +150,70 @@ module.exports = function labPolicyCases(PROJECT, assert) {
     }
     try {
         let w = world("XLH2O", 20, [1, 2, 3]);
+        {
+            w.room.controller.pos={x:25,y:25};
+            let activeChecks=0;
+            w.labs.forEach(lab=>{lab.isActive=()=>{activeChecks++;return true;};});
+            const initial=runtime.resolve(w.room);
+            for(let i=0;i<20;i++){Game.time++;runtime.resolve(w.room);}
+            assert(initial && activeChecks===w.labs.length,
+                "ARK-116: unchanged lab activity is checked once across21ticks, not once per lab per tick");
+            Memory.rooms[w.room.name].labBoostReservations={[w.labs[0].id]:true};
+            const boosted=runtime.resolve(w.room);
+            assert((!boosted || !boosted.built.includes(initial.built[0])) && activeChecks===w.labs.length,
+                "ARK-116: new boost reservation changes usability without repeating activity checks");
+            delete Memory.rooms[w.room.name].labBoostReservations;
+            Memory.rooms[w.room.name].labLoad={[w.labs[0].id]:"boost"};
+            Memory.rooms[w.room.name].labLoadAuto=false;
+            assert(runtime.resolve(w.room)===null && activeChecks===w.labs.length,
+                "ARK-116: manual lab loading is filtered live outside the activity cache");
+            Memory.rooms[w.room.name].labLoadAuto=true;
+            assert(runtime.resolve(w.room).built.length===initial.built.length && activeChecks===w.labs.length,
+                "ARK-116: automatic loading does not reserve a cached-active lab");
+            delete Memory.rooms[w.room.name].labLoad;delete Memory.rooms[w.room.name].labLoadAuto;
+            w.room.controller.level=7;runtime.resolve(w.room);
+            assert(activeChecks===w.labs.length*2,"ARK-116: controller level change invalidates lab activity");
+            w.labs[0].isActive=()=>false;
+            const disabled=runtime.resolve(w.room);
+            assert(!disabled || !disabled.built.includes(initial.built[0]),
+                "ARK-116: replacement activity method cannot reuse an old active result");
+            w.labs[0].isActive=()=>true;w.room.controller.level=8;
+            runtime.resolve(w.room);
+            delete w.objects[w.labs[0].id];
+            assert(runtime.resolve(w.room)===null,
+                "ARK-116: a missing lab cannot remain usable through a cached activity result");
+            w.objects[w.labs[0].id]=w.labs[0];
+            delete w.room.controller.pos;
+        }
         const scenario = runtime.snapshot(w.room, w.chain, w.item, runtime.resolve(w.room));
         const key = policy.request(w.item, scenario, true);
         assert(key.length < 40, "0127: evaluation key is compact in Memory");
         let result = policy.poll(key);
         for (let i = 0; result.status === "evaluating" && i < 100; i++) { Game.time++; result = policy.poll(key); }
         assert(result.best && result.best.ticks < 300, "0127: measured candidate beats legacy waves on three labs");
-        const metrics = run(w, { reset: true });
+        const meter = load("src/utils/cpuMeter"), originalSpan = meter.span, measured = new Set();
+        const assignmentConfig=load("src/utils/config"), savedAssignmentGet=assignmentConfig.get;
+        let assignmentReads=null;const profilesPerAssignment=[];
+        assignmentConfig.get=(key,...args)=>{
+            if(assignmentReads!==null && key==="craft.policyBuffer") assignmentReads++;
+            return savedAssignmentGet(key,...args);
+        };
+        let metrics;
+        meter.span = (key, fn) => {
+            measured.add(key);
+            if(key!=="labPolicy.assignments") return originalSpan(key, fn);
+            assignmentReads=0;
+            try {return originalSpan(key,fn);}
+            finally {profilesPerAssignment.push(assignmentReads);assignmentReads=null;}
+        };
+        try { metrics = run(w, { reset: true }); }
+        finally { meter.span = originalSpan;assignmentConfig.get=savedAssignmentGet; }
+        assert(profilesPerAssignment.length>0 && profilesPerAssignment.some(n=>n===1) &&
+            profilesPerAssignment.every(n=>n<=1),
+            "ARK-116: multilevel assignments read one logistics profile per decision instead of repeating it per lab");
+        assert(["labPolicy.resolve", "labPolicy.profile", "labPolicy.confirm", "labPolicy.plan",
+            "labPolicy.poll", "labPolicy.enter", "labPolicy.assignments"].every((key) => measured.has(key)),
+            "ARK-116: real multilevel execution measures policy stages across heap reset");
         assert(w.item.run.done && Object.values(w.item.run.produced).every((n) => n === 20), "0127: live policy produces exact multilevel balances");
         assert(metrics.switchedCooling, "0127: roles change while producer cooldown persists");
         const final = (w.room.storage.store.XLH2O || 0) + w.labs.reduce((sum, l) => sum + (l.store.XLH2O || 0), 0);

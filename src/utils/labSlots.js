@@ -14,6 +14,7 @@ const OFFSETS = {
     6: [1, 2], 7: [3, 4], 8: [4, 3], 9: [4, 4], 10: [4, 1],
 };
 const SLOT_NUMBERS = Object.keys(OFFSETS).map(Number);
+const phaseGeometryCache = new Map();
 
 function distance(a, b) {
     return Math.max(Math.abs(OFFSETS[a][0] - OFFSETS[b][0]), Math.abs(OFFSETS[a][1] - OFFSETS[b][1]));
@@ -248,12 +249,27 @@ function planWide(tree, built) {
 // without it the plan is the in-place one, as before.
 // options.strategy overrides craft.labStrategy ("auto" | "waves" | "wide").
 function planPhases(tree, built, options) {
-    const base = planInPlace(tree, built, options);
+    // Search depends on topology/recipe shape, not batches or cooldowns.
+    // Keep immutable search results in the heap and return independent copies.
+    const shape = (node) => typeof node === "string" ? node : [node.product, node.inputs.map(shape)];
+    const parallel = options && options.parallel !== undefined ? options.parallel : config.get("craft.parallelLabs", true);
+    const key = JSON.stringify([shape(tree), built.slice().sort((a, b) => a - b), parallel,
+        config.get("craft.parallelExtraMoves", 4)]);
+    let geometry = phaseGeometryCache.get(key);
+    if (!geometry) {
+        geometry = { base: planInPlace(tree, built, options), wide: planWide(tree, built) };
+        phaseGeometryCache.set(key, geometry);
+        const cap = Math.max(1, Number(config.get("craft.phaseCacheEntries", 128)) || 128);
+        if (phaseGeometryCache.size > cap) phaseGeometryCache.delete(phaseGeometryCache.keys().next().value);
+    }
+    const copy = (plan) => plan && ({ ...plan, ...(plan.phases ? { phases: plan.phases.map((p) => ({ ...p,
+        inputs: p.inputs.slice(), ops: p.ops.map((op) => ({ ...op })) })) } : {}) });
+    const base = copy(geometry.base);
     const work = options && options.work;
     if (!work) return base;
     if (base.ok) { base.strategy = "waves"; base.T = estimateTime(base, built, work); }
     const mode = (options && options.strategy) || config.get("craft.labStrategy", "auto");
-    const wide = config.get("craft.wideLabs", true) && mode !== "waves" ? planWide(tree, built) : null;
+    const wide = config.get("craft.wideLabs", true) && mode !== "waves" ? copy(geometry.wide) : null;
     if (!wide) return base;
     wide.T = estimateTime(wide, built, work);
     if (!base.ok || mode === "wide") return wide;
@@ -283,5 +299,5 @@ function finalOutputs(built, inputs, out) {
 module.exports = {
     OFFSETS, SLOT_NUMBERS, distance, reaches, resolve, treeFromSteps,
     planPhases, planWide, workFromSteps, wideOutputs, finalOutputs,
-    resetCache() { Object.keys(cache).forEach((k) => delete cache[k]); },
+    resetCache() { Object.keys(cache).forEach((k) => delete cache[k]); phaseGeometryCache.clear(); },
 };

@@ -6,6 +6,19 @@
 
 ## Problem
 
+### CPU — geometria independente do lote (ARK-116, 2026-10-13)
+
+Perfil live 15:17: craft.scan teve pico de 301,44 CPU. A busca de fases
+legadas não usa quantidades/cooldowns, mas era refeita para cada tamanho
+de lote. Cache limitado no heap de geometria por árvore (produtos/inputs),
+slots construídos e configuração de ondas/parallelExtraMoves. Quantidades,
+cooldowns, estratégia wide/waves/auto e wideMinGain continuam calculados
+por chamada. Retornar cópias para que consumidores não alterem o cache.
+Reset explícito limpa também essa geometria; zero dado derivado em Memory.
+Smoke verifica menor trabalho de busca ao redimensionar, tempo atualizado,
+invalidação de slots/configuração e isolamento contra mutação do resultado.
+Medição de craft.phasePlan deve separar essa busca do restante de scan.
+
 Só a ÚLTIMA etapa de uma cadeia de lab roda em vários labs de saída (modo largo, 0111). As
 intermediárias usam UM lab cada (o produto precisa ficar junto para a etapa seguinte) e, com
 as ondas do 0115, rodam concorrentes, mas ainda um lab por etapa. Para XLH2O (lote de 3000;

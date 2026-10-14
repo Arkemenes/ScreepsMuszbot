@@ -253,3 +253,20 @@ pronto e deixa a operação observável e cancelável.
   então baixar preço — o caso normal de uma venda — passou a ser de graça, contra
   ~196k créditos por ciclo no desenho antigo. Detalhes em `specs/ARCHITECTURE.md`,
   "Uma ordem listada continua sendo abastecida e reprecifica de graça".
+# Otimização de seleção — ARK-116 (2026-10-13)
+
+A seleção elimina ids falhos, quantidade nula e preços brutos fora do limite
+antes de calcular transporte. Limites efetivos preservam avaliação com frete;
+ranking, teto de taxa e diagnóstico de ordens rejeitadas permanecem iguais.
+Reprodução no smoke: 101 cálculos → 1 para compra/venda com uma ordem elegível.
+Média live e meta global de CPU ainda aguardam validação.
+# ARK-116: frete repetido na seleção do livro (2026-10-13)
+
+Gráfico30min: terminalOps.operations1,99 CPU/tick, sell:atTerminal1,29.
+scoredOrders calcula frete para cada ordem elegível, mesmo quando origem,
+destino e quantidade são iguais. Compartilhar esse cálculo só dentro da
+seleção atual, por destino/quantidade (origem fixa da operação). Nova
+seleção recalcula; sem cache de preço/volume entre ticks. Limites brutos,
+efetivos, cap de taxa, ranking, diagnósticos e quantidades preservados.
+Spans orderBook e scoreOrders separam consulta e avaliação do livro;
+scoreOrders é inclusivo, não somar ao span da operação.

@@ -36,3 +36,12 @@ Entregue. Módulos novos: `utils/census`, `utils/roomCache`, `utils/terrain`.
 `utils/memory.js` usa estado em escopo de módulo + `global.Memory =`
 (seguro sob strict). `utils/plan.js` constrói um índice cacheado por tick.
 `main.js` `guard()` envolve toda chamada de subsistema.
+
+## ARK-116 — pacote de custo recorrente (2026-10-13)
+
+FloodFill deve indexar coordenadas de blocks e estruturas planejadas não-road
+uma vez por execução, mantendo todos os valores da matriz (inclusive seeds
+sobre bloqueios, bordas, walls e estradas). Nada persistido em Memory.
+Planner separa spans visualização/construção/flood para atribuir plan2,077.
+Aceitação: igualdade da matriz completa, acesso a coordenadas linear no
+tamanho do plano em vez de por tile; smoke/build verdes.

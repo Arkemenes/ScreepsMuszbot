@@ -53,27 +53,41 @@ function quote(room, kind, r, quantity, options) {
     else cap = Math.min(cap, policy.available(room, r, options.excludeId));
     if (!cap) return { reason: kind === "buy" ? "no-receiving-space" : "reserved-stock", reference: ref.price, limit };
     const cash = accounting.available(options.excludeId);
-    const orders = options.orders || book.all();
+    const orders = options.orders || book.matching(kind === "buy" ? ORDER_SELL : ORDER_BUY, r);
     const own = Game.market && Game.market.orders || {};
     const matches = [];
+    let deficit;
+    const freight = new Map();
+    const transactionCost = (amount, destination) => {
+        let quantities = freight.get(destination);
+        if (!quantities) { quantities = new Map(); freight.set(destination, quantities); }
+        if (!quantities.has(amount)) quantities.set(amount, Game.market.calcTransactionCost(amount, room.name, destination));
+        return quantities.get(amount);
+    };
     orders.forEach((order) => {
         if (!order || own[order.id] || (options.deadOrderIds || []).indexOf(order.id) >= 0 || order.type !== (kind === "buy" ? ORDER_SELL : ORDER_BUY) || order.resourceType !== r || !order.roomName || !(order.price > 0)) return;
+        // Freight can only worsen the raw price on either side.
+        if (kind === "buy" ? order.price >= limit : order.price <= limit) return;
         const remaining = order.remainingAmount === undefined ? order.amount : order.remainingAmount;
         let q = Math.floor(Math.min(cap, remaining || 0, kind === "buy" ? cash / order.price : Infinity));
         if (kind === "buy") {
-            const d = policy.deficit(room, r, options.excludeId);
-            // Bound by net delivered energy, not nominal purchased units.
-            let low = 0, high = q;
-            for (let step = 0; low < high && step < 32; step++) {
-                const mid = Math.ceil((low + high) / 2);
-                const fee = Game.market.calcTransactionCost(mid, room.name, order.roomName);
-                const gain = r === RESOURCE_ENERGY ? mid - fee : mid;
-                if (gain <= d) low = mid; else high = mid - 1;
+            if (deficit === undefined) deficit = policy.deficit(room, r, options.excludeId);
+            if (r !== RESOURCE_ENERGY) {
+                // Freight consumes energy, not purchased mineral units.
+                q = Math.min(q, Math.max(0, Math.floor(deficit)));
+            } else {
+                // Bound by net delivered energy, not nominal purchased units.
+                let low = 0, high = q;
+                for (let step = 0; low < high && step < 32; step++) {
+                    const mid = Math.ceil((low + high) / 2);
+                    const fee = transactionCost(mid, order.roomName);
+                    if (mid - fee <= deficit) low = mid; else high = mid - 1;
+                }
+                q = low;
             }
-            q = low;
         }
         if (!(q > 0)) return;
-        const cost = Game.market.calcTransactionCost(q, room.name, order.roomName);
+        const cost = transactionCost(q, order.roomName);
         const price = effective(kind, r, order.price, q, cost, ref.energy);
         if (kind === "buy" ? price >= limit : price <= limit) return;
         matches.push({ order, quantity: q, cost, effective: price, fee: cost * ref.energy / q,

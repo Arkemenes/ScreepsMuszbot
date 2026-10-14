@@ -51,7 +51,7 @@ function deficit(room, r, excludeId) {
     if (wanted === undefined) return 0;
     return Math.max(0, wanted + (r === RESOURCE_ENERGY ? require("./terminalFuel").keep(room) : 0) - stock(room, r) - incoming(room, r, excludeId));
 }
-function terminalFree(room, excludeId) {
+function terminalFree(room, excludeId, keepFloor) {
     if (!room.terminal) return 0;
     const s = room.terminal.store;
     const cap = s.getCapacity() || 0;
@@ -63,7 +63,7 @@ function terminalFree(room, excludeId) {
         else if (op.sourceRoom === room.name && (op.kind === "sell" || op.kind === "transfer") && !(op.sentAmount > 0))
             pending += Math.max(0, (op.remaining || 0) - (op.loadedAmount || 0));
     });
-    const fuel = Math.max(0, require("./terminalFuel").keep(room) - value(room.terminal, RESOURCE_ENERGY));
+    const fuel = Math.max(0, (keepFloor === undefined ? require("./terminalFuel").keep(room) : keepFloor) - value(room.terminal, RESOURCE_ENERGY));
     return Math.max(0, s.getFreeCapacity() - Math.ceil(cap * config.get("stockPolicy.terminalFreeRatio", 0.15)) - pending - fuel);
 }
 function destination(room, r) {
@@ -85,6 +85,8 @@ function consumerAvailable(room, source, resource) {
     const key = withdrawalKey(source, resource);
     const pending = withdrawals[key] || 0;
     if (source !== room.storage && source !== room.terminal) return Math.max(0, value(source, resource) - pending);
+    // Outgoing reservations can only lower the physically available amount.
+    if (value(source, resource) <= pending) return 0;
     let total = 0, staged = 0;
     const managed = new Set();
     operations(room).forEach((op) => {

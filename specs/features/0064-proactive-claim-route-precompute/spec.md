@@ -726,3 +726,106 @@ guard de bucket antes de iniciar/revalidar a viagem e limitar os hops.
 
 Tasks: reprodução vermelha → waypoints e limites → smoke/node --check/build →
 graphify update. Não há promessa de redução medida de CPU no jogo real.
+## Fallback por travessia — ARK-116 (2026-10-13)
+
+Perfil live atribuiu4,260 CPU/tick ao fallback nativo sem rota validada,
+contra0,376 no movimento planejado. Uma busca completa falha não deve
+desencadear outra busca nativa de toda a viagem a cada expiração do path.
+No fluxo padrão, rota de salas não validada avança apenas o próximo hop,
+com maxRooms2/hopMaxOps e callback restrito ao par de salas. Goal
+centro/range24 aceita qualquer passagem que entre no interior do próximo
+hop. Validação/backoff/recuo existentes continuam; realRoute:false mantém
+opt-out anterior. Smoke cobre limite, progresso e recuperação; ganho live
+e chegada dos pioneers ainda pendentes.
+### Pioneer com bucket baixo (2026-10-13)
+
+Viagens do pioneer passam `allowUnplannedHop`: bucket baixo adia somente
+validação completa, permitindo hop limitado com folga de CPU no tick e
+rota segura de salas. Sem rota segura não há busca direta da viagem.
+Sem a opção, comportamento anterior permanece (claimer espera). Regressão
+reproduz parada em bucket667; smoke cobre headroom, segurança e avanço.
+# ARK-116: trabalho de rota durante fadiga (2026-10-13)
+
+Próxima otimização: graphSearch mediu1,800 CPU/tick em3calls na janela
+parcial10ticks após deploy. Cache no heap para findRoute em viagens
+allowUnplannedHop, TTL50ticks e limite128entradas configuráveis. Reuso
+exige mesma origem/destino/avoid/políticas/penalties e custos inalterados
+das salas consultadas pelo engine e das salas retornadas. Qualquer nova
+restrição, hostil, dono ou dead-end que altere esses custos força busca;
+callbacks allowRoom dinâmicos não usam cache. Não cachear falhas. Mudança
+de sala e expiração forçam nova busca; nenhum objeto de jogo em Memory.
+
+Janela fechada at83627195: pioneer4,119 CPU/tick, movimento fallback1,044;
+não houve realSearch. Snapshot seguinte mostra pioneers com fadiga32/22.
+O engine já pula sua busca nesses ticks, mas moveToRoom ainda calcula a
+rota de salas antes da chamada. Viagens com allowUnplannedHop devem retornar
+ERR_TIRED antes desse trabalho quando fatigadas, preservando estado de
+progresso/retreat. No primeiro tick sem fadiga, todas as validações de
+trânsito e os limites de CPU existentes voltam a valer. Outros callers
+mantêm seu comportamento. Medir findRoute em routing.graphSearch; não
+atribuir ganho total sem nova janela live.
+# ARK-116: pacote de orçamento e reuso (2026-10-13)
+
+Rotas do grafo de travelers allowUnplannedHop sem allowRoom dinâmico
+podem validar snapshots escalares das entradas de política das salas
+observadas, em vez de repetir callbacks de custo. Owner, hostis, my,
+reserva, visibilidade/controller e vencimento de dead ends são vivos;
+chave inclui aliados e usuário próprio. Source Keepers mantém avaliação
+completa e efeitos de observação. TTL/cap e revalidação de todas as salas
+observadas permanecem. Mudanças no mesmo tick devem invalidar o reuso.
+
+Planejamento completo desses travelers respeita Game.cpu.limit além do
+tickLimit e reserva configurada. Orçamento normal insuficiente ou busca
+já usada no tick adiam planejamento; não impedem o hop limitado se ainda
+há headroom do tick. Demais callers mantêm gates e semântica anterior.
+
+## ARK-116: viagem incremental dos pioneers (2026-10-13)
+
+O fluxo anterior combina validação completa repetida com busca nativa por
+hop e revalida todas as alternativas exploradas pelo grafo. `incrementalRoute`
+será opt-in do pioneer: nenhuma busca completa, somente a próxima travessia
+com maxRooms2 e hopMaxOps. Sem sequência válida, não executar busca direta.
+Rota antiga validada não deve contaminar a adoção desse modo. Claimer e
+demais callers conservam validação completa.
+
+O cache incremental valida as salas da sequência escolhida, não alternativas
+descartadas pelo engine. Segurança continua viva no mesmo tick; mudanças
+nas alternativas podem melhorar a preferência somente ao vencer TTL50.
+Hostis, bans, avoid, destino, dead-end e callback dinâmico conservam
+invalidação. Caminho nativo usa routing.crossRoomReusePathTicks=1500:
+expiração curta durante fadiga deixa de recriar a mesma busca. Engine ainda
+descarta ao mudar de sala/destino ou sair do caminho; stall guard força
+replanejamento e recuperação em ausência de progresso. Headroom do tick
+permanece obrigatório, bucket baixo não paralisa hop seguro.
+
+Aceitação: viagem de vários hops sem realSearch; execução com bucket baixo;
+cache proporcional à sequência, bloqueio aprendido imediatamente respeitado;
+path sobrevivendo a20ticks decorridos com fadiga; stall/destino/crossing
+invalidando normalmente; regressões legadas verdes. Uma sincronização após
+checks/smoke/build. Ganho de CPU e recuperação do bucket exigem dados live.
+
+### API comum para todas as missões multi-room
+
+`travelToRoom` normaliza a política e delega a mesma máquina `moveToRoom`:
+modo incremental para pioneer/raider/scout/remoteMiner/remoteHauler/reserver
+ordinário e trânsito independente do squad. `realRoute:true` preserva
+validação antecipada para missão claim. Todos compartilham prazo longo do
+path por hop e retorno imediato durante fadiga. `nativeRoute` explícito
+mantém semântica legada. `moveToRoom` segue compatível para integrações e
+diagnósticos existentes; não há segunda implementação de navegação.
+Callbacks de remotes, veto de hostis do reserver, policy de Keepers no claim
+e destino ofensivo são preservados. Formação tática do squad usa coordenadas
+precisas do líder, continua separada do trânsito por salas; não redirecionar
+uma formação para o centro da sala nem perder o range0.
+
+## ARK-116 — execução do próximo passo sem moveTo repetido
+
+No modo incremental, caminho nativo serializado completo com sala/destino/
+TTL válidos e próximo passo adjacente não-wall pode executar creep.move
+diretamente. Política/avoid/progress são verificados antes disso; headroom,
+clearance, no-path/backtracking e stall continuam na máquina central.
+Path inválido, expirado, outra sala/destino, desvio ou parede retornam ao
+moveTo. Não aceitar fixtures com somente direções como caminho confiável.
+Config routing.cachedHopSteps=true permite desligar. Span cachedMove separa
+execução direta. Aceitação: passos iguais, menos moveTo, mudança de policy/
+destino e stall forçam recuperação; claim e movimento tático não mudam.

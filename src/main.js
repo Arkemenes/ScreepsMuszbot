@@ -175,11 +175,14 @@ function guard(label, fn, group, key) {
 // guards do not cover (Memory parse, loops outside guard, profiler overhead). The same
 // numbers are published every stats.cpuWindowTicks ticks in Memory.stats.cpu.meter.
 function printCpuTop(n) {
-    const live = cpuMeter.live();
+    const current = cpuMeter.live();
+    const closed = current.ticks === 0 && cpuMeter.snapshot();
+    const live = closed || current;
     const ticks = Math.max(1, live.ticks);
     let guarded = 0;
     Object.keys(live.modules).forEach((k) => { guarded += live.modules[k].avg * ticks; });
-    console.log("[cpuTop] " + live.ticks + " ticks, avg " + live.used.toFixed(2) + "/tick, guarded " + (guarded / ticks).toFixed(2) + ", unguarded " + (live.used - guarded / ticks).toFixed(2));
+    console.log("[cpuTop] " + live.ticks + " ticks, avg " + live.used.toFixed(2) + "/tick, guarded " + (guarded / ticks).toFixed(2) + ", unguarded " + (live.used - guarded / ticks).toFixed(2) +
+        (closed ? " (closed window at tick " + live.at + ")" : ""));
     const limit = n > 0 ? n : 15;
     cpuMeter.GROUPS.forEach((group) => {
         const rows = Object.keys(live[group]).map((k) => ({ k, s: live[group][k] }));
@@ -187,8 +190,6 @@ function printCpuTop(n) {
         if (group !== "modules") console.log("  [" + group + "]");
         rows.slice(0, limit).forEach((r) => console.log("  " + r.k + ": " + r.s.avg.toFixed(3) + "/tick, " + r.s.calls.toFixed(1) + " calls/tick, max " + r.s.max.toFixed(2)));
     });
-    const tp = utils.terminalOps.perf;
-    Object.keys(tp).forEach((k) => console.log("  terminalOps." + k + ": " + (tp[k] / ticks).toFixed(3) + "/tick"));
 }
 function resetCpuMeter() {
     const tp = utils.terminalOps.perf;

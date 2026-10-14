@@ -79,6 +79,13 @@ function reserve(room) {
 }
 function keep(room) { return enabled() ? plan(room).keep : reserve(room); }
 function unfunded(room) { return enabled() ? plan(room).unfunded : reserve(room); }
+// A decision-local budget: callers may share it within one synchronous
+// selection, but each later selection must observe current operations/stock.
+function budget(room) {
+    if (enabled()) return plan(room);
+    const floor = reserve(room);
+    return { keep: floor, reserve: floor };
+}
 function transit(room, intoTerminal, excludeName) {
     return require("./census").creepsByRole(room.name, "hauler").reduce((sum, creep) => {
         if (creep.name === excludeName) return sum;
@@ -90,12 +97,13 @@ function transit(room, intoTerminal, excludeName) {
         return sum + Math.max(0, quantity);
     }, 0);
 }
-function releasable(room) {
-    const excess = Math.max(0, value(room.terminal) - keep(room));
-    return excess > Math.ceil(reserve(room) * config.get("terminalFuel.releaseRatio", 0.25)) ? excess : 0;
+function releasable(room, forecast) {
+    const current = forecast || budget(room);
+    const excess = Math.max(0, value(room.terminal) - current.keep);
+    return excess > Math.ceil(current.reserve * config.get("terminalFuel.releaseRatio", 0.25)) ? excess : 0;
 }
 global.terminalFuelStatus = (name) => {
     const rooms = name ? [Game.rooms[name]] : Object.values(Game.rooms || {}).filter((r) => r.controller && r.controller.my);
     return rooms.filter((r) => r && r.storage && r.terminal).map((r) => Object.assign({ room: r.name, enabled: enabled() }, plan(r)));
 };
-module.exports = { enabled, plan, reserve, keep, unfunded, releasable, optionalAllowed, transit };
+module.exports = { enabled, plan, reserve, keep, unfunded, budget, releasable, optionalAllowed, transit };

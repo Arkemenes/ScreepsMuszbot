@@ -299,6 +299,35 @@ reagentes e combustível implementados; benchmark de fallback 1.221→18 ms
 em 300 ticks offline. Meta <9 e ganho live ainda pendentes. Evidências em
 `docs/cpu-regression-2026-10-13.md`.
 
+13/10, 11:16: `craft.chains` segue 5,542 CPU/tick em janela de 27 ticks;
+gráfico mostra salto sustentado próximo das 09:00. Diagnóstico 0113 agora
+separa estado das cadeias, execução/avaliação dos labs e estoque/combustível
+do hauler. Causa interna e recuperação do bucket aguardam medição live.
+
+13/10, 12:47: labPolicy.plan 3,695 de craft.chains 5,516 CPU. Causa
+reproduzida: REACTIONS recriado pelo engine invalidava caches por identidade
+a cada tick. Comparação por conteúdo implementada; teste com constantes
+recriadas passa. Benchmark três planos/300 ticks: 512,73→18,25 ms, reuso
+0→897/900 e planos iguais. Ganho live e bucket aguardam confirmação.
+
+13/10, 13:42: ganho live do cache confirmado: plan 3,695→0,259 (-93%),
+chains 5,516→2,116 (-62%); média total/bucket ainda não estabilizados.
+Rodada seguinte elimina previsões, lista de operações e capacidade repetidas
+na seleção de stockPolicy do hauler; testes de consultas e frescor verdes.
+Ganho live desta rodada e meta <9 continuam pendentes (ARK-116).
+
+13/10, 15:17: pico craft.scan 301,44 CPU; cache de geometria legado por
+árvore/slots/config implementado, mantendo T/estratégia vivos. Benchmark
+300 lotes XLH2O em 3/6/10 labs: 7.075,96→111,62 ms, planos idênticos;
+spans phasePlan/evaluate e regressões verdes. Pico live pós-correção ainda
+pendente; scan continua síncrono e poderá exigir execução incremental.
+
+13/10, 15:29: média 27,08, scan pico 81,09, evaluate 43,06; orçamento
+de poll checado por passo e layout scoring substitui sorts por lote por
+contagem de eventos. Probe 3000 unidades: poll 10–11→~1,1 ms offline;
+rank/produção/testes preservados. Novos spans request/poll; preparação fria,
+mercado/swing, média e bucket continuam pendentes (ARK-116).
+
 
 Destilado da análise completa em
 `~/.claude/plans/fa-a-uma-an-lise-completa-radiant-engelbart.md`. As tags de
@@ -336,3 +365,98 @@ atribui atacante nem expiração. Sem mudar a política de claim/respawn.
 Evidência trazida pelo usuário: E5N41 neutra (RCL0, my=false, enemies=0 no snapshot),
 ordem ausente; incidente de TimelessTacticianEon em E3N43 não comprova causa desse
 desaparecimento. Versão anterior não reteve o diagnóstico; causa real não fechada.
+ARK-116 (2026-10-13): seleção de ordens do terminal filtra preço bruto,
+ids falhos e quantidade nula antes do frete; reprodução 101→1 cálculos por
+seleção, mantendo diagnóstico/ranking/limites efetivos. Ganho live desta
+rodada e meta <9 CPU/tick pendentes.
+ARK-116 (2026-10-13): pickLoad evita prever combustível para saldo liberado
+inferior ao mínimo de coleta, atualizando o ledger normalmente. Regressões
+de crédito/proteção/frescor passam; ganho live e meta <9 seguem pendentes.
+ARK-116: fallback live4,260CPU/tick contra planejado0,376. Fluxo sem rota
+validada agora resolve somente próximo hop (2 salas), com objetivo aberto
+ao interior, mantendo validação/backoff/recuo. Smoke de progresso e
+restrições passa; redução de CPU e travessia live aguardam confirmação.
+ARK-116: parada dos pioneers confirmada em bucket667 no gate de busca
+completa. Permissão explícita de hop limitado separa movimento barato de
+planejamento adiado; tests preservam headroom/trânsito/claimer. Retomada
+live e meta <9 aguardam validação.
+ARK-116: retomada live confirmada; fallback caiu para1,044 CPU/tick na
+janela fechada at83627195, mas total21,983 e pioneer4,119 ainda altos.
+Removido cálculo de rota durante fadiga em viagens do pioneer; smoke de
+retomada/ban novo passa. Span graphSearch permite medir o custo restante;
+ganho desta alteração e meta <9 ainda aguardam nova janela live.
+ARK-116: graphSearch mediu1,800 CPU/tick/3calls no trecho após deploy.
+Cache de rota de salas reduz21 buscas repetidas para1 na reprodução;
+smoke verifica hostis/dead-end/expiração/avoid/penalties e callback dinâmico.
+Ganho live e meta <9 continuam pendentes; janela curta29,71 inclui entry57,66.
+ARK-116: reuso de rota confirmado em trecho41ticks: graphSearch0,150/0,2calls,
+pioneer2,169. Hauler2,992 é próximo alvo; spans de cover/terminalJob/
+pickDeliver/runMineralJob preparam atribuição. Meta<9 permanece aberta.
+ARK-116: janela60 at83627489 total17,833; pickDeliver0,637 aponta seleção
+como próximo corte. Spawn/extension elegível adjacente evita busca (1→0
+no teste); alvo distante conserva caminho/prioridade. Ganho live pendente.
+ARK-116: janela60 at83628440 total17,178/bucket637; jobs minerais1,300.
+Entrega stockPolicy de energia ao terminal compartilha forecast (2→1),
+com frescor entre decisões e limites/desvio preservados. Ganho live pendente.
+ARK-116: análise longitudinal30min prioriza terminal operations1,99 e
+sell:atTerminal1,29. Frete idêntico compartilhado dentro da seleção do
+livro (100→1 em teste), sem cache de preços/volumes; ranking/frescor passam.
+Impacto longitudinal e meta<9 continuam pendentes.
+ARK-116: após13min/visão15min, scoreOrders0,009 não explica sell:atTerminal.
+Swing.quote buscava livro completo para recurso único; matching filtrado
+por recurso/lado preserva cotação/energia líquida e reuso de all no tick.
+Smoke verde; impacto longitudinal e meta<9 ainda pendentes.
+ARK-116: pós15min swing filtrado ativo, trecho sell0,353/0,3calls; média
+terminal operations1,49. Craft1,90 segue constante; resolve cacheia atividade
+dos labs (63→3checks/21ticks no teste), preserva RCL/topologia/boost/load.
+Smoke verde; ganho do cache em jogo e meta<9 seguem pendentes.
+ARK-116: gráfico15min craft1,20 após cache; população pioneer6→2 impede
+atribuição total. Assignments0,475 compartilha profile dentro da execução
+(no máximo1leitura por decisão em teste integrado), produção exata passa.
+Ganho live deste corte e meta<9 continuam pendentes.
+ARK-116: janela60 at83630308 total14,535/bucket3141; assignments0,523 não
+confirma ganho anterior. Fontes minerais sem saldo pulam scans de reservas
+(2→0 em teste), estoque novo/pending withdrawals continuam ao vivo. Ganho
+live e meta<9 pendentes; hipótese de exclusividade mineral descartada.
+ARK-116: usuário confirmou plan2,906 como custo de sala nova, fora do alvo
+recorrente. Cascata mineral evita repetir seletores recém-consultados pela
+cadeia (8→4consultas em reprodução), mantém frescor entre decisões/prioridades.
+Smoke verde; ganho live e meta<9 seguem pendentes.
+ARK-116: erro de segmentos confirmado: root+7planos presentes e histórico
+4páginas faria11ids ao salvar. Gravação espera orçamento<=10, prioriza
+páginas na ativação e retenta sem gerar amostra extra/geração parcial.
+Smoke inclui reset após save adiado e preservação do tick original.
+
+ARK-116: gráfico22:00–22:15 mantém swingTrade0,783 e picos39,1; compras
+de minerais eliminam busca binária de frete irrelevante ao déficit.
+Smoke100ordens:1100→100cálculos e100→1consultas de déficit, sem alterar
+quantidade/preço; compras de energia preservadas. Ganho live pendente.
+
+ARK-116: at83631129 média23,126/bucket2324, pioneer4,814/7calls,
+swingTrade1,893. Cotação elimina frete de ordens com preço bruto já fora
+da margem:100compras energia1700→0cálculos e100vendas100→0 em smoke,
+vencedor misto preservado. Ganho live e custo restante pioneer pendentes.
+Probe identifica três pioneers recarregando em casa; novos spans pickLoad
+e travel separam seleção de fonte do routing antes de outro corte funcional.
+
+ARK-116: janela22:30–22:45 bucket2386→1792, pioneer4,45/6,86calls;
+travel4,97 disponível em apenas uma amostra (Mean=Max). Acrescentados
+graphRoute (inclui validação do cache) e clearance para atribuir restante
+antes de mudar novamente comportamento/limites de viagem.
+
+ARK-116: at83631501 média23,497, bucket1344 no probe31520; graphRoute1,156
+contra graphSearch0,164, realSearch1,740. Usuário pediu pacote com deploy
+único para reduzir resets. Pacote: snapshots vivos no cache de grafo,
+planejamento allowUnplannedHop sob orçamento normal sem parar hop limitado,
+frete local por destino/quantidade na quote. Smoke verde:40→0avaliações
+completas de política em rota estável,1800→17fretes em100ordens energia;
+mudanças no mesmo tick/expiração e gates legados preservados. Ganho live pendente.
+
+ARK-116: bucket788 no gráfico23:05–23:08; pioneer.travel4,77, graphRoute1,14,
+realSearch0,877 e native1,99. Revisão de arquitetura remove validação completa
+dos pioneers e centraliza travelToRoom para todos os roles de trânsito.
+Claim mantém upfront validation; remotes/hostis/Keepers e formação tática
+preservados. Cache verifica sequência escolhida, path vive1500ticks com
+recovery/stall. Smoke reproduz expiração após25ticks de fadiga, avanço por
+hop sem realSearch, ban novo, recuo, mudança de destino e bucket100.
+Ganho live e meta<9 permanecem pendentes.

@@ -1,7 +1,7 @@
 // Like the local hauler, but with a fixed remote-room <-> home-room route
 // instead of picking freely among piles: load from the assigned remote's
 // source container(s)/drops, deliver to home's storage/spawn/extensions.
-// Travel between rooms uses utils/routing.moveToRoom() (ROADMAP 0075 -
+// Travel between rooms uses utils/routing.travelToRoom() (ROADMAP 0075 -
 // before that, a raw creep.moveTo() with remotes.roomCallback() as its only
 // safety net: no upfront terrain validation, no retreat/backtrack, so a
 // remote room with a natural-wall maze between the border and the container
@@ -102,7 +102,7 @@ var remoteHauler = {
             ) {
                 // unsafe out there - head home with whatever we're carrying
                 creep.memory.job = carrying > 0 ? "deliver" : "load";
-                routing.moveToRoom(creep, home, {
+                routing.travelToRoom(creep, home, {
                     range: 20,
                     reusePath: 30,
                     allowRoom: remotes.allowRoom(home),
@@ -110,7 +110,7 @@ var remoteHauler = {
                 return;
             }
             if (creep.room.name !== targetRoomName) {
-                routing.moveToRoom(creep, targetRoomName, {
+                routing.travelToRoom(creep, targetRoomName, {
                     range: 20,
                     reusePath: 30,
                     allowRoom: remotes.allowRoom(targetRoomName),
@@ -135,7 +135,7 @@ var remoteHauler = {
 
         // deliver
         if (creep.room.name !== home) {
-            routing.moveToRoom(creep, home, {
+            routing.travelToRoom(creep, home, {
                 range: 20,
                 reusePath: 30,
                 allowRoom: remotes.allowRoom(home),

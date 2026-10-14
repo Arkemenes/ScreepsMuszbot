@@ -7,6 +7,7 @@ const MAX_PAGES = 10;
 const loadedHistory = {};
 let loaded = false, firstSeenTick = null, manifest = null, manifestRaw = null;
 let pending = [], persistedBytes = 0, error = null;
+let writeSegments = [];
 
 function rawSegments() {
     return typeof RawMemory !== "undefined" && RawMemory.segments ? RawMemory.segments : null;
@@ -35,6 +36,7 @@ function merge(payload) {
 function resetCache() {
     loaded = false; firstSeenTick = null; manifest = null; manifestRaw = null;
     pending = []; persistedBytes = 0; error = null;
+    writeSegments = [];
     Object.keys(loadedHistory).forEach((r) => delete loadedHistory[r]);
 }
 function load() {
@@ -78,6 +80,8 @@ function load() {
 }
 function activeSegmentIds() {
     load();
+    // Activate the full next generation only while a save is budget-deferred.
+    if (writeSegments.length) return writeSegments.slice();
     // Read one page per tick while hydrating, leaving eight slots for plans.
     return pending.length ? [SEGMENT_ID, pending[0]] : [SEGMENT_ID];
 }
@@ -108,6 +112,14 @@ function save(history) {
     if (!segments) return false;
     const pages = compactPages(history);
     if (!pages) { error = "history-capacity"; return false; }
+    const ids = [SEGMENT_ID].concat(pages.slice(1).map((page, i) => i));
+    const savedIds = new Set(Object.keys(segments));
+    ids.forEach((id) => savedIds.add(String(id)));
+    if (savedIds.size > MAX_PAGES) {
+        writeSegments = ids;
+        error = "segment-write-budget";
+        return false;
+    }
     const generation = (manifest && manifest.generation || 0) + 1;
     const payloads = pages.map((snapshots, index) => JSON.stringify(Object.assign({
         version: VERSION, generation, snapshots,
@@ -118,13 +130,14 @@ function save(history) {
     segments[SEGMENT_ID] = payloads[0];
     manifestRaw = payloads[0]; manifest = parse(manifestRaw);
     persistedBytes = payloads.reduce((sum, raw) => sum + raw.length, 0);
+    writeSegments = [];
     error = null;
     return true;
 }
 function history() { load(); return loadedHistory; }
 function status() {
     return { loaded, version: manifest && manifest.version, pages: manifest ? (manifest.pages || 0) + 1 : 0,
-        pendingSegments: pending.slice(), persistedBytes, error };
+        pendingSegments: pending.slice(), writeSegments: writeSegments.slice(), persistedBytes, error };
 }
 function clear() {
     resetCache();

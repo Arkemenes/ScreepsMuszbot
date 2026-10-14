@@ -300,10 +300,10 @@ function advance(creep, squadId) {
                 disband(squadId);
                 return;
             }
-            routing.moveToRoom(creep, squad.from, { range: 20, reusePath: 20 });
+            routing.travelToRoom(creep, squad.from, { range: 20, reusePath: 20 });
             return;
         }
-        routing.moveToRoom(creep, squad.target.room, { range: 20, reusePath: 20 });
+        routing.travelToRoom(creep, squad.target.room, { range: 20, reusePath: 20 });
         return;
     }
 

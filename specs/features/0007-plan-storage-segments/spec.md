@@ -102,3 +102,15 @@ reatribuição); e cada segment agora é marcado com o nome da sala
 não bate, então uma colisão de id nunca mais devolve o plano errado (fica só
 tratado como "sem plano ainda", refaz). Duas assertions de smoke cobrem
 diretamente essa colisão + a sobrevivência a um `Memory.settings = {...}`.
+# ARK-116: histórico e planos disputam o limite de gravação (2026-10-13)
+
+Probe live: segmentos presentes9 e10..16 (root+7planos), histórico carregado
+version2/pages4. Save de root+pages0..2 faria11chaves no objeto de segmentos.
+Limitar ativação a10 não limita gravações para ids adicionais.
+marketHistory.save deve conferir união dos ids presentes e ids necessários
+antes de escrever qualquer payload, retornar false com segment-write-budget
+se ultrapassar10 e priorizar ids de escrita em activeSegmentIds. Collector
+já mantém historyDirty e retenta antes do cadence fast path. Próximo tick
+com slots suficientes salva geração completa, root por último. Não truncar
+histórico, apagar planos ou publicar geração parcial. Requests de escrita
+devem aparecer no status e ser limpos no sucesso/reset.

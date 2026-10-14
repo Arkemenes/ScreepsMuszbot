@@ -249,6 +249,34 @@ function simulate(plan, scenario, options) {
     return result.value;
 }
 // Same ranking used by the research engine, exposed to the live executor.
+function reactionScheduleTime(ready, count, cooldown) {
+    if (!(count > 0)) return -Infinity;
+    const batches = Math.ceil(count);
+    if (!Number.isFinite(batches)) return Infinity;
+    const first = Math.min(...ready);
+    const last = first + (batches - 1) * cooldown;
+    if (cooldown > 0 && Number.isSafeInteger(cooldown) && Number.isSafeInteger(batches) &&
+        ready.every(Number.isSafeInteger) && Number.isSafeInteger(last)) {
+        // Every producer emits at start + k*cooldown. Count events through a
+        // candidate time to find the Nth event without scheduling N batches.
+        let lower = first, upper = last;
+        while (lower < upper) {
+            const mid = lower + Math.floor((upper - lower) / 2);
+            const emitted = ready.reduce((sum, start) => sum + (mid < start ? 0 : Math.floor((mid - start) / cooldown) + 1), 0);
+            if (emitted >= batches) upper = mid;
+            else lower = mid + 1;
+        }
+        return lower;
+    }
+    // Preserve reference behavior for fractional timing overrides.
+    let finish = -Infinity;
+    for (let n = 0; n < batches; n++) {
+        ready.sort((a, b) => a - b);
+        finish = Math.max(finish, ready[0]); ready[0] += cooldown;
+    }
+    return finish;
+}
+
 function layoutFor(phase, labs, quota, produced, recipes, tick, bandwidth, delay) {
     let best = null;
     for (const layout of phase.alternatives || [phase.layout]) {
@@ -260,10 +288,7 @@ function layoutFor(phase, labs, quota, produced, recipes, tick, bandwidth, delay
             const ready = labs.map((lab, i) => layout[i] === p ? Math.max(tick, lab.next,
                 lab.role && lab.role !== p ? tick + delay : lab.ready) : null).filter((t) => t !== null);
             if (!ready.length && quota[p] > produced[p]) { projected = Infinity; break; }
-            for (let n = 0; n < (quota[p] - produced[p]) / 5; n++) {
-                ready.sort((a, b) => a - b);
-                projected = Math.max(projected, ready[0]); ready[0] += recipes[p].cooldown;
-            }
+            projected = Math.max(projected, reactionScheduleTime(ready, (quota[p] - produced[p]) / 5, recipes[p].cooldown));
         }
         const rank = projected + (bandwidth === Infinity ? 0 : movement / bandwidth) + (changes ? delay : 0);
         if (!best || rank < best.rank || rank === best.rank && movement < best.movement) best = { layout, rank, movement };

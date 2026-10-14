@@ -6,7 +6,30 @@ const model = require("./labPlanModel");
 const labSlots = require("./labSlots");
 const labReactions = require("./labReactions");
 const census = require("./census");
+const cpuMeter = require("./cpuMeter");
 const layoutCache = new Map();
+const activeCache = new Map();
+
+function activeLabs(room, labs) {
+    const controller = room.controller;
+    const stable = controller && controller.my === true && Number.isFinite(controller.level) &&
+        controller.pos && Number.isFinite(controller.pos.x) && Number.isFinite(controller.pos.y) &&
+        labs.every((lab) => !lab || lab.pos && Number.isFinite(lab.pos.x) && Number.isFinite(lab.pos.y));
+    const check = () => labs.map((lab) => !!lab && (!lab.isActive || lab.isActive()));
+    if (!stable) return check();
+    const signature = JSON.stringify([controller.id, controller.level, controller.pos.x, controller.pos.y,
+        controller.owner && controller.owner.username,
+        labs.map((lab) => lab && [lab.id, lab.pos.x, lab.pos.y, lab.my, lab.owner && lab.owner.username])]);
+    const cached = activeCache.get(room.name);
+    if (cached && Game.time >= cached.tick && cached.signature === signature &&
+        labs.every((lab, i) => (lab && lab.isActive) === cached.methods[i])) return cached.active;
+    const active = check();
+    activeCache.delete(room.name);
+    const cap = Math.max(1, config.get("craft.policyActiveCacheEntries", 64));
+    while (activeCache.size >= cap) activeCache.delete(activeCache.keys().next().value);
+    activeCache.set(room.name, { tick: Game.time, signature, active, methods: labs.map((lab) => lab && lab.isActive) });
+    return active;
+}
 function bindings(built, desired, products, map) {
     const key = built.join(",") + ":" + desired.join(",") + ":" + products.map((p) => p + map[p].inputs.join(",")).join(";");
     if (layoutCache.has(key)) return layoutCache.get(key);
@@ -28,9 +51,11 @@ function resolve(room) {
     if (!all) return null;
     const mem = Memory.rooms && Memory.rooms[room.name] || {};
     const reserved = mem.labBoostReservations || {};
-    const built = all.built.filter((slot) => {
-        const lab = Game.getObjectById(all.ids[slot]);
-        return lab && (!lab.isActive || lab.isActive()) && !reserved[lab.id] &&
+    const labs = all.built.map((slot) => Game.getObjectById(all.ids[slot]));
+    const active = activeLabs(room, labs);
+    const built = all.built.filter((slot, i) => {
+        const lab = labs[i];
+        return lab && active[i] && !reserved[lab.id] &&
             !(mem.labLoad && !mem.labLoadAuto && mem.labLoad[lab.id]);
     });
     return built.length < 3 ? null : { built, ids: all.ids };
@@ -145,6 +170,9 @@ function enter(item, state, plan, labs, logistics) {
     state.phaseSince = Game.time;
 }
 function assignments(room, chain, item, state, plan, resolved, labs) {
+    let logistics;
+    // The fields used here stay constant within this assignment decision.
+    const currentProfile = () => logistics || (logistics = profile(room));
     const map = policy.recipeMap(), phase = plan.phases[state.phase], geometry = model.trios(resolved.built);
     let binding = bindings(resolved.built, state.desired, phase.products, map);
     const consumers = (i) => binding.sources[i].filter((p) => phaseRemaining(state, p));
@@ -182,7 +210,7 @@ function assignments(room, chain, item, state, plan, resolved, labs) {
             const start = state.switching[i];
             if (start.tracked) {
                 if (stats.switchSamples >= 100) { stats.switchSamples /= 2; stats.switchTicks /= 2; }
-                const b = profile(room).bandwidth;
+                const b = currentProfile().bandwidth;
                 const units = phase.products.includes(desired) ? 0 : lab.store[desired] || 0;
                 // Transport is already charged by B; D estimates only residual
                 // role preparation. Producer cooldown is not a switch delay.
@@ -196,10 +224,10 @@ function assignments(room, chain, item, state, plan, resolved, labs) {
         if (keep) holds[lab.id] = desired;
         if (use.length) {
             const need = use.reduce((sum, p) => sum + phaseRemaining(state, p), 0);
-            const target = Math.floor(Math.min(3000, need, profile(room).buffer /
+            const target = Math.floor(Math.min(3000, need, currentProfile().buffer /
                 state.desired.filter((r) => r === desired).length));
             const amount = lab.store[desired] || 0;
-            if (amount < Math.min(target, Math.max(5, Math.floor(target * profile(room).refillRatio)))) state.refilling[i] = true;
+            if (amount < Math.min(target, Math.max(5, Math.floor(target * currentProfile().refillRatio)))) state.refilling[i] = true;
             if (amount >= target) state.refilling[i] = false;
             inputs[lab.id] = [desired, target, !!state.refilling[i]];
             if (state.refilling[i] && ((room.storage && room.storage.store[desired] || 0) +
@@ -240,7 +268,7 @@ function assignments(room, chain, item, state, plan, resolved, labs) {
 function tick(room, chain, item) {
     const mem = Memory.rooms[room.name];
     if ((mem.labReaction || (mem.labReactions || []).length) && !mem.labReactionAuto) return false;
-    const resolved = resolve(room);
+    const resolved = cpuMeter.span("labPolicy.resolve", () => resolve(room));
     if (!resolved) {
         reconcile(room, chain, item);
         if (item.run) item.run.wait = { room: "unavailable" };
@@ -248,12 +276,12 @@ function tick(room, chain, item) {
         return false;
     }
     const labs = resolved.built.map((slot) => Game.getObjectById(resolved.ids[slot]));
-    const logistics = profile(room);
+    const logistics = cpuMeter.span("labPolicy.profile", () => profile(room));
     if (!item.run) item.run = { catalogue: policy.dataVersion, refilling: labs.map(() => false), produced: Object.fromEntries(item.order.map((p) => [p, 0])),
         pending: [], phase: 0, round: 0, roles: labs.map((lab) => lab.mineralType || null), switching: labs.map(() => 0), started: Game.time };
     const state = item.run;
     if (!state.refilling) state.refilling = labs.map(() => false);
-    confirm(room, chain, item, state, labs);
+    cpuMeter.span("labPolicy.confirm", () => confirm(room, chain, item, state, labs));
     if (state.uncertain) { clear(room); state.wait = { room: "confirmation-lost" }; return false; }
     const signature = resolved.built.map((slot) => resolved.ids[slot]).join(",");
     if (state.geometry !== signature) {
@@ -269,9 +297,10 @@ function tick(room, chain, item) {
         // Freeze existing mineral buffers while evaluating this snapshot.
         mem.labPolicyHold = Object.fromEntries(labs.filter((lab) => lab.mineralType)
             .map((lab) => [lab.id, lab.mineralType]));
-        if (!state.evalKey || !policy.poll(state.evalKey))
-            state.evalKey = policy.request(item, snapshot(room, chain, item, resolved, state), logistics.allowPipeline);
-        const result = policy.poll(state.evalKey);
+        if (!state.evalKey || !cpuMeter.span("labPolicy.poll", () => policy.poll(state.evalKey)))
+            state.evalKey = cpuMeter.span("labPolicy.request", () =>
+                policy.request(item, snapshot(room, chain, item, resolved, state), logistics.allowPipeline));
+        const result = cpuMeter.span("labPolicy.poll", () => policy.poll(state.evalKey));
         state.evaluation = result.status;
         state.wait = { room: "planning" };
         if (!result.best && !result.expired && result.status === "evaluating") return false;
@@ -283,10 +312,10 @@ function tick(room, chain, item) {
         state.selectedTick = Game.time;
         state.enter = true; state.phase = 0;
     }
-    const plan = policy.planFor(state.planId, item, resolved.built);
+    const plan = cpuMeter.span("labPolicy.plan", () => policy.planFor(state.planId, item, resolved.built));
     if (!plan) { clear(room); state.planId = null; state.evalKey = null; return false; }
     if (state.evalKey) {
-        const evaluation = policy.poll(state.evalKey);
+        const evaluation = cpuMeter.span("labPolicy.poll", () => policy.poll(state.evalKey));
         if (evaluation) {
             state.evaluation = evaluation.status;
             state.betterCandidate = evaluation.best && evaluation.best.id !== state.planId &&
@@ -302,7 +331,7 @@ function tick(room, chain, item) {
         return false;
     }
     if (!item.started) { item.started = true; item.startTick = Game.time; }
-    if (state.enter) { enter(item, state, plan, labs, logistics); state.enter = false; }
+    if (state.enter) { cpuMeter.span("labPolicy.enter", () => enter(item, state, plan, labs, logistics)); state.enter = false; }
     const phase = plan.phases[state.phase];
     if (!state.pending.length && phase.products.every((p) => !phaseRemaining(state, p))) {
         state.phase++;
@@ -319,9 +348,9 @@ function tick(room, chain, item) {
             }
         }
         state.enter = true;
-        enter(item, state, plan, labs, logistics); state.enter = false;
+        cpuMeter.span("labPolicy.enter", () => enter(item, state, plan, labs, logistics)); state.enter = false;
     }
-    assignments(room, chain, item, state, plan, resolved, labs);
+    cpuMeter.span("labPolicy.assignments", () => assignments(room, chain, item, state, plan, resolved, labs));
     return true;
 }
 function reconcile(room, chain, item) {

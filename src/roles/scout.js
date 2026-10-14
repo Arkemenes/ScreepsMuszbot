@@ -278,7 +278,7 @@ var scout = {
                     );
                     return;
                 }
-                routing.moveToRoom(creep, travelRoom, {
+                routing.travelToRoom(creep, travelRoom, {
                     range: 20,
                     reusePath: 30,
                 });
@@ -340,7 +340,7 @@ var scout = {
                     );
                     return;
                 }
-                routing.moveToRoom(creep, layoutRoom, { range: 20, reusePath: 30 });
+                routing.travelToRoom(creep, layoutRoom, { range: 20, reusePath: 30 });
                 return;
             } else {
                 creep.memory.layoutTravelSince = undefined;
@@ -394,7 +394,7 @@ var scout = {
         // wandering/frozen somewhere in the MIDDLE of a room, never at the
         // border, which isFlapping() can't see either (no room-name change
         // to catch). Own key prefix so this never collides with
-        // routing.moveToRoom()'s own use of the same mechanism for the
+        // routing.travelToRoom()'s own use of the same mechanism for the
         // sign/layout tasks above.
         if (routing.isStuck(creep, "_exploreStuck")) {
             if (creep.memory.targetRoom) blacklistRoom(creep.memory.targetRoom);
@@ -418,7 +418,7 @@ var scout = {
             // is reached. Validating terrain for a room that's already
             // adjacent buys nothing and would pay computeRealRoute's cost
             // on every single hop of a scout's endless wandering.
-            const status = routing.moveToRoom(creep, creep.memory.targetRoom, {
+            const status = routing.travelToRoom(creep, creep.memory.targetRoom, {
                 range: 20,
                 reusePath: 20,
                 realRoute: false,
@@ -479,7 +479,7 @@ var scout = {
             creep.memory.targetRoom = targetRoom;
             // ROADMAP 0075 - see the other free-roam moveToRoom() call
             // above for why this one opts out of the new default.
-            const status = routing.moveToRoom(creep, targetRoom, {
+            const status = routing.travelToRoom(creep, targetRoom, {
                 range: 20,
                 reusePath: 20,
                 realRoute: false,

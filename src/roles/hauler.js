@@ -310,7 +310,7 @@ global.resetTerminalLedger = function (roomName) {
 
 let terminalLedgerTick = -1;
 let terminalLedgerSeen = {};
-function terminalWithdrawable(room) {
+function terminalWithdrawable(room, keepFloor, minimum = 0) {
     const terminal = room.terminal;
     if (!terminal) return 0;
 
@@ -357,10 +357,14 @@ function terminalWithdrawable(room) {
     // ledger value, so the ledger's own history stays accurate regardless
     // of what the floor happens to be at any given moment.
     const ledgerWithdrawable = Memory.rooms[room.name].terminalLedger.withdrawable;
+    const current = terminal.store[RESOURCE_ENERGY] || 0;
+    // Fuel protection can only reduce this upper bound. Still update the
+    // ledger above, even when this selection cannot reach its pickup minimum.
+    if (Math.min(ledgerWithdrawable, current) < minimum) return 0;
     const capacity = terminal.store.getCapacity(RESOURCE_ENERGY);
     if (!capacity) return ledgerWithdrawable;
-    const floor = require("../utils/terminalFuel").keep(room);
-    const current = terminal.store[RESOURCE_ENERGY] || 0;
+    const floor = keepFloor === undefined ?
+        cpuMeter.span("hauler.terminalFuel", () => require("../utils/terminalFuel").keep(room)) : keepFloor;
     return Math.max(0, Math.min(ledgerWithdrawable, current - floor));
 }
 
@@ -499,7 +503,7 @@ function pickLoadNow(creep) {
 
     if (creep.room.terminal) {
         const minTerminal = config.get("hauler.minTerminalLoad", 100);
-        const withdrawable = terminalWithdrawable(creep.room);
+        const withdrawable = terminalWithdrawable(creep.room, undefined, minTerminal);
         if (
             withdrawable >= minTerminal &&
             reservations.available(creep, creep.room.terminal) >= 50
@@ -667,13 +671,18 @@ function isSourceDefenseTower(structure) {
 // 50+ energy) drops out so a second hauler doesn't also head there to
 // dump into an already-spoken-for slot.
 function pickDeliver(creep) {
+    return cpuMeter.span("hauler.pickDeliver", () => pickDeliverNow(creep));
+}
+
+function pickDeliverNow(creep) {
     // Production continuity comes before optional defense refill: a hungry
     // spawn/extension must win over a tower sitting below its refill ratio.
-    let target = creep.pos.findClosestByPath(
-        spawnExtNeedingEnergy(creep.room).filter(
-            (s) => reservations.availableDeliver(creep, s) > 0
-        )
+    const productionTargets = spawnExtNeedingEnergy(creep.room).filter(
+        (s) => reservations.availableDeliver(creep, s) > 0
     );
+    // A consumer already in transfer range needs no path selection.
+    let target = productionTargets.find((s) => creep.pos.isNearTo(s));
+    if (!target && productionTargets.length) target = creep.pos.findClosestByPath(productionTargets);
     if (target) return target.id;
 
     target = creep.pos.findClosestByRange(
@@ -1158,12 +1167,16 @@ function chainActive(room) {
 // the first idle hauler finds no job the others - 2-3 a tick - cannot either, and each
 // of them re-ran the whole cascade (0.3 CPU/tick, 2026-10-03). A job found is never
 // reused: it may exclude what an earlier hauler just took, so each one still asks.
-function pickChainFeedJob(room) {
+function pickChainFeedJob(room, checked) {
     if (!chainActive(room)) return null;
     const d = derived(room);
     if (d.noChainJob) return null;
     const job = cpuMeter.span("hauler.chainFeed", () => pickChainFeedJobNow(room));
-    if (!job) d.noChainJob = true;
+    if (!job) {
+        d.noChainJob = true;
+        if (checked) for (const picker of [labPolicyDrainJob, labReagentJob, factoryComponentJob,
+            factoryOutputJob, labOutputJob, transientDrainJob]) checked.add(picker);
+    }
     return job;
 }
 
@@ -1187,16 +1200,21 @@ function pickMineralJob(room) {
 }
 
 function pickMineralJobNow(room) {
+    const checked = new Set();
+    const chainJob = pickChainFeedJob(room, checked);
+    if (chainJob) return chainJob;
+    // Skip only selectors evaluated afresh in this same decision, not an
+    // earlier cached absence whose stock or assignments could have changed.
+    const pick = (picker) => checked.has(picker) ? null : safeMineralJob(picker(room), room);
     return (
-        pickChainFeedJob(room) ||
-        safeMineralJob(stockPolicyJob(room), room) ||
-        safeMineralJob(mineralContainerJob(room), room) ||
-        safeMineralJob(labOutputJob(room), room) ||
-        safeMineralJob(labReagentJob(room), room) ||
-        safeMineralJob(factoryOutputJob(room), room) ||
-        safeMineralJob(factoryComponentJob(room), room) ||
-        safeMineralJob(powerFeedJob(room), room) ||
-        safeMineralJob(transientDrainJob(room), room) ||
+        safeMineralJob(cpuMeter.span("hauler.stockPolicy", () => stockPolicyJob(room)), room) ||
+        pick(mineralContainerJob) ||
+        pick(labOutputJob) ||
+        pick(labReagentJob) ||
+        pick(factoryOutputJob) ||
+        pick(factoryComponentJob) ||
+        pick(powerFeedJob) ||
+        pick(transientDrainJob) ||
         null
     );
 }
@@ -1204,18 +1222,22 @@ function pickMineralJobNow(room) {
 function stockPolicyJob(room) {
     if (!config.get("stockPolicy.enabled", true) || !room.storage || !room.terminal) return null;
     const fuel = require("../utils/terminalFuel");
-    const fuelNeed = fuel.keep(room) - stockPolicy.value(room.terminal, RESOURCE_ENERGY) - fuel.transit(room, true);
+    const forecast = cpuMeter.span("hauler.terminalFuel", () => fuel.budget(room));
+    const fuelNeed = forecast.keep - stockPolicy.value(room.terminal, RESOURCE_ENERGY) - fuel.transit(room, true);
     if (fuelNeed > 0 && stockPolicy.value(room.storage, RESOURCE_ENERGY) > 0)
         return { kind: "stockPolicy", resourceType: RESOURCE_ENERGY, from: room.storage, to: room.terminal, amount: fuelNeed };
+    let roomOps, free;
+    const operations = () => roomOps || (roomOps = terminalOps.activeForRoom(room.name));
     for (const r of Object.keys(room.storage.store)) {
         if (!(room.storage.store[r] > 0) || stockPolicy.used(room, r)) continue;
-        if (terminalOps.activeForRoom(room.name).some((op) => op.resourceType === r && op.haulerName)) continue;
-        if (stockPolicy.terminalFree(room) > 0)
+        if (operations().some((op) => op.resourceType === r && op.haulerName)) continue;
+        if (free === undefined) free = stockPolicy.terminalFree(room, undefined, forecast.keep);
+        if (free > 0)
             return { kind: "stockPolicy", resourceType: r, from: room.storage, to: room.terminal };
     }
     for (const r of Object.keys(stockPolicy.targets(room))) {
-        const excess = r === RESOURCE_ENERGY ? Math.max(0, Math.min(fuel.releasable(room), terminalWithdrawable(room)) - fuel.transit(room, false)) : stockPolicy.value(room.terminal, r);
-        if (excess > 0 && (r === RESOURCE_ENERGY || !terminalOps.activeForRoom(room.name).some((op) => op.resourceType === r)) && room.storage.store.getFreeCapacity(r) > 0)
+        const excess = r === RESOURCE_ENERGY ? Math.max(0, Math.min(fuel.releasable(room, forecast), terminalWithdrawable(room, forecast.keep)) - fuel.transit(room, false)) : stockPolicy.value(room.terminal, r);
+        if (excess > 0 && (r === RESOURCE_ENERGY || !operations().some((op) => op.resourceType === r)) && room.storage.store.getFreeCapacity(r) > 0)
             return { kind: "stockPolicy", resourceType: r, from: room.terminal, to: room.storage, amount: excess };
     }
     return null;
@@ -1279,6 +1301,10 @@ function preserveMineralCargo(creep, resourceType) {
 // creep got there (fail-soft - just means the job is re-picked fresh next
 // time this creep goes idle).
 function runMineralJob(creep) {
+    return cpuMeter.span("hauler.runMineralJob", () => runMineralJobNow(creep));
+}
+
+function runMineralJobNow(creep) {
     const job = creep.memory.mineralJob;
     const resourceType = job.resourceType;
 
@@ -1301,11 +1327,13 @@ function runMineralJob(creep) {
             return;
         }
         const fuel = require("../utils/terminalFuel");
-        if (job.kind === "stockPolicy" && resourceType === RESOURCE_ENERGY && to === creep.room.terminal &&
-            fuel.keep(creep.room) <= stockPolicy.value(to, RESOURCE_ENERGY)) to = creep.room.storage;
+        // Destination and amount belong to one decision; don't repeat its forecast.
+        const terminalEnergyDelivery = job.kind === "stockPolicy" && resourceType === RESOURCE_ENERGY && to === creep.room.terminal;
+        const keep = terminalEnergyDelivery ? fuel.keep(creep.room) : undefined;
+        if (terminalEnergyDelivery && keep <= stockPolicy.value(to, RESOURCE_ENERGY)) to = creep.room.storage;
         const max = config.get("stockPolicy.enabled", true) && to === creep.room.terminal && job.kind !== "stockPolicy" ? stockPolicy.terminalFree(creep.room) : to.store.getFreeCapacity(resourceType);
         const amount = Math.min(creep.store[resourceType], max,
-            job.kind === "stockPolicy" && resourceType === RESOURCE_ENERGY && to === creep.room.terminal ? Math.max(0, fuel.keep(creep.room) - stockPolicy.value(to, RESOURCE_ENERGY)) : Infinity,
+            terminalEnergyDelivery && to === creep.room.terminal ? Math.max(0, keep - stockPolicy.value(to, RESOURCE_ENERGY)) : Infinity,
             to.structureType === STRUCTURE_LAB ? policyLimit : Infinity);
         const status = creep.transfer(to, resourceType, amount);
         if (status === OK && job.policy && to.structureType === STRUCTURE_LAB) labReactions.recordDelivery(to.id, amount);
@@ -1367,8 +1395,8 @@ var hauler = {
         // legacy: fold pre-consolidation harvesters into this role
         if (creep.memory.role === "harvester") creep.memory.role = "hauler";
 
-        if (takeCover(creep)) return;
-        if (terminalOps.runHauler(creep)) return;
+        if (cpuMeter.span("hauler.cover", () => takeCover(creep))) return;
+        if (cpuMeter.span("hauler.terminalJob", () => terminalOps.runHauler(creep))) return;
 
         // ROADMAP 0107 (user request): an in-progress battlefield loot trip
         // always runs to completion - grab everything the body's still
@@ -1570,6 +1598,7 @@ var hauler = {
     },
 
     // exposed for the offline smoke test only
+    stockPolicyJob,
     pickMineralJob,
     pickLoad,
     pickChainFeedJob,

@@ -6,7 +6,7 @@ const data = require("./labPolicyData");
 const labSlots = require("./labSlots");
 const jobs = new Map(), planCache = new Map(), index = new Map();
 const widePhaseCache = new Map();
-let recipeSource, recipes, budgetTick = -1, used = 0, cpuStart = 0;
+let recipeSource, recipeSignature, recipes, budgetTick = -1, used = 0, cpuStart = 0;
 data.rows.forEach((row) => {
     const key = row[0] + ":" + row[1];
     if (!index.has(key)) index.set(key, []);
@@ -17,16 +17,26 @@ function enabled() {
         ["auto", "policy"].includes(config.get("craft.labStrategy", "auto"));
 }
 function recipeMap() {
-    if (recipeSource === REACTIONS && recipes) {
-        Object.keys(recipes).forEach((p) => { recipes[p].cooldown = REACTION_TIME[p] || 1; });
-        return recipes;
+    const source = REACTIONS;
+    if (recipeSource !== source || !recipes) {
+        // The engine clones constants every tick. Identity changes alone must
+        // not discard immutable geometry and force every fallback to rebuild.
+        const rows = [];
+        Object.keys(source).sort().forEach((a) => Object.keys(source[a]).sort().forEach((b) => {
+            rows.push([a, b, source[a][b]]);
+        }));
+        const signature = JSON.stringify(rows);
+        if (signature !== recipeSignature || !recipes) {
+            recipes = {};
+            planCache.clear(); widePhaseCache.clear();
+            rows.forEach(([a, b, p]) => {
+                if (!recipes[p]) recipes[p] = { inputs: [a, b], cooldown: REACTION_TIME[p] || 1 };
+            });
+            recipeSignature = signature;
+        }
+        recipeSource = source;
     }
-    recipeSource = REACTIONS; recipes = {};
-    planCache.clear(); widePhaseCache.clear();
-    Object.keys(REACTIONS).sort().forEach((a) => Object.keys(REACTIONS[a]).sort().forEach((b) => {
-        const p = REACTIONS[a][b];
-        if (!recipes[p]) recipes[p] = { inputs: [a, b], cooldown: REACTION_TIME[p] || 1 };
-    }));
+    Object.keys(recipes).forEach((p) => { recipes[p].cooldown = REACTION_TIME[p] || 1; });
     return recipes;
 }
 function descriptor(steps) {
@@ -156,7 +166,7 @@ function poll(key) {
     const budget = config.get("craft.policyWorkPerTick", 1000);
     if (!Game.cpu || Game.cpu.bucket >= config.get("craft.minBucket", 500)) {
         while (job.status === "evaluating" && used < budget) {
-            if (used % 10 === 0 && Game.cpu && Game.cpu.getUsed &&
+            if (Game.cpu && Game.cpu.getUsed &&
                 Game.cpu.getUsed() - cpuStart >= config.get("craft.policyCpuPerTick", 1)) break;
             const active = job.entries.filter((e) => e.generator);
             if (!active.length) { job.status = job.best ? "complete" : "fallback"; break; }

@@ -37,6 +37,40 @@ profiler só carrega quando `Memory.settings.profiler` está setado.
 
 ### Atribuição de CPU de movimento (0113 / ARK-116)
 
+Todos os roles que fazem trânsito por salas usam `routing.travelToRoom`:
+pioneer, raider, scout, remoteMiner, remoteHauler, reserver e trânsito
+independente do squad. A API normaliza a política e delega a única máquina
+`moveToRoom`. Default `routing.crossRoomMode=incremental` resolve somente
+próximo hop (2salas/hopMaxOps), sem realSearch. Missão claim passa
+`realRoute:true` para preservar validação antecipada/Keepers. `allowRoom`
+dinâmico dos remotes continua vivo, sem cache de grafo.
+
+`routing.crossRoomReusePathTicks=1500` permite reaproveitar a travessia
+durante fadiga; destino/sala/desvio do path e stall continuam invalidando.
+Cache incremental verifica somente salas escolhidas: mudança numa
+alternativa descartada afeta preferência após TTL50, segurança das salas
+escolhidas é revalidada imediatamente. API legada `moveToRoom` mantém sua
+semântica para integrações; formação tática do squad conserva coordenadas
+exatas/range0 e não usa alvo de centro da navegação.
+
+Pioneers expõem `pioneer.pickLoad` para seleção da fonte em casa e
+`pioneer.travel` para o fluxo completo de viagem. Este inclui os spans
+de routing e movimento; não somar pai e filhos.
+
+`routing.graphRoute` cobre a escolha do grafo inclusive revalidação do
+cache; `routing.graphSearch` mede só a busca do engine. `routing.clearance`
+mede próximo passo e liberação entre creeps. Ambos permitem atribuir custo
+de viagem que antes ficava fora dos spans de busca/moveTo.
+
+No cache de grafo de viagens allowUnplannedHop sem allowRoom dinâmico,
+snapshots escalares validam as entradas de política de todas as salas
+observadas. A chave inclui aliados/usuário e os bloqueios já existentes;
+mudanças de intel/controller e vencimento de dead end invalidam o reuso.
+Source Keepers mantém callbacks completos com observação viva. Planejamento
+completo desses travelers respeita o menor de limit/tickLimit; falta de
+orçamento de planejamento ou slot ocupado não para o hop limitado quando
+há headroom real. Callers sem essa permissão mantêm os gates anteriores.
+
 Correção de CPU (0127/0124, 2026-10-13): fallback `wide-live` usa caches
 limitados de planos/fases no heap, com invalidação por receita e chaves de
 slots/produtos/janela. Membership de alvos consulta um recurso diretamente;
@@ -214,6 +248,36 @@ terminalOps walks an `activeIds()` index instead of every stored operation
 collection, when `nextId` changes or every 50 ticks. `global.cpuTop(n)`
 (main.js) reports CPU per `guard()`ed subsystem plus `terminalOps.perf`
 phases and per kind:state.
+
+Diagnóstico ARK-116 (13/10): spans fixos `craft.chain.*`, `craft.startItem`,
+`craft.partialSales`, `craft.strandedSweep` e `labPolicy.*` separam estados,
+seleção de planos e execução dos labs. `hauler.stockPolicy` e
+`hauler.terminalFuel` isolam decisões de estoque e combustível. Todos são
+inclusivos e usam o medidor existente; não alteram produção nem scans.
+
+Na fronteira de publicação, cpuTop mostra o último snapshot fechado quando
+a janela corrente está vazia, identificando seu tick. Fases/estados de
+terminalOps alimentam spans do mesmo cpuMeter; o acumulador legado perf
+não é dividido pelos ticks de outra janela na tabela.
+
+`labPolicy.recipeMap` compara conteúdo canônico de REACTIONS quando a
+referência muda: constantes recriadas pelo engine preservam geometria;
+mudanças reais de receita invalidam planos/fases. Cooldowns ficam vivos.
+
+`terminalFuel.budget` é local a uma decisão síncrona: stockPolicyJob
+compartilha previsão com capacidade, histerese e retirada. Lista de operações
+e capacidade são consultadas uma vez por seleção, sem cache entre haulers;
+as próximas seleções continuam observando reservas/estoque do mesmo tick.
+
+`labSlots.planPhases` mantém geometria no heap (`craft.phaseCacheEntries`),
+por árvore/slots/paralelismo. Quantidade/cooldown/estratégia recalculam T e
+escolha a cada consulta; cópias isolam consumidores. `craft.phasePlan` e
+`craft.evaluate` separam o custo geométrico do econômico no scan.
+
+`labPolicy.poll` verifica orçamento antes de cada avanço do generator.
+`labPlanModel.layoutFor` usa contagem de eventos/busca binária para horários
+inteiros, mantendo ranking; timing fracionário segue referência. Preparação
+e simulação do preflight são spans craft.policyRequest/craft.policyPoll.
 
 **CPU meter (ROADMAP 0113, `utils/cpuMeter.js`).** One meter, three
 granularities over a `{cpu, calls, max}` record per key: L0 `modules` (the
@@ -738,6 +802,19 @@ O guard `market` roda antes dos consumidores de mercado. `market.historyReady()`
 
 `terminalOps` mantém a API anterior e aceita options com `effectiveLimit` e `policy:"swing"`. Antes de deal/listagem, revalida preço, frete, crédito, reservas e capacidade; confirms e receipts mantêm contabilidade parcial. Ordens swing cobram 5% na criação, preservam preço e expiram em 1209600 ticks. `Memory.swing.noRelist` retém saldo por sala/recurso após expiração; vendas imediatas continuam permitidas. Ordens existentes sem operação gerenciada também reservam saldo. A chamada em main passa por `guard` e shedding.
 
+Ordens cujo preço bruto já viola a margem são rejeitadas antes do cálculo
+de quantidade e frete, tanto na compra quanto na venda. Candidatos restantes
+mantêm a avaliação pelo preço efetivo e ganho líquido de energia.
+
+Na cotação de compra, o déficit é consultado uma vez por seleção. Recursos
+diferentes de energia usam diretamente o déficit inteiro como teto; só o
+frete da quantidade final é calculado por ordem. Energia mantém busca
+binária pelo ganho líquido. Nenhum déficit é reutilizado entre cotações.
+
+Fretes idênticos por destino/quantidade usam um Map local à cotação, com
+origem fixa. A busca de ganho líquido de energia continua exata. Outra
+cotação, inclusive no mesmo tick, começa sem esse cache.
+
 `marketHistoryFlush()` persiste as temporalSnapshots já hidratadas em `utils/market`, permitindo migração imediata sem esperar a próxima coleta. Não consulta o orderBook nem altera o período de amostragem; bloqueia gravação antes da mesclagem do histórico persistido.
 
 O coletor de market possui gate próprio `market.minBucket=500`, independente do shedding geral. `main` sempre chama scan via guard; abaixo do piso ele retorna sem coleta. Amostras históricas vencidas bypassam a cadência atual do book ao recuperar o bucket. O histórico persiste `scheduledTick` opcional junto ao tick real; essa âncora mantém os próximos vencimentos no horário original inclusive após reset. Múltiplos slots perdidos são coalescidos em uma observação real, sem preenchimento artificial.
@@ -759,3 +836,53 @@ utils/nativePath centraliza a leitura do próximo passo de _move.path: primeiro 
 Invader Core isolado não exclui sala do trânsito; routingStructureMatrix bloqueia somente seu tile. O filtro de creeps hostis e proprietário continua ativo (ARK-112).
 
 utils/keeperTransit mantém geometria de lairs/recursos e máscaras no heap, classifica keepers versus outros hostis e solicita visão pela fila existente de observer. rooms/intel atualiza o cache com roomCache/getHostiles. Apenas claim ativa a opção em roles/reserver; utils/routing aplica a máscara em planejamento, execução, fallback e recuo, preservando bans. Versão escalar revalida rota após nova informação/expiração; movimento do keeper não dispara busca completa. Próximo passo perigoso é invalidado e escape aparece como evading_keeper em claimStatus. Configuração em Memory.settings.claim; sem novo gate de spawn.
+### Fallback de viagem limitado ao próximo hop (0064 / ARK-116)
+
+Sem rota validada, fluxo padrão de `routing.moveToRoom` usa `findRoute`
+apenas para escolher a próxima sala; a busca nativa limita maxRooms a2 e
+hopMaxOps. Goal centro/range24 admite qualquer entrada conectada. Mantém
+validação completa em backoff, recuo e opt-out realRoute:false. Perfil e
+limitações em `docs/cpu-regression-2026-10-13.md`; ganho live pendente.
+Pioneers optam por `allowUnplannedHop` em ida/retorno: bucket baixo mantém
+busca completa adiada, mas libera apenas travessia limitada com folga no
+tick. Claimer e demais callers preservam exigência anterior de planejamento.
+Nas viagens com `allowUnplannedHop`, fadiga retorna ERR_TIRED antes de
+calcular a rota de salas ou alterar os contadores de recuperação. O primeiro
+tick sem fadiga revalida trânsito normalmente. `routing.graphSearch` mede
+Game.map.findRoute separadamente de realSearch e movimento nativo.
+findRoute de viagens allowUnplannedHop usa cache no heap (TTL50/limite128,
+configuráveis). Chave inclui origem/destino/avoid/políticas/penalties;
+custos de todas as salas consultadas e retornadas são revalidados antes
+do reuso. Falhas e callbacks allowRoom dinâmicos não entram no cache.
+Medição do hauler cobre também segurança (`hauler.cover`), execução do
+terminal job, execução do mineral job e escolha da entrega. Spans são
+inclusivos, sem alterar ordem de prioridades ou intenções.
+Seleção de entrega do hauler mantém produção como primeira faixa: alvo
+elegível já adjacente evita a busca de caminho; lista vazia também. Alvos
+distantes conservam findClosestByPath antes das faixas de torre/storage.
+Execução do mineral job stockPolicy de energia ao terminal compartilha a
+previsão de reserva entre decisão de destino e limite de transferência;
+execuções seguintes sempre recalculam para observar mudanças no mesmo tick.
+Seleção de ordens do terminal compartilha frete dentro da chamada por
+destino/quantidade, com origem fixa da operação; nenhum cache de preço ou
+volume entre seleções. orderBook/scoreOrders medem consulta e avaliação.
+orderBook.matching(type,resourceType) compartilha livro filtrado somente no
+tick, ou reutiliza a cópia completa existente. Swing.quote usa matching;
+mercado/flip preservam all. Reset/fonte/tick invalidam as duas visões.
+LabPolicyRuntime.resolve mantém cache de isActive no heap por assinatura
+de controlador/topologia/dono/métodos, com limite64 configurável. RCL e lab
+ausente invalidam; boost reservations e labLoad são filtrados ao vivo.
+Sem contexto completo de controlador próprio, mantém verificações diretas.
+Assignments compartilha profile de forma lazy apenas dentro da execução,
+para bandwidth/buffer/refillRatio; próxima execução recalcula. Estoques,
+cooldowns e decisões de produção não entram nesse cache local.
+resourcePolicy.consumerAvailable usa saldo físico menos withdrawals como
+limite superior antes de varrer reservas, retornando zero para fontes
+storage/terminal esgotadas. Saldo positivo mantém todas as proteções ao vivo.
+Seleção mineral mantém Set local de seletores negativos avaliados afresh
+pela busca da cadeia, evitando repeti-los no fallback da mesma decisão.
+Ausência cacheada de chamada anterior não é reutilizada nesse Set.
+marketHistoryStore.save confere a união de segmentos presentes e páginas
+da geração antes de escrever. Em segment-write-budget adia sem payload
+parcial e prioriza writeSegments na ativação; market.scan retenta com
+historyDirty antes da cadência. Sucesso/reset limpam prioridade temporária.

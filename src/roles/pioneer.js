@@ -12,6 +12,7 @@ const names = require("../utils/names");
 const bootstrap = require("./bootstrap");
 const { silenceAttackAlerts } = require("../utils/combat");
 const energyLedger = require("../utils/energyLedger");
+const cpuMeter = require("../utils/cpuMeter");
 
 // Closest source in the target room that still has energy to give.
 function nearestMinableSource(creep) {
@@ -102,9 +103,9 @@ const pioneer = {
             creep.room.name === home &&
             creep.store.getFreeCapacity(RESOURCE_ENERGY) > 0
         ) {
-            const pile = creep.pos.findClosestByPath(
+            const pile = cpuMeter.span("pioneer.pickLoad", () => creep.pos.findClosestByPath(
                 reservations.usable(creep, energyPiles(creep.room))
-            );
+            ));
             if (pile) {
                 reservations.claim(creep, pile.id);
                 if (creep.pos.isNearTo(pile)) {
@@ -130,13 +131,13 @@ const pioneer = {
             if (creep.room.name === home) {
                 delete creep.memory.returning;
             } else {
-                routing.moveToRoom(creep, home, { range: 20, reusePath: 20 });
+                cpuMeter.span("pioneer.travel", () => routing.travelToRoom(creep, home, { range: 20 }));
                 return;
             }
         }
 
         if (creep.room.name !== targetRoomName) {
-            routing.moveToRoom(creep, targetRoomName, { range: 20, reusePath: 20 });
+            cpuMeter.span("pioneer.travel", () => routing.travelToRoom(creep, targetRoomName, { range: 20 }));
             return;
         }
 
@@ -178,7 +179,7 @@ const pioneer = {
                 return;
             }
             creep.memory.returning = true;
-            routing.moveToRoom(creep, home, { range: 20, reusePath: 20, realRoute: true });
+            cpuMeter.span("pioneer.travel", () => routing.travelToRoom(creep, home, { range: 20 }));
             return;
         }
 

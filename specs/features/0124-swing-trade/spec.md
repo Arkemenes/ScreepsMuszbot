@@ -81,4 +81,56 @@ Compras de reposição `policy: swing` podem coexistir com operações do mesmo 
 
 ### Reserva dinâmica de combustível
 
+### CPU — reutilização local da previsão (ARK-116, 2026-10-13)
+
+`terminalFuel.releasable` usa uma única previsão para `keep` e `reserve`.
+Uma seleção síncrona de `stockPolicyJob` compartilha essa mesma previsão
+com a histerese e o ledger de retirada do terminal. O contexto nasce por
+seleção, sem cache entre haulers, ticks ou chamadas: mudanças de estoque,
+operações e configuração continuam visíveis na próxima consulta, inclusive
+no mesmo tick. Modo desativado mantém o piso legado por capacidade.
+Não alterar prioridades, reservas quantitativas, ledger ou intents.
+Smoke verifica uma previsão por decisão, reserva/histerese e atualização
+após alteração de saldo no mesmo tick; ganho live permanece a medir.
+
+Na mesma seleção, listar operações da sala e calcular capacidade livre
+do terminal no máximo uma vez, somente se necessários. Compartilhar o piso
+de combustível já calculado com terminalFree. A seleção seguinte reconsulta
+estoque/operações/capacidade; reservas e alterações entre haulers ficam vivas.
+
 Substituir o piso padrão de 30k por frete das próximas duas transações elegíveis +20% de margem, configuráveis. Quotes recentes e transferências ainda não enviadas alimentam a previsão; ordens próprias aguardando comprador não geram frete. Energia já carregada para operações fica protegida separadamente, sem dupla contagem. Sem previsão, a reserva preventiva vai a zero. Storage abaixo de 10% do alvo de uso remove margem preventiva e adia vendas swing cujo frete exceda 10% da energia local disponível. Compra de energia ganha prioridade. Histerese de devolução (25% da reserva prevista) evita oscilações; excesso ocioso retorna ao storage mesmo com outras operações pendentes, preservando cargas/haulers.
+## Elegibilidade da coleta de energia — ARK-116 (2026-10-13)
+
+A coleta do hauler mantém atualização do ledger, mas evita prever combustível
+quando nem o saldo liberado antes da proteção alcança o mínimo de coleta.
+Pisos continuam frescos quando a coleta pode qualificar; consumidores de
+estoque mantêm o comportamento anterior. Smoke cobre depósitos manuais,
+crédito de entrada e alterações no mesmo tick. Ganho live pendente.
+# ARK-116: livro filtrado para cotação de um recurso (2026-10-13)
+
+Cálculos de frete idênticos (origem da cotação, destino e quantidade)
+são reutilizados somente dentro de quote. Busca de ganho líquido continua
+exata; destinos/quantidades distintos não compartilham resultados e a
+cotação seguinte, inclusive no mesmo tick, começa sem cache de frete.
+
+A cotação rejeita preço bruto de compra >= teto ou venda <= piso antes
+de buscar quantidade/frete. O frete só piora essas margens; candidatos que
+passam continuam avaliados pelo preço efetivo, incluindo ganho líquido
+de energia. Smoke cobre 100 ordens rejeitadas de cada lado e seleção mista.
+
+Compras de recursos diferentes de energia limitam a quantidade diretamente
+ao déficit inteiro, sem busca binária de frete: o frete não reduz a quantidade
+recebida desses recursos. Calcular o déficit uma vez por seleção e o frete
+final uma vez por ordem elegível. Energia preserva a busca pelo ganho líquido.
+Nova cotação reconsulta o déficit, inclusive no mesmo tick. Smoke verifica
+100 ordens, déficit fracionário, alvo satisfeito e atualização do alvo.
+
+Pós13min: gráficos15min terminal operations1,69, sell:atTerminal0,976;
+trecho19ticks mostra scoredOrders0,009 e orderBook0,212, mas sell1,621.
+Cotação swing usa book.all, fora desses spans, embora avalie um recurso
+e lado por chamada. Usar book.matching(type,resourceType) com consulta
+filtrada se não houver livro completo no tick, ou filtro da cópia completa
+já carregada. Compartilhar somente no tick (inclusive failures), invalidar
+por tick/fonte e reset; opções orders explícitas mantêm precedência. Não
+alterar referências, margens, reservas, quantidades ou prioridade. Mercado
+e flip mantêm all; nenhuma nova cadência ou cache entre ticks.

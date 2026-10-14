@@ -30,6 +30,27 @@ module.exports = function (project, assert) {
         assert(Object.keys(persisted).length > 1 && Object.values(persisted).every((raw) => raw.length <= 95000),
             "market history: pages respect the segment size limit without dropping rows");
 
+        // Loaded root/plans plus newly written history pages share the same save limit.
+        RawMemory.segments={9:persisted[9]};
+        for(let i=0;i<7;i++) RawMemory.segments[10+i]="plan-"+i;
+        const beforeBudget=JSON.stringify(RawMemory.segments);
+        assert(!store.save(history) && store.status().error==="segment-write-budget" &&
+            JSON.stringify(RawMemory.segments)===beforeBudget,
+            "ARK-116: history exceeding the shared ten-segment budget is deferred without partial writes");
+        const pendingWrites=store.activeSegmentIds();
+        assert(pendingWrites.length===Object.keys(persisted).length && pendingWrites.includes(9) && pendingWrites.includes(0),
+            "ARK-116: deferred history requests all pages needed for the next atomic save");
+        RawMemory.segments={};
+        pendingWrites.forEach(id=>{RawMemory.segments[id]=persisted[id];});
+        for(let i=0;Object.keys(RawMemory.segments).length<10;i++) RawMemory.segments[10+i]="plan-"+i;
+        Game.time++;
+        assert(store.save(history) && Object.keys(RawMemory.segments).length===10 &&
+            !store.status().error && store.activeSegmentIds().length===1,
+            "ARK-116: activated history pages allow a complete bounded save and release the temporary priority");
+        store.resetCache();RawMemory.segments=Object.assign({},persisted);
+        assert(store.load() && sameHistory(store.history(),history),
+            "ARK-116: deferred save does not remove original samples or alter preserved city segments");
+
         // Only requested segments become readable on the following tick.
         store.resetCache(); RawMemory.segments = {9: persisted[9]};
         assert(!store.load(), "market history: an unread page delays hydration instead of accepting partial history");
@@ -84,6 +105,28 @@ module.exports = function (project, assert) {
         store.resetCache(); store.load();
         assert(store.history().resource0.length === 169 && store.history().resource0[168].tick === Game.time - 1,
             "market history: a reset after hydration preserves the newly collected sample with its actual tick");
+        const beforeDeferred=Object.assign({},RawMemory.segments), savedCount=collector.samples("resource0").length;
+        RawMemory.segments={9:beforeDeferred[9]};
+        for(let i=0;i<7;i++) RawMemory.segments[10+i]="plan-"+i;
+        const unchangedRoot=RawMemory.segments[9];
+        Memory.settings.market.snapshotInterval=1;Game.time++;const deferredSampleTick=Game.time;
+        collector.scan();
+        assert(collector.samples("resource0").length===savedCount+1 && RawMemory.segments[9]===unchangedRoot &&
+            store.status().error==="segment-write-budget" && Object.keys(RawMemory.segments).length===8,
+            "ARK-116: real market collection keeps a budget-deferred sample without publishing a partial generation");
+        require(planPath).activate();
+        assert(activated.length<=10 && store.status().writeSegments.every(id=>activated.includes(id)),
+            "ARK-116: plan activation prioritizes every deferred history page within the shared limit");
+        RawMemory.segments={};
+        activated.forEach(id=>{RawMemory.segments[id]=id<10?beforeDeferred[id]:"plan-"+(id-10);});
+        Memory.settings.market.snapshotInterval=3600;Game.time++;collector.scan();
+        assert(!store.status().error && Object.keys(RawMemory.segments).length<=10 &&
+            collector.samples("resource0").length===savedCount+1,
+            "ARK-116: collector retries a deferred save before cadence without collecting another sample");
+        store.resetCache();store.load();
+        assert(store.history().resource0.length===savedCount+1 &&
+            store.history().resource0[savedCount].tick===deferredSampleTick,
+            "ARK-116: completed deferred generation survives history reset with the original sample tick");
         RawMemory.segments = Object.assign({}, persisted); store.resetCache(); store.load();
 
         const oversized = {};

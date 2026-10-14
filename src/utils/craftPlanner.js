@@ -145,7 +145,8 @@ function phasePlan(product, steps, built) {
     const key = product + "|" + built.join(",") + "|" + steps.map((s) => s.product + ":" + s.batches).join(",");
     if (!(key in phaseMemo)) {
         const tree = labSlots.treeFromSteps(product, steps, marketPricing.recipeOf);
-        phaseMemo[key] = tree ? labSlots.planPhases(tree, built, { work: labSlots.workFromSteps(steps, marketPricing.recipeOf) }) : null;
+        phaseMemo[key] = tree ? cpuMeter.span("craft.phasePlan", () =>
+            labSlots.planPhases(tree, built, { work: labSlots.workFromSteps(steps, marketPricing.recipeOf) })) : null;
     }
     return phaseMemo[key];
 }
@@ -168,8 +169,8 @@ function buildContext(room, snapshot) {
             // Preflight purchases will supply raw deficits before execution.
             scenario.stock[r] = Math.max(scenario.stock[r] || 0, needs[r] - (item.targets[r] || 0) - inLabs, 0);
         });
-        const job = labPolicy.request(item, scenario, scenario.allowPipeline);
-        const result = labPolicy.poll(job);
+        const job = cpuMeter.span("craft.policyRequest", () => labPolicy.request(item, scenario, scenario.allowPipeline));
+        const result = cpuMeter.span("craft.policyPoll", () => labPolicy.poll(job));
         return estimates[key] = result && result.best ? result.best : null;
     }
     return {
@@ -277,7 +278,7 @@ function sizeLot(product, recipe, ctx, credits) {
     const passes = config.get("craft.sizePasses", 12);
     const halve = () => Math.floor(qty / 2 / recipe.amount) * recipe.amount;
     for (let pass = 0; pass < passes && qty >= recipe.amount; pass++) {
-        const verdict = last = marketPricing.evaluate(product, qty, ctx);
+        const verdict = last = cpuMeter.span("craft.evaluate", () => marketPricing.evaluate(product, qty, ctx));
         if (verdict.cash === undefined) {
             const depth = verdict.reason === "sell-depth" || (verdict.reason === "no-plan" && /:liq-depth$/.test(verdict.detail || ""));
             if (!depth) return { verdict };

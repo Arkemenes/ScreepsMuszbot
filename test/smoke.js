@@ -1241,9 +1241,20 @@ const hlb = makeCreep("Hlb1", "hauler", {
     store: Object.assign(store(200, 200), { getFreeCapacity: () => 0 }),
 });
 hlb.memory.job = "deliver";
+const haulerPhaseMeter = require(path.join(PROJECT, "src/utils/cpuMeter"));
+const savedHaulerPhaseSpan = haulerPhaseMeter.span;
+const haulerPhases = [];
+haulerPhaseMeter.span = (key, fn) => {
+    haulerPhases.push(key);
+    return savedHaulerPhaseSpan(key, fn);
+};
 try { hauler.run(hlb); } catch (e) { hThrew = e; }
+finally { haulerPhaseMeter.span = savedHaulerPhaseSpan; }
 assert(!hThrew, "hauler.run (full) does not throw" +
     (hThrew ? "\n      " + (hThrew.stack || hThrew) : ""));
+assert(["hauler.cover", "hauler.terminalJob", "hauler.pickDeliver"].every(
+    (key) => haulerPhases.filter((phase) => phase === key).length === 1),
+    "ARK-116: full hauler preserves its delivery flow while measuring cover, terminal and delivery once");
 
 // partial load + nothing left to pick up -> must go deliver, not idle
 const storageStruct = Object.assign(new Structure(), {
@@ -1396,9 +1407,23 @@ assert(hlTowerBaseline._to === "tower1",
     const hSpawnPriority = makeCreep("HSpawnPriority", "hauler", { store: store(200, 200) });
     hSpawnPriority.transfer = (t) => { hSpawnPriority._to = t && t.id; return OK; };
     hSpawnPriority.memory.job = "deliver";
+    hSpawnPriority.pos = new RoomPosition(spawn.pos.x + 1, spawn.pos.y, spawn.pos.roomName);
+    let spawnPriorityPathCalls = 0;
+    hSpawnPriority.pos.findClosestByPath = () => { spawnPriorityPathCalls++; return spawn; };
     hauler.run(hSpawnPriority);
     assert(hSpawnPriority._to === "spawn1",
         "hauler prioritizes an empty spawn over a tower at 497/1000 (0091)");
+    assert(spawnPriorityPathCalls === 0,
+        "ARK-116: an adjacent eligible spawn receives delivery without a target-selection path search");
+    Game.time++;
+    const hFarSpawnPriority = makeCreep("HFarSpawnPriority", "hauler", { store: store(200, 200) });
+    hFarSpawnPriority.pos = new RoomPosition(spawn.pos.x + 5, spawn.pos.y, spawn.pos.roomName);
+    hFarSpawnPriority.pos.findClosestByPath = () => { spawnPriorityPathCalls++; return spawn; };
+    hFarSpawnPriority.transfer = (t) => { hFarSpawnPriority._to = t && t.id; return OK; };
+    hFarSpawnPriority.memory.job = "deliver";
+    hauler.run(hFarSpawnPriority);
+    assert(hFarSpawnPriority._to === "spawn1" && spawnPriorityPathCalls === 1,
+        "ARK-116: a distant production target still uses path-based selection before tower refill");
     spawn.store = savedSpawnStoreHaulerPriority;
     tower.store = savedTowerStoreHaulerPriority;
 }
@@ -6901,14 +6926,10 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
             moveTo: (pos, o) => { seenMaxOps = o.maxOps; seenMaxRooms = o.maxRooms; return OK; },
         };
         routing.moveToRoom(opsCreep, "W9N9", { range: 20 }); // realRoute defaults on now
-        assert(seenMaxOps === 200000,
-            "by default now, moveToRoom()'s main routed moveTo() call gets " +
-                "routing.moveMaxOps, not the engine's silent 2000 default");
-        assert(seenMaxRooms === 64,
-            "by default now, moveToRoom()'s main routed moveTo() call gets " +
-                "routing.moveMaxRooms, not the engine's silent 16 default - a validated route " +
-                "longer than 16 hops (confirmed live) could never complete otherwise, no matter " +
-                "how many ops it's allowed");
+        assert(seenMaxOps === require(path.join(PROJECT, "src/utils/config")).get("routing.hopMaxOps", 20000),
+            "ARK-116: failed validation uses the configured hop budget rather than the full-trip override");
+        assert(seenMaxRooms === 2,
+            "ARK-116: failed validation limits native fallback to the current room and next hop");
 
         let seenMaxOps2 = "untouched", seenMaxRooms2 = "untouched";
         const noOpsCreep = {
@@ -7399,7 +7420,16 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
                 memory: {},
                 moveTo: () => "moved",
             };
-            const result = routing.moveToRoom(failedCreep, "W9N9", { range: 20, realRoute: true });
+            const meter = require(path.join(PROJECT, "src/utils/cpuMeter"));
+            const originalSpan = meter.span, measured = [];
+            let result;
+            meter.span = (key, fn) => { measured.push(key); return originalSpan(key, fn); };
+            try {
+                result = routing.moveToRoom(failedCreep, "W9N9", { range: 20, realRoute: true });
+            } finally { meter.span = originalSpan; }
+            assert(measured.filter((key) => key === "routing.moveFallback").length === 1 &&
+                !measured.includes("routing.movePlanned"),
+                "ARK-116: failed route validation attributes native fallback movement without changing its return");
             assert(result === "moved" && !failedCreep.memory._realRoute,
                 "a failed real-route precompute falls back to normal findRoute-based routing " +
                     "instead of blocking the trip");
@@ -9033,6 +9063,17 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
     pioneerMod.run(pc.creep);
     assert(pc.movedTo() && pc.movedTo().t.roomName === targetRoomName,
         "a full pioneer leaves the home room and heads for the target room");
+    const pioneerTripBucket = Game.cpu.bucket;
+    try {
+        Game.time++; Game.cpu.bucket = 667;
+        pc = mkPioneerCreep({
+            room: mkRoom(homeRoomName), pos: new RoomPosition(25, 25, homeRoomName),
+            targetRoom: targetRoomName, home: homeRoomName, energy: 100,
+        });
+        pioneerMod.run(pc.creep);
+        assert(pc.movedTo() && pc.movedTo().t.roomName === targetRoomName && pc.movedTo().o.maxRooms === 2,
+            "ARK-116: the pioneer role opts into bounded outbound travel at bucket667");
+    } finally { Game.cpu.bucket = pioneerTripBucket; }
 
     const targetNoSpawn = mkRoom(targetRoomName, {});
     Game.time++;
@@ -9968,7 +10009,18 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
     Object.keys(Game.creeps).forEach((n) => { roleNames[Game.creeps[n].memory.role] = true; });
     // the window closes in cpuMeter.endTick() of the 3rd tick, after stats() already ran: the
     // 4th tick's stats() is the first to carry it (one tick of publication latency)
-    for (let i = 0; i < 4; i++) { Game.time++; mainWire.loop(); }
+    for (let i = 0; i < 3; i++) { Game.time++; mainWire.loop(); }
+    const topLogs = [], originalTopLog = console.log;
+    const terminalPerf = require(path.join(PROJECT, "src/utils/terminalOps")).perf;
+    terminalPerf["legacy-probe"] = 99999;
+    console.log = (line) => topLogs.push(String(line));
+    try { global.cpuTop(50); }
+    finally { console.log = originalTopLog; delete terminalPerf["legacy-probe"]; }
+    assert(topLogs.some((line) => line.includes("[cpuTop] 3 ticks") && line.includes("closed window")) && wireMeter.live().ticks === 0,
+        "ARK-116: cpuTop at the publication boundary shows the closed window without changing the accumulator");
+    assert(!topLogs.some((line) => line.includes("legacy-probe")),
+        "ARK-116: cpuTop never divides legacy terminal totals by another window's ticks");
+    Game.time++; mainWire.loop();
     const wired = Memory.stats && Memory.stats.cpu && Memory.stats.cpu.meter;
     assert(wired && wired.window === 3 && wired.modules.stats && wired.modules.creep && wired.modules.structure,
         "0113: the main loop feeds the modules and stats publishes the closed window in Memory.stats.cpu.meter (got " + JSON.stringify(wired && Object.keys(wired)) + ")");

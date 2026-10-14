@@ -20,6 +20,7 @@
 // price risk. Non-consumption product goes to the terminal (storage overflow is
 // allowed) and a sell op at the break-even floor reserves the committed output.
 const config = require("./config");
+const cpuMeter = require("./cpuMeter");
 const roomCache = require("./roomCache");
 const market = require("./market");
 const marketPricing = require("./marketPricing");
@@ -711,12 +712,12 @@ function advance(chain, room) {
         migratePending(room, chain);
         const group = groupAt(chain, chain.qi);
         const item = group[group.length - 1];
-        if (!startItem(room, chain)) return;
+        if (!cpuMeter.span("craft.startItem", () => startItem(room, chain))) return;
         // Each step of the wave is closed as soon as ITS product is there: its holds are
         // set and, while others still run, its reaction leaves the list at once (the hauler
         // must not stock the inputs of a step that is already done).
         group.forEach((it) => {
-            partialSales(chain, room, it);
+            cpuMeter.span("craft.partialSales", () => partialSales(chain, room, it));
             if (it.finished || !itemDone(room, it, chain)) return;
             it.finished = true;
             (it.consumes || []).forEach((id) => { delete chain.holds[id]; });
@@ -911,9 +912,10 @@ function tick() {
         if (!chain) return;
         const room = Game.rooms[chainRoomOf(chain, key)];
         if (!room) return;
-        advance(chain, room);
+        const state = ["buying", "working", "selling"].includes(chain.state) ? chain.state : "other";
+        cpuMeter.span("craft.chain." + state, () => advance(chain, room));
     });
-    strandedSweep();
+    cpuMeter.span("craft.strandedSweep", () => strandedSweep());
 }
 
 module.exports = { open, tick, manualPin, clearFlags, activeCount, recordRun, cancelRoom, busyKinds, kindsOf, saleFloor, groupAt, replan };

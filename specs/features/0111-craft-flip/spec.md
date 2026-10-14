@@ -278,3 +278,14 @@ Nenhuma em aberto. Resolvidas no grilling: nome `marketPricing`; `z` derivado
 de `craft.confidence` e piso de 1% (o ledger calibra o piso); slots de lab em
 árvore com remanejamento por faixa de RCL; "processamento que agregue valor"
 resolvido pela regra vender-ou-processar, um nível por decisão.
+# ARK-116: seletores repetidos na mesma cascata mineral (2026-10-13)
+
+Após confirmação de que plan2,906 veio da sala nova, próxima frente é
+hauler/mineral selection. pickMineralJobNow primeiro executa cascata de
+chain feed. Quando essa busca é nova e retorna null, lab/factory/transient
+seletores já foram todos consultados sem job seguro, mas fallback geral
+repete esses seletores na mesma decisão. Compartilhar apenas conjunto dos
+seletores recém-consultados nessa chamada. Se chain usa cache negativo de
+consulta anterior, conjunto fica vazio e fallback mantém sua reavaliação.
+Preservar ordem entre stockPolicy/mineralContainer/powerFeed e demais jobs;
+jobs positivos nunca são reutilizados entre haulers. Sem cache novo por tick.

@@ -30,6 +30,22 @@ camada extra até o próximo reset de global (medido: ~2 CPU/tick de diferença)
 
 ## Desired outcome
 
+### Diagnóstico ARK-116 — 2026-10-13
+
+Separar `craft.chains` em execução por estado (`craft.chain.working`,
+`buying`, `selling`), `craft.strandedSweep`, `craft.startItem` e
+`craft.partialSales`. Dentro da política de labs, medir resolução,
+perfil logístico, confirmação, seleção/avaliação, entrada e atribuições
+(`labPolicy.*`). Medir `hauler.stockPolicy` e `hauler.terminalFuel`
+para distinguir estoque/combustível de busca de caminho.
+
+As medições preservam retornos, exceções e a ordem das operações; não
+introduzem scans, logs por tick nem mudanças de planejamento. Chaves são
+fixas, sem sala/creep/produto. Testar a atribuição usando o executor real
+dos labs e manter a produção existente verde. São spans inclusivos, não
+CPU adicional a somar ao pai. Ganho e causa dominante continuam sujeitos
+à medição live; o diagnóstico não promete redução de CPU.
+
 Um só conceito, `utils/cpuMeter.js`, com três granularidades sobre o mesmo formato de
 dado (`{avg, max, calls}` por chave):
 
@@ -65,6 +81,13 @@ visualizado em painéis novos do dashboard.
 
 ## Acceptance criteria
 
+Correção ARK-116 (2026-10-13): na fronteira de publicação, `cpuTop` usa
+última janela fechada se a janela corrente tem zero ticks, identificando
+tick de fechamento. Detalhes de terminalOps são spans do mesmo medidor:
+não dividir acumulador legado por ticks de outra janela. Testar consulta
+imediatamente após publicação, preservação do snapshot e ausência de valor
+legado artificial; nenhuma alteração das decisões das operações.
+
 1. `cpuMeter.record(group, key, used)` acumula `cpu`, `calls` e `max` por chave; o
    snapshot traz `avg = cpu / ticks` e `calls` por tick, arredondados.
 2. A cada `stats.cpuWindowTicks` ticks o snapshot é regerado e os acumuladores zeram;
@@ -88,3 +111,54 @@ visualizado em painéis novos do dashboard.
 - Nada de objeto de jogo em `Memory`: só números e chaves de texto.
 - Acumuladores no heap; só o snapshot (≈ 60 chaves × 3 números) vai ao Memory.
 - Chamadas do `main.js` continuam sob `guard()`.
+## Movimento de pioneers — ARK-116 (2026-10-13)
+
+Chamadas normais de `moveToRoom` distinguem `routing.movePlanned` e
+`routing.moveFallback`, preservando destinos, callbacks e resultados.
+Spans inclusivos separam execução nativa de validação (`routing.realSearch`).
+Motivação live: pioneer18,555 e move.native13,695 CPU/tick em 60 ticks;
+snapshot mostra travelers sem rota validada. Hipótese do fallback caro
+aguarda atribuição; não se alteram políticas de roteamento por suposição.
+# ARK-116: atribuição do custo restante do hauler (2026-10-13)
+
+Follow-up at83630308: janela60 total14,535/bucket3141, assignments0,523
+sem ganho isolado confirmado; hauler3,632/pickMineralJob1,232. Hipótese de
+owner exclusivo descartada: código atual permite concorrência. Próximo
+corte em consumerAvailable: saldo físico menos withdrawals pendentes é
+limite superior antes das reservas de operações. Se <=0, retornar zero sem
+varrer operações/ordens. Nenhum cache entre decisões; novo saldo no mesmo
+tick continua avaliado e saldo positivo preserva proteção de carga de venda.
+
+Janela60 at83628440: runMineralJob1,300/2,6calls. Entrega stockPolicy de
+energia ao terminal chama fuel.keep duas vezes sem mutação entre leituras:
+primeiro decide desvio para storage, depois limita amount. Compartilhar
+essa previsão apenas dentro da execução atual; próxima decisão deve
+recalcular e enxergar saldo/reserva alterados no mesmo tick. Valores
+protegidos e desvio de destino permanecem; medir1leitura em vez de2.
+
+Janela60 at83627489: pickDeliver0,637/2,883calls; cover0,034 e terminalJob
+0,020. Próxima correção no seletor: candidatos spawn/extension continuam
+filtrados por necessidade/segurança/reservas. Se um deles já está adjacente,
+entregar diretamente sem findClosestByPath; se a lista está vazia, não
+chamar busca. Candidatos distantes mantêm a busca por caminho e seu fallback.
+Prioridade de produção sobre torres/consumidores opcionais permanece.
+Teste antes/depois mede chamadas do seletor; ganho live ainda pendente.
+
+Janela atual41ticks at83627372: hauler2,992/6calls, mineral selection0,530.
+Parte do role ainda não tem span: segurança, terminal job, execução de
+mineral job e seleção da entrega. Instrumentar hauler.cover,
+hauler.terminalJob, hauler.runMineralJob e hauler.pickDeliver sem alterar
+prioridades, retornos ou intents. Spans são inclusivos; seleção de minerais
+e stockPolicy já têm medição, não somar pais/filhos. Nenhum ganho de CPU
+é atribuído à instrumentação; aguardar janela em jogo antes de otimizar.
+# ARK-116: atribuição do pioneer (2026-10-13)
+
+`routing.graphRoute` inclui a seleção do grafo e validação do cache,
+enquanto `routing.graphSearch` permanece restrito à busca nova do engine.
+`routing.clearance` inclui leitura do próximo passo e liberação entre creeps.
+São spans inclusivos, sem mudanças de política, cadência ou limites de CPU.
+
+`pioneer.pickLoad` mede seleção da fonte em casa, incluindo energia,
+reservas e findClosestByPath. `pioneer.travel` mede o fluxo completo de
+viagem; spans internos continuam inclusivos. Instrumentação não altera
+seleção de fontes, movimento, reservas ou decisões do role.

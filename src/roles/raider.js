@@ -35,7 +35,7 @@ const raider = {
         }
 
         if (creep.room.name !== targetRoomName) {
-            routing.moveToRoom(creep, targetRoomName, { range: 20, reusePath: 30 });
+            routing.travelToRoom(creep, targetRoomName, { range: 20, reusePath: 30 });
             return;
         }
 

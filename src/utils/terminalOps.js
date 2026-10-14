@@ -7,6 +7,7 @@ const marketPrices = require("./market");
 const roomCache = require("./roomCache");
 const stockPolicy = require("./resourcePolicy");
 const marketAccounting = require("./marketAccounting");
+const cpuMeter = require("./cpuMeter");
 
 const FINAL_STATES = ["completed", "failed", "cancelled"];
 
@@ -209,16 +210,13 @@ function assign(op, home, direction, from, to, value, resourceType) {
 }
 
 function orderAmount(order) { return order && (order.remainingAmount || order.amount) || 0; }
-// Scores every order in the book against the estimated delivery cost
-// (converted to currency via energyFairPrice), without dropping the ones
-// that miss op.limit. candidateOrders() filters this down to what's
-// actually dealable; executeDeal() also uses the unfiltered list to
-// explain, when nothing matches, how close the best order actually was.
-function scoredOrders(op) {
+// Diagnostics score the full book; selection rejects known-ineligible
+// orders before computing delivery cost. Effective limits still need freight.
+function scoredOrders(op, candidatesOnly = false) {
     if (!Game.market || typeof Game.market.getAllOrders !== "function") return [];
     const wanted = op.kind === "buy" ? ORDER_SELL : ORDER_BUY;
     let orders = [];
-    try { orders = Game.market.getAllOrders({ type: wanted, resourceType: op.resourceType }) || []; } catch (error) { return []; }
+    try { orders = cpuMeter.span("terminalOps.orderBook", () => Game.market.getAllOrders({ type: wanted, resourceType: op.resourceType }) || []); } catch (error) { return []; }
     // roomName is null for account-wide resources (pixel, accessKey,
     // cpuUnlock): they aren't shipped anywhere, so the API never attaches a
     // room to their orders. Requiring a truthy roomName unconditionally
@@ -229,13 +227,24 @@ function scoredOrders(op) {
     // volume no book mas caía sempre em listagem própria).
     const currentPrices = op.effectiveLimit && priceData(op.resourceType, !op.marketOnly);
     if (currentPrices) op.energyFairPrice = currentPrices.energy;
-    return orders.filter((order) => order && !(Game.market.orders || {})[order.id] && order.price > 0 && (op.marketOnly || order.roomName) && orderAmount(order) > 0).map((order) => {
+    const dead = op.deadOrderIds || [];
+    const freight = new Map();
+    return cpuMeter.span("terminalOps.scoreOrders", () => orders.filter((order) => {
+        if (!order || (Game.market.orders || {})[order.id] || !(order.price > 0) ||
+            (!op.marketOnly && !order.roomName) || !(orderAmount(order) > 0)) return false;
+        if (!candidatesOnly) return true;
+        if (!(op.remaining > 0) || (op.kind === "sell" && !op.marketOnly && !(op.loadedAmount > 0)) ||
+            dead.indexOf(order.id) >= 0) return false;
+        return op.effectiveLimit || (op.kind === "buy" ? order.price <= op.limit : order.price >= op.limit);
+    }).map((order) => {
         const quantity = Math.min(op.remaining, orderAmount(order), op.kind === "sell" && !op.marketOnly ? (op.loadedAmount || 0) : op.remaining);
-        const cost = op.marketOnly ? 0 : txCost(quantity, op.sourceRoom, order.roomName);
+        const freightKey = quantity + ":" + order.roomName;
+        if (!op.marketOnly && !freight.has(freightKey)) freight.set(freightKey, txCost(quantity, op.sourceRoom, order.roomName));
+        const cost = op.marketOnly ? 0 : freight.get(freightKey);
         const fee = quantity ? cost * (op.energyFairPrice || 0) / quantity : Infinity;
         const effective = op.effectiveLimit ? require("./swingTrade").effective(op.kind, op.resourceType, order.price, quantity, cost, op.energyFairPrice || 0) : op.kind === "buy" ? order.price + fee : order.price - fee;
         return { order, quantity, cost, fee, effective };
-    });
+    }));
 }
 // op.limit gates on the order's own raw price - the number the user reads
 // straight off the market (marketPrice()/order book) when they pick a
@@ -261,7 +270,7 @@ function candidateOrders(op) {
         const target = owned(op.sourceRoom);
         if (!target) return [];
         const wanted = op.kind === "sell" ? Math.min(op.remaining, op.loadedAmount || 0) : op.remaining;
-        const candidate = require("./swingTrade").quote(target, op.kind, op.resourceType, wanted, { excludeId: op.id, deadOrderIds: op.deadOrderIds });
+        const candidate = cpuMeter.span("terminalOps.swingQuote", () => require("./swingTrade").quote(target, op.kind, op.resourceType, wanted, { excludeId: op.id, deadOrderIds: op.deadOrderIds }));
         if (!candidate.order) { op.policyBlock = candidate.reason; return []; }
         op.limit = candidate.limit; op.energyFairPrice = candidate.energyFairPrice;
         delete op.policyBlock;
@@ -275,7 +284,7 @@ function candidateOrders(op) {
     // an order that actually works.
     const dead = op.deadOrderIds || [];
     const maxFeeRatio = config.get("terminalOps.maxFeeRatio", 0.05);
-    const candidates = scoredOrders(op).filter((item) => item.quantity > 0 && dead.indexOf(item.order.id) < 0 &&
+    const candidates = scoredOrders(op, true).filter((item) => item.quantity > 0 && dead.indexOf(item.order.id) < 0 &&
         (op.kind === "buy" ? (op.effectiveLimit ? item.effective : item.order.price) <= op.limit : (op.effectiveLimit ? item.effective : item.order.price) >= op.limit) &&
         (op.skipFeeCap || item.fee <= item.order.price * maxFeeRatio)
     ).sort((a, b) => op.kind === "buy" ? a.effective - b.effective : b.effective - a.effective);
@@ -1054,8 +1063,12 @@ function gcOperations() {
 const perf = {};
 function phase(name, fn) {
     const start = Game.cpu.getUsed();
-    fn();
-    perf[name] = (perf[name] || 0) + Game.cpu.getUsed() - start;
+    try { fn(); }
+    finally {
+        const used = Game.cpu.getUsed() - start;
+        perf[name] = (perf[name] || 0) + used;
+        cpuMeter.record("spans", "terminalOps." + name, used);
+    }
 }
 // The state machines run on a grid (terminalOps.tickInterval, default 5): a deal or a hauler
 // hand-off is noticed at most 4 ticks late, well inside a terminal's 10-tick cooldown, while
@@ -1158,9 +1171,8 @@ function runOperations() {
     }).forEach((id) => {
         const head = operation(id);
         if (!active(head)) return;
-        const key = "op " + head.kind + ":" + head.state, start = Game.cpu.getUsed();
-        runOperation(id);
-        perf[key] = (perf[key] || 0) + Game.cpu.getUsed() - start;
+        const key = "op " + head.kind + ":" + head.state;
+        phase(key, () => runOperation(id));
     });
     // Runs after the operations above so managedTerminalIncrease() reflects
     // this tick's staged/reconciled amounts before deciding what's surplus.

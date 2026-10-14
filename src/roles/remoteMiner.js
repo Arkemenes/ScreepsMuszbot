@@ -2,7 +2,7 @@
 // reserved remote room instead of the home room. No architect() runs in a
 // remote room (it's not ours), so this role builds/repairs its own container
 // directly, and there's no link/tower to feed there - the remoteHauler just
-// drains the container. Travel uses utils/routing.moveToRoom() with the same
+// drains the container. Travel uses utils/routing.travelToRoom() with the same
 // mine-or-reserved-only restriction remoteHauler.js applies (ROADMAP 0075 -
 // see its own comment for why: upfront terrain validation + retreat/
 // backtrack instead of a raw moveTo() that could park on ERR_NO_PATH
@@ -64,7 +64,7 @@ var remoteMiner = {
             creep.room.name === targetRoomName &&
             remotes.hasHostiles(targetRoomName)
         ) {
-            routing.moveToRoom(creep, home, {
+            routing.travelToRoom(creep, home, {
                 range: 20,
                 reusePath: 30,
                 allowRoom: remotes.allowRoom(home),
@@ -73,7 +73,7 @@ var remoteMiner = {
         }
 
         if (creep.room.name !== targetRoomName) {
-            routing.moveToRoom(creep, targetRoomName, {
+            routing.travelToRoom(creep, targetRoomName, {
                 range: 20,
                 reusePath: 30,
                 allowRoom: remotes.allowRoom(targetRoomName),
