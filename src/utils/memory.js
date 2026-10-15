@@ -28,7 +28,8 @@ module.exports = {
         // - unable to edit Memory via Memory watcher or console
         // 2. RawMemory._parsed = Memory;
         // - undocumented functionality, could get removed at any time
-        // + the server will take care of serialization, it doesn't cost any CPU on your site
+        // + the engine performs serialization after our loop; its cost is
+        //   still charged and is outside the final in-script getUsed reading
         // + maintain full functionality including Memory watcher and console
 
         if (tick % 10000 == 0) {

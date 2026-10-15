@@ -164,19 +164,22 @@ function poll(key) {
         cpuStart = Game.cpu && Game.cpu.getUsed ? Game.cpu.getUsed() : 0;
     }
     const budget = config.get("craft.policyWorkPerTick", 1000);
+    const cpuLimit = config.get("craft.policyCpuPerTick", 1);
+    const active = job.entries.filter((e) => e.generator);
     if (!Game.cpu || Game.cpu.bucket >= config.get("craft.minBucket", 500)) {
         while (job.status === "evaluating" && used < budget) {
             if (Game.cpu && Game.cpu.getUsed &&
-                Game.cpu.getUsed() - cpuStart >= config.get("craft.policyCpuPerTick", 1)) break;
-            const active = job.entries.filter((e) => e.generator);
+                Game.cpu.getUsed() - cpuStart >= cpuLimit) break;
             if (!active.length) { job.status = job.best ? "complete" : "fallback"; break; }
-            const entry = active[job.cursor++ % active.length];
+            const entryIndex = job.cursor++ % active.length;
+            const entry = active[entryIndex];
             let result;
             try { result = entry.generator.next(); }
             catch (error) { result = { done: true, value: { status: "invalid", message: error.message } }; }
             used++;
             if (!result.done) continue;
             entry.generator = null;
+            active.splice(entryIndex, 1);
             const outcome = result.value;
             if (outcome.status !== "complete") { job.failures.push({ id: entry.id, status: outcome.status }); continue; }
             const rank = [outcome.ticks, outcome.movement, outcome.switches, entry.id];

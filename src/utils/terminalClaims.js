@@ -1,5 +1,6 @@
 // Quantitative physical claims shared by terminal operations and consumers.
 const census = require("./census");
+const operationIndex = require("./terminalIndex");
 const FINAL = ["completed", "failed", "cancelled"];
 let intentTick = -1, intents = {};
 function key(owner) { return owner && typeof owner === "object" ? owner.kind + ":" + owner.id : owner || null; }
@@ -47,8 +48,8 @@ function physicalFree(room, source, resource, excludeId, excludeOwner) {
     const pending = withdrawn(source, resource);
     if (value(source, resource) <= pending) return 0;
     if (source !== room.storage && source !== room.terminal) return Math.max(0, value(source, resource) - pending);
-    const ops = Object.values(Memory.terminalOps && Memory.terminalOps.operations || {});
-    const managed = new Set(ops.filter(active).map((op) => op.marketOrderId).filter(Boolean));
+    const ops = operationIndex.forRoom(room.name);
+    const managed = new Set(ops.map((op) => op.marketOrderId).filter(Boolean));
     let terminal = 0, unstaged = 0;
     ops.forEach((op) => {
         if (!active(op)) return;

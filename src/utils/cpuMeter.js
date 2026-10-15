@@ -12,19 +12,21 @@
 // a snapshot of per-tick averages (what Memory.stats.cpu.meter publishes) and reset.
 // An average needs only a sum and a count - no per-tick samples are kept.
 const config = require("./config");
+const accounting = require("./cpuAccounting");
 
 const GROUPS = ["modules", "roles", "structures", "spans", "tick"];
 
 function fresh() {
     const groups = {};
     GROUPS.forEach((g) => { groups[g] = {}; });
-    return { ticks: 0, total: 0, groups };
+    return { ticks: 0, total: 0, fromTick: null, toTick: null, groups };
 }
 
 let acc = fresh();
 let published = null; // last closed window
 let fns = null; // last profile(N) result
 let lastTick = -1;
+let totalTicks = 0;
 
 function round(value) {
     return Math.round(value * 1000) / 1000;
@@ -51,7 +53,8 @@ function span(key, fn) {
 
 function build(source) {
     const ticks = Math.max(1, source.ticks);
-    const out = { window: source.ticks, ticks: source.ticks, at: Game.time, used: round(source.total / ticks) };
+    const out = { window: source.ticks, ticks: source.ticks, at: Game.time, used: round(source.total / ticks),
+        totalTicks, fromTick: source.fromTick, toTick: source.toTick };
     Object.keys(source.groups).forEach((group) => {
         out[group] = {};
         Object.keys(source.groups[group]).forEach((key) => {
@@ -68,12 +71,18 @@ function publish() {
     acc = fresh();
 }
 
-// Called once per tick, after everything else has been measured.
+// Called after the measured script work. Engine finalization is observed
+// through next tick's bucket balance rather than this getUsed() reading.
 function endTick() {
     if (lastTick === Game.time) return;
     lastTick = Game.time;
+    totalTicks++;
+    if (acc.fromTick === null) acc.fromTick = Game.time;
+    acc.toTick = Game.time;
     acc.ticks++;
-    acc.total += Game.cpu.getUsed();
+    const used = Game.cpu.getUsed();
+    acc.total += used;
+    accounting.end(used);
     if (acc.ticks >= Math.max(1, Number(config.get("stats.cpuWindowTicks", 60)) || 60)) publish();
 }
 
@@ -94,6 +103,8 @@ function drop(group, key) {
 
 function reset() {
     acc = fresh();
+    totalTicks = 0;
+    accounting.reset();
 }
 
 // L2 result of a profile(N) session: rows are {name, selfTime, totalTime, calls},
@@ -110,4 +121,5 @@ function setFns(rows, ticks) {
     if (published) published.fns = fns;
 }
 
-module.exports = { record, span, endTick, snapshot, live, reset, drop, setFns, GROUPS };
+module.exports = { record, span, endTick, snapshot, live, reset, drop, setFns, GROUPS,
+    beginTick: accounting.begin, accounting: accounting.snapshot };

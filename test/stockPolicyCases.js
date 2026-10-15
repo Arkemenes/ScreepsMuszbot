@@ -57,6 +57,7 @@ module.exports = function (project, assert) {
         room.terminal.store.Z = 220000;
         assert(policy.terminalFree(room) === 4700, "0124: terminal keeps 45k free beyond physical inventory");
         Memory.terminalOps.operations.pending = { id: "pending", kind: "buy", sourceRoom: room.name, resourceType: "Z", remaining: 5000, limit: 1, state: "queued" };
+        Memory.terminalOps.nextId++; // Model create()'s membership revision.
         assert(policy.destination(room, "O") === room.storage, "0124: pending receipts count toward capacity and overflow goes to storage");
         delete room.terminal.store.Z; fresh();
         const q = (price, amount = 100000) => ({ id: "energy-sell", resourceType: "energy", type: ORDER_SELL, roomName: "Remote", price, remainingAmount: amount });
@@ -428,6 +429,7 @@ module.exports = function (project, assert) {
             !ops.lockConflict("transfer", room.name, "Other", "O"),
             "0130: an automatic incoming purchase also permits a later reserved outgoing operation");
         Memory.terminalOps.operations[paidSale.id] = paidSale;
+        Memory.terminalOps.nextId++; // Reinsert the fixture as a new membership change.
         assert(ops.lockConflict("buy", room.name, null, "O", false, { automaticPurchase: true }),
             "0130: duplicate ordinary automatic purchases remain locked");
         Memory.craft.active[room.name] = { id: "new-craft", room: room.name, product: "widgetA", qty: 10,
@@ -483,6 +485,7 @@ module.exports = function (project, assert) {
             "0130: an unmanaged live order also protects its terminal stock");
         delete Game.market.orders[paidSale.marketOrderId];
         Memory.terminalOps.operations[paidSale.id] = Object.assign({}, paidSale, { state: "queued", loadedAmount: 0 });
+        Memory.terminalOps.nextId++;
         assert(policy.consumerAvailable(room, room.terminal, "O") === 0,
             "0130: consumers also protect outgoing inventory before its staging bookkeeping runs");
         Game.market.orders[paidSale.marketOrderId] = { id: paidSale.marketOrderId, type: ORDER_SELL,
@@ -509,10 +512,10 @@ module.exports = function (project, assert) {
             const pendingOp = ops.operation(Object.values(Memory.terminalOps.operations).find(o => o.kind === "buy").id);
             pendingOp.state = "cancelled";
             const secondBlocker = ops.buy(room.name, "Z", 20, 13, false, true, { automaticPurchase: true, owner: { kind: "craft", id: room.name + "-" + Game.time } });
-            const countBefore = Object.keys(Memory.terminalOps.operations).length;
+            const revisionBefore = Memory.terminalOps.nextId;
             const refused = chain.open(room, Object.assign({}, candidate, { buys: { O: 540, Z: 20 }, spend: 6720 }));
             assert(secondBlocker.ok && !refused.ok && refused.reason === "buy-refused:Z" &&
-                refused.detail && Object.keys(Memory.terminalOps.operations).length === countBefore,
+                refused.detail && Memory.terminalOps.nextId === revisionBefore,
                 "0130: craft preflights every purchase and reports its cause before creating partial operations");
         } finally {
             COMMODITIES = originalCommodities;

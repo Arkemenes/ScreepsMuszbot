@@ -18,6 +18,7 @@ const labPolicyRuntime = require("./labPolicyRuntime");
 const resourceTiers = require("./resourceTiers");
 
 let lastScanTick = null;
+let lastScanHistoryReady = false;
 let lastLogSignature = null;
 const openFailLogged = {};
 let scansSinceDiscardLog = 0;
@@ -317,6 +318,11 @@ function scanRoom(room, snapshot, mem, found, purchaseBook, onlyProduct) {
         if (!verdict.plan) { discard(mem, product, room, verdict.reason, verdict.detail); return; }
         if (!sized.qty) { discard(mem, product, room, verdict.reason); return; }
         if (!verdict.ok) { discard(mem, product, room, verdict.reason); return; }
+        const recovered = require("./craftLedger").recoveredBasis(room, verdict.plan.owns);
+        if (recovered.blocked) { discard(mem, product, room, recovered.blocked); return; }
+        verdict.cost += recovered.extra; verdict.profit -= recovered.extra;
+        verdict.ratio = verdict.cost > 0 ? verdict.profit / verdict.cost : 0;
+        if (verdict.ratio < verdict.margin) { discard(mem, product, room, "recovered-cost-margin"); return; }
         if (verdict.profit < config.get("craft.minProfit", 5000)) { discard(mem, product, room, "min-profit"); return; }
         found.push({
             room: room.name, product, qty: sized.qty, cost: Math.round(verdict.cost), cash: Math.round(verdict.cash), spend: Math.round(verdict.spend),
@@ -325,6 +331,7 @@ function scanRoom(room, snapshot, mem, found, purchaseBook, onlyProduct) {
             steps: verdict.plan.steps.map((s) => ({ product: s.product, kind: s.kind, batches: s.batches })),
             buys: verdict.plan.buys, owns: verdict.plan.owns,
             purchaseQuotes: verdict.plan.purchaseQuotes,
+            recoveredCost: recovered.extra, recoveredCostEstimated: recovered.estimated,
             labPolicy: ctx.labPolicyInfo(verdict.plan.steps),
         });
     });
@@ -332,12 +339,16 @@ function scanRoom(room, snapshot, mem, found, purchaseBook, onlyProduct) {
 
 function scan() {
     const interval = Math.max(1, Number(config.get("craft.scanInterval", 300)) || 300);
-    if (lastScanTick !== null && Game.time - lastScanTick < interval) return;
+    // Hydrating segments can finish just after the initial warming verdict.
+    // That provisional verdict must not lock idle rooms out for a full cadence.
+    const historyReady = market.historyReady();
+    if (lastScanTick !== null && Game.time - lastScanTick < interval && !(historyReady && !lastScanHistoryReady)) return;
     if (Game.cpu && Game.cpu.bucket < config.get("craft.minBucket", 500)) return;
     const snapshot = market.snapshot();
     if (!snapshot) return; // market.js has not scanned yet
     phaseMemo = {};
     lastScanTick = Game.time;
+    lastScanHistoryReady = historyReady;
     const mem = memory();
     mem.lastScanTick = Game.time;
     mem.discards = {};
@@ -411,9 +422,10 @@ function tick() {
         const chain = active[key], item = chain && chain.queue && chain.queue[chain.qi || 0];
         return item && item.policy && chain.state === "working";
     });
-    if (policyActive || chainInterval <= 1 || cadence.due(lastChainTick, chainInterval)) {
-        lastChainTick = Game.time;
-        cpuMeter.span("craft.chains", () => craftChain.tick());
+    const maintenanceDue = chainInterval <= 1 || cadence.due(lastChainTick, chainInterval);
+    if (policyActive || maintenanceDue) {
+        if (maintenanceDue) lastChainTick = Game.time;
+        cpuMeter.span("craft.chains", () => craftChain.tick({ policyOnly: !maintenanceDue, maintenance: maintenanceDue }));
     }
     const mem = memory();
     if (typeof mem.rescanAt === "number" && Game.time >= mem.rescanAt) {
@@ -427,6 +439,10 @@ global.craftStatus = () => {
     const mem = memory();
     return JSON.stringify({
         mode: config.get("craft.test", true) ? "test" : "live",
+        marketHistory: { ready: market.historyReady(), scanReady: lastScanHistoryReady,
+            minSamples: config.get("craft.minSamples", 48), store: require("./marketHistoryStore").status(),
+            sampleCounts: Object.fromEntries(Object.keys(market.snapshot() && market.snapshot().resources || {})
+                .map((r) => [r, market.samples(r).length])) },
         lastScanTick: mem.lastScanTick || null,
         candidates: mem.candidates,
         discards: mem.discards,

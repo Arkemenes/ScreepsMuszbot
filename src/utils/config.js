@@ -441,7 +441,8 @@ const defaults = {
         saleBufferAmount: 300000,
         saleBufferCapacityRatio: 0.85,
         statsWindowTicks: 60,
-        operationRetentionTicks: 10000,
+        // Keep final records only while referenced; optional diagnostic retention.
+        operationRetentionTicks: 0,
         // tickTransfer()'s "atTerminal" check waits for loadedAmount to show up
         // in the source terminal's own store before calling send() - a stall
         // guard for whenever that mismatch never resolves (e.g. a bookkeeping
@@ -843,6 +844,8 @@ const defaults = {
         // ROADMAP 0113: the CPU meter folds its accumulators into the published
         // snapshot (Memory.stats.cpu.meter) every N ticks, as per-tick averages
         cpuWindowTicks: 60,
+        // Rolling bucket-debit window, paired with the same prior script tick.
+        cpuBalanceWindowTicks: 600,
         // how many functions profile(N) publishes (heaviest by self time)
         cpuTopFunctions: 15,
     },

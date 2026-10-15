@@ -181,8 +181,17 @@ function printCpuTop(n) {
     const ticks = Math.max(1, live.ticks);
     let guarded = 0;
     Object.keys(live.modules).forEach((k) => { guarded += live.modules[k].avg * ticks; });
-    console.log("[cpuTop] " + live.ticks + " ticks, avg " + live.used.toFixed(2) + "/tick, guarded " + (guarded / ticks).toFixed(2) + ", unguarded " + (live.used - guarded / ticks).toFixed(2) +
+    console.log("[cpuTop] " + live.ticks + " ticks in " + (closed ? "closed" : "partial") + " window (target " +
+        config.get("stats.cpuWindowTicks", 60) + "; ticks " + live.fromTick + ".." + live.toTick +
+        "; measured since meter reset " + current.totalTicks + "), script avg " + live.used.toFixed(2) + "/tick (before engine finalization), guarded " + (guarded / ticks).toFixed(2) + ", unguarded " + (live.used - guarded / ticks).toFixed(2) +
         (closed ? " (closed window at tick " + live.at + ")" : ""));
+    const balance = cpuMeter.accounting();
+    if (balance.validTicks) console.log("[cpuBalance] bucket balance " + balance.validTicks + "/" + balance.ticks +
+        " intervals (" + balance.fromTick + ".." + balance.toTick + "): inferred " + balance.used +
+        "/tick, headroom " + balance.headroom + "; paired " + balance.pairedTicks +
+        ", paired debit " + balance.pairedUsed + ", script " + balance.scriptUsed + ", unobserved residual " + balance.residual +
+        ", missing end " + balance.missingEndTicks + ", invalid " + balance.skippedTicks + ", skipped game ticks " + balance.missingTicks);
+    else console.log("[cpuBalance] bucket balance unavailable: " + balance.ticks + " intervals, " + balance.skippedTicks + " invalid");
     const limit = n > 0 ? n : 15;
     cpuMeter.GROUPS.forEach((group) => {
         const rows = Object.keys(live[group]).map((k) => ({ k, s: live[group][k] }));
@@ -241,6 +250,7 @@ module.exports.loop = function () {
     // Memory.settings) makes the engine JSON.parse the whole Memory every tick - ~3.5
     // CPU/tick in the 2026-10-03 profile (the "prelude" of the tick meter group).
     utils.memory.wrap(function () {
+        cpuMeter.beginTick();
         maybeEnableProfiler();
         utils.profiler.wrap(function () {
             cpuMeter.record("tick", "entry", entryCpu);

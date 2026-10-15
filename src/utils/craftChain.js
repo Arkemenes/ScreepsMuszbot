@@ -259,8 +259,10 @@ function activeCount() { return Object.keys(craft().active).length; }
 function open(room, candidate) {
     const mem = craft();
     const recoveredPlan = lotLedger.recoveredBasis(room, candidate.owns), recoveredCost = recoveredPlan.extra;
-    if (recoveredCost) {
-        candidate = Object.assign({}, candidate, { cost: candidate.cost + recoveredCost, profit: candidate.profit - recoveredCost });
+    if (recoveredPlan.blocked) return { ok: false, reason: recoveredPlan.blocked };
+    const costChange = recoveredCost - (candidate.recoveredCost || 0);
+    if (costChange) {
+        candidate = Object.assign({}, candidate, { cost: candidate.cost + costChange, profit: candidate.profit - costChange });
         candidate.ratio = candidate.profit / candidate.cost;
         if (candidate.ratio < candidate.margin || candidate.profit < config.get("craft.minProfit", 5000)) return { ok: false, reason: "recovered-cost-margin" };
     }
@@ -351,16 +353,28 @@ function open(room, candidate) {
     // first chain of a room keeps the plain room name as its key; a second one
     // (the other structure kind) gets the kinds appended
     const key = mem.active[room.name] ? room.name + ":" + kinds.join("+") : room.name;
+    const recoveredInputs = lotLedger.recoveredBasis(room, candidate.owns, chainId);
+    if (recoveredInputs.blocked) {
+        placed.forEach((id) => terminalOps.cancel(id)); marketFlip.release(reserve);
+        return { ok: false, reason: recoveredInputs.blocked };
+    }
     mem.active[key] = {
         id: chainId, key, kinds, room: room.name, product: candidate.product, qty: candidate.qty,
         openedTick: Game.time, state: Object.keys(buys).length ? "buying" : "working", stateTick: Game.time,
         queue, qi: 0, buys, reserved: reserve,
         est: { cash: candidate.cash, spend, cost: candidate.cost, revenue: candidate.revenue, profit: candidate.profit, floor: candidate.cost / candidate.qty },
-        ownCost: Math.max(0, candidate.cost - candidate.cash),
+        ownCost: Math.max(0, candidate.cost - candidate.cash - recoveredCost),
         holds: {},
     };
     lotLedger.ensure(mem.active[key], candidate.owns || {});
-    lotLedger.recoveredBasis(room, candidate.owns, chainId);
+    Object.entries(recoveredInputs.increments).forEach(([r, cost]) => {
+        mem.active[key].inventory.costs[r] = (mem.active[key].inventory.costs[r] || 0) + cost;
+    });
+    mem.active[key].ownCost += recoveredCost;
+    mem.active[key].recoveredInputs = recoveredInputs.allocations;
+    const estimatedCosts = {};
+    recoveredInputs.allocations.filter((a) => a.confidence !== "confirmed").forEach((a) => { estimatedCosts[a.resource] = true; });
+    if (Object.keys(estimatedCosts).length) mem.active[key].inventory.estimatedCosts = estimatedCosts;
     if (recoveredPlan.estimated) { mem.active[key].recoveredBasis = recoveredCost; mem.active[key].recoveredCostEstimated = true; mem.active[key].costConfidence = "estimated-recovered"; }
     log(room.name + " abriu " + candidate.product + " x" + candidate.qty + ": compra " +
         (Object.keys(buys).map((k) => k + " x" + buys[k].qty + " (limite " + buys[k].limit.toFixed(1) + ")").join(", ") || "nada (so estoque proprio)") +
@@ -561,9 +575,11 @@ function finish(chain, room, profit, extra) {
     Object.entries(inventory.balances).forEach(([r, q]) => {
         if (q > 0) { items[r] = Math.min(q, lotLedger.physical(room, r)); costs[r] = inventory.costs[r] || 0; }
     });
-    if (Object.keys(items).length) mem.stranded[chain.ownerId || chain.id] = { room: chain.room, tick: Game.time, product: chain.product, items, costs,
+    const costConfidence = Object.fromEntries(Object.keys(items).map((r) => [r, inventory.confidence === "confirmed" &&
+        (!chain.recoveredCostEstimated || inventory.estimatedCosts && !inventory.estimatedCosts[r]) ? "confirmed" : "estimated"]));
+    if (Object.keys(items).length) mem.stranded[chain.ownerId || chain.id] = { room: chain.room, tick: Game.time, product: chain.product, items, costs, costConfidence,
         spent: Object.values(costs).reduce((n, cost) => n + cost, 0), inventoryVersion: 1,
-        confidence: inventory.confidence === "confirmed" ? "confirmed" : "estimated" };
+        confidence: inventory.confidence === "confirmed" && !chain.recoveredCostEstimated ? "confirmed" : "estimated" };
     log(chain.room + " " + chain.product + " concluida: lucro real " + Math.round(profit) + " (estimado " + Math.round(chain.est.profit) + ")");
     marketFlip.release(chain.reserved);
     clearChainFlags(chain);
@@ -607,10 +623,12 @@ function abort(chain, room, reason) {
     Object.entries(chain.inventory.balances).forEach(([r, q]) => { if (q > 0) items[r] = Math.min(q, lotLedger.physical(room, r)); });
     const totals = lotLedger.totals(chain);
     const costs = Object.fromEntries(Object.keys(items).map((r) => [r, chain.inventory.costs[r] || 0]));
-    const knownBasis = totals.known && chain.inventory.confidence === "confirmed";
+    const knownBasis = totals.known && chain.inventory.confidence === "confirmed" && !chain.recoveredCostEstimated;
+    const costConfidence = Object.fromEntries(Object.keys(items).map((r) => [r, totals.known && chain.inventory.confidence === "confirmed" &&
+        (!chain.recoveredCostEstimated || chain.inventory.estimatedCosts && !chain.inventory.estimatedCosts[r]) ? "confirmed" : "estimated"]));
     const spent = knownBasis ? Object.values(costs).reduce((n, cost) => n + cost, 0) : totals.spent;
     mem.stranded[chain.ownerId || chain.id] = { room: chain.room, tick: Game.time, product: chain.product, items, spent, inventoryVersion: 1,
-        costs: knownBasis ? costs : null, confidence: knownBasis ? "confirmed" : "estimated" };
+        costs, costConfidence, confidence: knownBasis ? "confirmed" : "estimated" };
     if (!mem.retryAfter) mem.retryAfter = {};
     mem.retryAfter[chain.room + ":" + chain.product] = Game.time + config.get("craft.recoveryBackoffTicks", 3000);
     recordRun(chain, null, { aborted: reason });
@@ -639,11 +657,13 @@ function partialSales(chain, room, item) {
     chain.sold = (chain.soldBase || 0) + (chain.partialDealt || 0);
     if (!config.get("craft.partialSales", true) || item.product !== chain.product) return;
     const product = chain.product;
+    const lot = Math.max(1, Math.ceil(item.target * config.get("craft.minPartialSellRatio", 0.1)));
+    // Labs/factory output cannot be sold until transported to the warehouse.
+    if ((room.storage.store[product] || 0) + (room.terminal.store[product] || 0) < lot) return;
     const reach = terminalOps.saleAvailable(room, product, { kind: "craft", id: (chain.ownerId || chain.id) });
     const unsold = item.policy ? Math.min(Math.max(0, stockAnywhere(room, product) - item.base),
         Math.max(0, madeSoFar(room, chain, item) - (chain.sold || 0))) : Math.max(0, stockAnywhere(room, product) - item.base);
     const sellable = Math.min(unsold, reach);
-    const lot = Math.max(1, Math.ceil(item.target * config.get("craft.minPartialSellRatio", 0.1)));
     if (sellable < lot) return;
     const res = snapshotResource(chain.product);
     const floor = saleFloor(chain);
@@ -963,18 +983,23 @@ function cancelRoom(roomName) {
     return keys.length > 0;
 }
 
-function tick() {
+function tick(options) {
     const mem = craft();
     Object.keys(mem.active).forEach((key) => {
         const chain = mem.active[key];
         if (!chain) return;
+        const item = chain.queue && chain.queue[chain.qi || 0];
+        if (options && options.policyOnly && !(chain.state === "working" && item && item.policy)) return;
         const room = Game.rooms[chainRoomOf(chain, key)];
         if (!room) return;
         const state = ["buying", "working", "selling"].includes(chain.state) ? chain.state : "other";
         cpuMeter.span("craft.chain." + state, () => advance(chain, room));
     });
-    Object.values(Game.rooms || {}).filter((r) => r.controller && r.controller.my && r.storage && r.terminal).forEach(lotLedger.releaseRecovered);
-    cpuMeter.span("craft.strandedSweep", () => strandedSweep());
+    if (!options || options.maintenance !== false) {
+        cpuMeter.span("craft.recoveredSweep", () => Object.values(Game.rooms || {})
+            .filter((r) => r.controller && r.controller.my && r.storage && r.terminal).forEach(lotLedger.releaseRecovered));
+        cpuMeter.span("craft.strandedSweep", () => strandedSweep());
+    }
 }
 
 module.exports = { open, tick, manualPin, clearFlags, activeCount, recordRun, cancelRoom, busyKinds, kindsOf, saleFloor, groupAt, replan };

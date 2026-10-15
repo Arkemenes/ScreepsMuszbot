@@ -2298,7 +2298,7 @@
           }
         }
       },
-      "panel-241": {
+      "panel-235": {
         "kind": "Panel",
         "spec": {
           "data": {
@@ -2316,12 +2316,37 @@
                       "group": "prometheus",
                       "kind": "DataQuery",
                       "spec": {
-                        "expr": "screeps_terminal_transfer_energy",
-                        "legendFormat": "{{from}} -> {{to}}"
+                        "editorMode": "code",
+                        "expr": "screeps_market_credits + on(job, instance) ((0.95 * sum by(job, instance) (screeps_resource_amount * on(job, instance, resource) screeps_resource_sell_value)) or on(job, instance) (0 * screeps_market_credits))",
+                        "instant": false,
+                        "legendFormat": "Patrimônio estimado",
+                        "range": true
                       },
                       "version": "v0"
                     },
                     "refId": "A"
+                  }
+                },
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "hidden": false,
+                    "query": {
+                      "datasource": {
+                        "name": "${DS_PROMETHEUS}"
+                      },
+                      "group": "prometheus",
+                      "kind": "DataQuery",
+                      "spec": {
+                        "editorMode": "code",
+                        "expr": "screeps_market_credits",
+                        "instant": false,
+                        "legendFormat": "Créditos disponíveis",
+                        "range": true
+                      },
+                      "version": "v0"
+                    },
+                    "refId": "B"
                   }
                 }
               ],
@@ -2329,10 +2354,10 @@
               "transformations": []
             }
           },
-          "description": "Requer instrumentação em terminal.send() para registrar terminalNetwork.transfers no Memory.stats.",
-          "id": 241,
+          "description": "Créditos atuais + 95% do valor dos recursos ao Sell Value (sellPrice da série Sell Value). Inclui stores das estruturas em salas próprias, cargo de creeps/power creeps próprios e recursos de conta. Recursos sem preço não entram no valor; veja o indicador ao lado. Estimativa global, sem filtro de sala, liquidez ou custo de transporte.",
+          "id": 235,
           "links": [],
-          "title": "Transferência de energia entre salas",
+          "title": "Patrimônio estimado em créditos",
           "vizConfig": {
             "group": "timeseries",
             "kind": "VizConfig",
@@ -2346,8 +2371,9 @@
                     "axisBorderShow": false,
                     "axisCenteredZero": false,
                     "axisColorMode": "text",
-                    "axisLabel": "",
+                    "axisLabel": "créditos",
                     "axisPlacement": "auto",
+                    "axisSoftMin": 0,
                     "barAlignment": 0,
                     "barWidthFactor": 0.6,
                     "drawStyle": "line",
@@ -2367,10 +2393,217 @@
                     },
                     "showPoints": "auto",
                     "showValues": false,
-                    "spanNulls": true,
+                    "spanNulls": false,
                     "stacking": {
                       "group": "A",
-                      "mode": "normal"
+                      "mode": "none"
+                    },
+                    "thresholdsStyle": {
+                      "mode": "off"
+                    }
+                  },
+                  "decimals": 2,
+                  "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                      {
+                        "color": "green",
+                        "value": 0
+                      }
+                    ]
+                  },
+                  "unit": "short"
+                },
+                "overrides": []
+              },
+              "options": {
+                "legend": {
+                  "calcs": [
+                    "lastNotNull"
+                  ],
+                  "displayMode": "table",
+                  "placement": "bottom",
+                  "showLegend": true
+                },
+                "tooltip": {
+                  "hideZeros": false,
+                  "mode": "multi",
+                  "sort": "none"
+                }
+              }
+            },
+            "version": "13.2.1"
+          }
+        }
+      },
+      "panel-236": {
+        "kind": "Panel",
+        "spec": {
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "hidden": false,
+                    "query": {
+                      "datasource": {
+                        "name": "${DS_PROMETHEUS}"
+                      },
+                      "group": "prometheus",
+                      "kind": "DataQuery",
+                      "spec": {
+                        "expr": "screeps_assets_unpriced_resources",
+                        "legendFormat": "Tipos sem pre?o"
+                      },
+                      "version": "v0"
+                    },
+                    "refId": "A"
+                  }
+                }
+              ],
+              "queryOptions": {},
+              "transformations": []
+            }
+          },
+          "description": "Quantidade de tipos de recurso em estoque sem sellPrice válido. Acima de zero, o patrimônio é uma estimativa parcial. Zero significa que todos os recursos contados têm preço.",
+          "id": 236,
+          "links": [],
+          "title": "Recursos sem Sell Value",
+          "vizConfig": {
+            "group": "stat",
+            "kind": "VizConfig",
+            "spec": {
+              "fieldConfig": {
+                "defaults": {
+                  "color": {
+                    "mode": "thresholds"
+                  },
+                  "decimals": 0,
+                  "mappings": [
+                    {
+                      "options": {
+                        "match": "null+nan",
+                        "result": {
+                          "text": "sem dados"
+                        }
+                      },
+                      "type": "special"
+                    }
+                  ],
+                  "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                      {
+                        "color": "green",
+                        "value": 0
+                      },
+                      {
+                        "color": "orange",
+                        "value": 1
+                      }
+                    ]
+                  },
+                  "unit": "none"
+                },
+                "overrides": []
+              },
+              "options": {
+                "colorMode": "value",
+                "graphMode": "none",
+                "justifyMode": "auto",
+                "orientation": "auto",
+                "percentChangeColorMode": "standard",
+                "reduceOptions": {
+                  "calcs": [
+                    "lastNotNull"
+                  ],
+                  "fields": "",
+                  "values": false
+                },
+                "showPercentChange": false,
+                "textMode": "auto",
+                "wideLayout": true
+              }
+            },
+            "version": "13.2.1"
+          }
+        }
+      },
+      "panel-241": {
+        "kind": "Panel",
+        "spec": {
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "hidden": false,
+                    "query": {
+                      "datasource": {
+                        "name": "${DS_PROMETHEUS}"
+                      },
+                      "group": "prometheus",
+                      "kind": "DataQuery",
+                      "spec": {
+                        "expr": "screeps_terminal_transfer_energy{resource=\"energy\"}",
+                        "legendFormat": "{{from_room}} → {{to_room}}"
+                      },
+                      "version": "v0"
+                    },
+                    "refId": "A"
+                  }
+                }
+              ],
+              "queryOptions": {},
+              "transformations": []
+            }
+          },
+          "description": "Soma de energia em transferências confirmadas na janela recente do bot (padrão60ticks). Rotas expiradas recebem zero na coleta seguinte e depois deixam de ser exportadas. Não é contador acumulado nem valor instantâneo por transação.",
+          "id": 241,
+          "links": [],
+          "title": "Energia transferida entre salas (janela recente)",
+          "vizConfig": {
+            "group": "timeseries",
+            "kind": "VizConfig",
+            "spec": {
+              "fieldConfig": {
+                "defaults": {
+                  "color": {
+                    "mode": "palette-classic"
+                  },
+                  "custom": {
+                    "axisBorderShow": false,
+                    "axisCenteredZero": false,
+                    "axisColorMode": "text",
+                    "axisLabel": "",
+                    "axisPlacement": "auto",
+                    "barAlignment": 0,
+                    "barWidthFactor": 0.6,
+                    "drawStyle": "bars",
+                    "fillOpacity": 10,
+                    "gradientMode": "none",
+                    "hideFrom": {
+                      "legend": false,
+                      "tooltip": false,
+                      "viz": false
+                    },
+                    "insertNulls": false,
+                    "lineInterpolation": "linear",
+                    "lineWidth": 2,
+                    "pointSize": 5,
+                    "scaleDistribution": {
+                      "type": "linear"
+                    },
+                    "showPoints": "auto",
+                    "showValues": false,
+                    "spanNulls": false,
+                    "stacking": {
+                      "mode": "none",
+                      "group": "A"
                     },
                     "thresholdsStyle": {
                       "mode": "off"
@@ -3888,10 +4121,10 @@
               "transformations": []
             }
           },
-          "description": "Média de CPU por tick dentro da última janela publicada (stats.cpuWindowTicks).",
+          "description": "Média do script até cpuMeter.endTick; exclui finalização posterior do motor.",
           "id": 309,
           "links": [],
-          "title": "CPU médio da janela",
+          "title": "CPU do script (janela medida)",
           "vizConfig": {
             "group": "stat",
             "kind": "VizConfig",
@@ -4053,6 +4286,191 @@
           }
         }
       },
+      "panel-312": {
+        "kind": "Panel",
+        "spec": {
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "hidden": false,
+                    "query": {
+                      "datasource": {
+                        "name": "${DS_PROMETHEUS}"
+                      },
+                      "group": "prometheus",
+                      "kind": "DataQuery",
+                      "spec": {
+                        "editorMode": "code",
+                        "expr": "screeps_market_credits + on(job, instance) ((0.95 * sum by(job, instance) (screeps_resource_amount * on(job, instance, resource) screeps_resource_sell_value)) or on(job, instance) (0 * screeps_market_credits))",
+                        "legendFormat": "A",
+                        "range": true
+                      },
+                      "version": "v0"
+                    },
+                    "refId": "A"
+                  }
+                }
+              ],
+              "queryOptions": {},
+              "transformations": []
+            }
+          },
+          "description": "Requer market.credits no Memory.stats (Game.market.credits).",
+          "id": 312,
+          "links": [],
+          "title": "Patrimônio",
+          "vizConfig": {
+            "group": "stat",
+            "kind": "VizConfig",
+            "spec": {
+              "fieldConfig": {
+                "defaults": {
+                  "color": {
+                    "mode": "thresholds"
+                  },
+                  "decimals": 3,
+                  "mappings": [
+                    {
+                      "options": {
+                        "match": "null+nan",
+                        "result": {
+                          "text": "sem dados"
+                        }
+                      },
+                      "type": "special"
+                    }
+                  ],
+                  "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                      {
+                        "color": "green",
+                        "value": 0
+                      }
+                    ]
+                  },
+                  "unit": "short"
+                },
+                "overrides": []
+              },
+              "options": {
+                "colorMode": "value",
+                "graphMode": "area",
+                "justifyMode": "auto",
+                "orientation": "auto",
+                "percentChangeColorMode": "standard",
+                "reduceOptions": {
+                  "calcs": [
+                    "lastNotNull"
+                  ],
+                  "fields": "",
+                  "values": false
+                },
+                "showPercentChange": false,
+                "textMode": "auto",
+                "wideLayout": true
+              }
+            },
+            "version": "13.2.1"
+          }
+        }
+      },
+      "panel-313": {
+        "kind": "Panel",
+        "spec": {
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "hidden": false,
+                    "query": {
+                      "datasource": {
+                        "name": "${DS_PROMETHEUS}"
+                      },
+                      "group": "prometheus",
+                      "kind": "DataQuery",
+                      "spec": {
+                        "editorMode": "code",
+                        "expr": "deriv(\r\n  (\r\n    screeps_market_credits\r\n    + on(job, instance)\r\n    (\r\n      (\r\n        0.95 * sum by(job, instance) (\r\n          screeps_resource_amount\r\n          * on(job, instance, resource)\r\n          screeps_resource_sell_value\r\n        )\r\n      )\r\n      or on(job, instance) (0 * screeps_market_credits)\r\n    )\r\n  )[24h:2m]\r\n) * 86400",
+                        "legendFormat": "A",
+                        "range": true
+                      },
+                      "version": "v0"
+                    },
+                    "refId": "A"
+                  }
+                }
+              ],
+              "queryOptions": {},
+              "transformations": []
+            }
+          },
+          "description": "",
+          "id": 313,
+          "links": [],
+          "title": "Δ Patrimônio/24h",
+          "vizConfig": {
+            "group": "stat",
+            "kind": "VizConfig",
+            "spec": {
+              "fieldConfig": {
+                "defaults": {
+                  "color": {
+                    "mode": "thresholds"
+                  },
+                  "mappings": [
+                    {
+                      "options": {
+                        "match": "null+nan",
+                        "result": {
+                          "text": "sem dados"
+                        }
+                      },
+                      "type": "special"
+                    }
+                  ],
+                  "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                      {
+                        "color": "green",
+                        "value": 0
+                      }
+                    ]
+                  },
+                  "unit": "short"
+                },
+                "overrides": []
+              },
+              "options": {
+                "colorMode": "value",
+                "graphMode": "area",
+                "justifyMode": "auto",
+                "orientation": "auto",
+                "percentChangeColorMode": "standard",
+                "reduceOptions": {
+                  "calcs": [
+                    "lastNotNull"
+                  ],
+                  "fields": "",
+                  "values": false
+                },
+                "showPercentChange": false,
+                "textMode": "auto",
+                "wideLayout": true
+              }
+            },
+            "version": "13.2.1"
+          }
+        }
+      },
       "panel-4": {
         "kind": "Panel",
         "spec": {
@@ -4174,7 +4592,7 @@
                       "kind": "DataQuery",
                       "spec": {
                         "editorMode": "code",
-                        "expr": "screeps_cpu_used",
+                        "expr": "screeps_stat_value{path=\"cpu.accounting.used\"}",
                         "legendFormat": "CPU usado",
                         "range": true
                       },
@@ -4188,10 +4606,10 @@
               "transformations": []
             }
           },
-          "description": "",
+          "description": "CPU inferida pelo balanço do bucket em ticks consecutivos válidos, janela móvel padrão600ticks. Inclui custos após o fechamento do script. Script observado usa os mesmos ticks pareados. Fronteiras0/10000, gaps e mudança de limite são excluídos; veja cpu.accounting.validTicks/skippedTicks/missingEndTicks. Residual não identifica GC ou serialização isoladamente.",
           "id": 5,
           "links": [],
-          "title": "CPU",
+          "title": "CPU pelo bucket",
           "vizConfig": {
             "group": "gauge",
             "kind": "VizConfig",
@@ -4276,8 +4694,8 @@
                       "group": "prometheus",
                       "kind": "DataQuery",
                       "spec": {
-                        "expr": "screeps_cpu_used",
-                        "legendFormat": "CPU usado"
+                        "expr": "screeps_stat_value{path=\"cpu.accounting.used\"}",
+                        "legendFormat": "CPU pelo bucket (média)"
                       },
                       "version": "v0"
                     },
@@ -4323,16 +4741,35 @@
                     },
                     "refId": "C"
                   }
+                },
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "hidden": false,
+                    "query": {
+                      "datasource": {
+                        "name": "${DS_PROMETHEUS}"
+                      },
+                      "group": "prometheus",
+                      "kind": "DataQuery",
+                      "spec": {
+                        "expr": "screeps_stat_value{path=\"cpu.accounting.scriptUsed\"}",
+                        "legendFormat": "Script observado (pares da janela)"
+                      },
+                      "version": "v0"
+                    },
+                    "refId": "D"
+                  }
                 }
               ],
               "queryOptions": {},
               "transformations": []
             }
           },
-          "description": "",
+          "description": "CPU inferida pelo balanço do bucket em ticks consecutivos válidos, janela móvel padrão600ticks. Inclui custos após o fechamento do script. Script observado usa os mesmos ticks pareados. Fronteiras0/10000, gaps e mudança de limite são excluídos; veja cpu.accounting.validTicks/skippedTicks/missingEndTicks. Residual não identifica GC ou serialização isoladamente.",
           "id": 7,
           "links": [],
-          "title": "CPU usado vs limite",
+          "title": "CPU pelo bucket e script vs limite",
           "vizConfig": {
             "group": "timeseries",
             "kind": "VizConfig",
@@ -4730,239 +5167,6 @@
                   "mode": "multi",
                   "sort": "none"
                 }
-              }
-            },
-            "version": "13.2.1"
-          }
-        }
-      },
-      "panel-235": {
-        "kind": "Panel",
-        "spec": {
-          "data": {
-            "kind": "QueryGroup",
-            "spec": {
-              "queries": [
-                {
-                  "kind": "PanelQuery",
-                  "spec": {
-                    "hidden": false,
-                    "query": {
-                      "datasource": {
-                        "name": "${DS_PROMETHEUS}"
-                      },
-                      "group": "prometheus",
-                      "kind": "DataQuery",
-                      "spec": {
-                        "editorMode": "code",
-                        "expr": "screeps_market_credits + on(job, instance) ((0.95 * sum by(job, instance) (screeps_resource_amount * on(job, instance, resource) screeps_resource_sell_value)) or on(job, instance) (0 * screeps_market_credits))",
-                    "legendFormat": "Patrimônio estimado",
-                        "range": true,
-                        "instant": false
-                      },
-                      "version": "v0"
-                    },
-                    "refId": "A"
-                  }
-                },
-                {
-                  "kind": "PanelQuery",
-                  "spec": {
-                    "hidden": false,
-                    "query": {
-                      "datasource": {
-                        "name": "${DS_PROMETHEUS}"
-                      },
-                      "group": "prometheus",
-                      "kind": "DataQuery",
-                      "spec": {
-                        "editorMode": "code",
-                        "expr": "screeps_market_credits",
-                    "legendFormat": "Créditos disponíveis",
-                        "range": true,
-                        "instant": false
-                      },
-                      "version": "v0"
-                    },
-                    "refId": "B"
-                  }
-                }
-              ],
-              "queryOptions": {},
-              "transformations": []
-            }
-          },
-          "description": "Créditos atuais + 95% do valor dos recursos ao Sell Value (sellPrice da série Sell Value). Inclui stores das estruturas em salas próprias, cargo de creeps/power creeps próprios e recursos de conta. Recursos sem preço não entram no valor; veja o indicador ao lado. Estimativa global, sem filtro de sala, liquidez ou custo de transporte.",
-          "id": 235,
-          "links": [],
-          "title": "Patrimônio estimado em créditos",
-          "vizConfig": {
-            "group": "timeseries",
-            "kind": "VizConfig",
-            "spec": {
-              "fieldConfig": {
-                "defaults": {
-                  "color": {
-                    "mode": "palette-classic"
-                  },
-                  "custom": {
-                    "axisBorderShow": false,
-                    "axisCenteredZero": false,
-                    "axisColorMode": "text",
-                    "axisLabel": "créditos",
-                    "axisPlacement": "auto",
-                    "axisSoftMin": 0,
-                    "barAlignment": 0,
-                    "barWidthFactor": 0.6,
-                    "drawStyle": "line",
-                    "fillOpacity": 10,
-                    "gradientMode": "none",
-                    "hideFrom": {
-                      "legend": false,
-                      "tooltip": false,
-                      "viz": false
-                    },
-                    "insertNulls": false,
-                    "lineInterpolation": "linear",
-                    "lineWidth": 2,
-                    "pointSize": 5,
-                    "scaleDistribution": {
-                      "type": "linear"
-                    },
-                    "showPoints": "auto",
-                    "showValues": false,
-                    "spanNulls": false,
-                    "stacking": {
-                      "group": "A",
-                      "mode": "none"
-                    },
-                    "thresholdsStyle": {
-                      "mode": "off"
-                    }
-                  },
-                  "thresholds": {
-                    "mode": "absolute",
-                    "steps": [
-                      {
-                        "color": "green",
-                        "value": 0
-                      }
-                    ]
-                  },
-                  "unit": "short",
-                  "decimals": 2
-                },
-                "overrides": []
-              },
-              "options": {
-                "legend": {
-                  "calcs": [
-                    "lastNotNull"
-                  ],
-                  "displayMode": "table",
-                  "placement": "bottom",
-                  "showLegend": true
-                },
-                "tooltip": {
-                  "hideZeros": false,
-                  "mode": "multi",
-                  "sort": "none"
-                }
-              }
-            },
-            "version": "13.2.1"
-          }
-        }
-      },
-      "panel-236": {
-        "kind": "Panel",
-        "spec": {
-          "data": {
-            "kind": "QueryGroup",
-            "spec": {
-              "queries": [
-                {
-                  "kind": "PanelQuery",
-                  "spec": {
-                    "hidden": false,
-                    "query": {
-                      "datasource": {
-                        "name": "${DS_PROMETHEUS}"
-                      },
-                      "group": "prometheus",
-                      "kind": "DataQuery",
-                      "spec": {
-                        "expr": "screeps_assets_unpriced_resources",
-                        "legendFormat": "Tipos sem pre?o"
-                      },
-                      "version": "v0"
-                    },
-                    "refId": "A"
-                  }
-                }
-              ],
-              "queryOptions": {},
-              "transformations": []
-            }
-          },
-          "description": "Quantidade de tipos de recurso em estoque sem sellPrice válido. Acima de zero, o patrimônio é uma estimativa parcial. Zero significa que todos os recursos contados têm preço.",
-          "id": 236,
-          "links": [],
-          "title": "Recursos sem Sell Value",
-          "vizConfig": {
-            "group": "stat",
-            "kind": "VizConfig",
-            "spec": {
-              "fieldConfig": {
-                "defaults": {
-                  "color": {
-                    "mode": "thresholds"
-                  },
-                  "decimals": 0,
-                  "mappings": [
-                    {
-                      "options": {
-                        "match": "null+nan",
-                        "result": {
-                          "text": "sem dados"
-                        }
-                      },
-                      "type": "special"
-                    }
-                  ],
-                  "thresholds": {
-                    "mode": "absolute",
-                    "steps": [
-                      {
-                        "color": "green",
-                        "value": 0
-                      },
-                      {
-                        "color": "orange",
-                        "value": 1
-                      }
-                    ]
-                  },
-                  "unit": "none"
-                },
-                "overrides": []
-              },
-              "options": {
-                "colorMode": "value",
-                "graphMode": "none",
-                "justifyMode": "auto",
-                "orientation": "auto",
-                "percentChangeColorMode": "standard",
-                "reduceOptions": {
-                  "calcs": [
-                    "lastNotNull"
-                  ],
-                  "fields": "",
-                  "values": false
-                },
-                "showPercentChange": false,
-                "textMode": "auto",
-                "wideLayout": true
               }
             },
             "version": "13.2.1"
@@ -5541,8 +5745,8 @@
                           "kind": "ElementReference",
                           "name": "panel-231"
                         },
-                        "height": 6,
-                        "width": 4,
+                        "height": 7,
+                        "width": 3,
                         "x": 0,
                         "y": 0
                       }
@@ -5554,9 +5758,9 @@
                           "kind": "ElementReference",
                           "name": "panel-232"
                         },
-                        "height": 6,
-                        "width": 4,
-                        "x": 4,
+                        "height": 7,
+                        "width": 3,
+                        "x": 3,
                         "y": 0
                       }
                     },
@@ -5565,11 +5769,11 @@
                       "spec": {
                         "element": {
                           "kind": "ElementReference",
-                          "name": "panel-234"
+                          "name": "panel-312"
                         },
-                        "height": 6,
-                        "width": 8,
-                        "x": 8,
+                        "height": 7,
+                        "width": 3,
+                        "x": 6,
                         "y": 0
                       }
                     },
@@ -5578,11 +5782,24 @@
                       "spec": {
                         "element": {
                           "kind": "ElementReference",
-                          "name": "panel-233"
+                          "name": "panel-313"
                         },
-                        "height": 6,
-                        "width": 8,
-                        "x": 16,
+                        "height": 7,
+                        "width": 3,
+                        "x": 9,
+                        "y": 0
+                      }
+                    },
+                    {
+                      "kind": "GridLayoutItem",
+                      "spec": {
+                        "element": {
+                          "kind": "ElementReference",
+                          "name": "panel-236"
+                        },
+                        "height": 7,
+                        "width": 3,
+                        "x": 12,
                         "y": 0
                       }
                     },
@@ -5593,10 +5810,10 @@
                           "kind": "ElementReference",
                           "name": "panel-235"
                         },
-                        "height": 8,
-                        "width": 18,
-                        "x": 0,
-                        "y": 6
+                        "height": 7,
+                        "width": 9,
+                        "x": 15,
+                        "y": 0
                       }
                     },
                     {
@@ -5604,12 +5821,25 @@
                       "spec": {
                         "element": {
                           "kind": "ElementReference",
-                          "name": "panel-236"
+                          "name": "panel-234"
                         },
                         "height": 8,
-                        "width": 6,
-                        "x": 18,
-                        "y": 6
+                        "width": 12,
+                        "x": 0,
+                        "y": 7
+                      }
+                    },
+                    {
+                      "kind": "GridLayoutItem",
+                      "spec": {
+                        "element": {
+                          "kind": "ElementReference",
+                          "name": "panel-233"
+                        },
+                        "height": 8,
+                        "width": 12,
+                        "x": 12,
+                        "y": 7
                       }
                     }
                   ]
@@ -5702,7 +5932,7 @@
         "1d"
       ],
       "fiscalYearStartMonth": 0,
-      "from": "now-6h",
+      "from": "now-1h",
       "hideTimepicker": false,
       "timezone": "browser",
       "to": "now"

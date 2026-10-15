@@ -194,6 +194,26 @@ def update_asset_metrics(stats):
     assets_unpriced_resources.set(unpriced)
 
 
+_previous_terminal_routes = set()
+
+
+def update_terminal_metrics(stats):
+    """A snapshot of recent transfers, not a last-event or cumulative gauge."""
+    global _previous_terminal_routes
+    current = {}
+    for transfer in stats.get("terminalNetwork", {}).get("transfers", []):
+        amount = transfer.get("amount", 0)
+        if isinstance(amount, bool) or not isinstance(amount, (int, float)) or not math.isfinite(amount) or amount < 0:
+            continue
+        route = (transfer.get("from", "?"), transfer.get("to", "?"), transfer.get("resourceType", "?"))
+        current[route] = current.get(route, 0) + amount
+    terminal_transfer_energy.clear()
+    # A zero sample closes each expired route before its series disappears.
+    for route in _previous_terminal_routes | current.keys():
+        terminal_transfer_energy.labels(from_room=route[0], to_room=route[1], resource=route[2]).set(current.get(route, 0))
+    _previous_terminal_routes = set(current)
+
+
 def update_metrics():
     stats = fetch_stats()
     if not stats:
@@ -275,12 +295,7 @@ def update_metrics():
         market_sold_credits.labels(resource=resource).set(tx.get("credits", 0))
 
     # --- Terminal Network ---
-    for transfer in stats.get("terminalNetwork", {}).get("transfers", []):
-        terminal_transfer_energy.labels(
-            from_room=transfer.get("from", "?"),
-            to_room=transfer.get("to", "?"),
-            resource=transfer.get("resourceType", "?")
-        ).set(transfer.get("amount", 0))
+    update_terminal_metrics(stats)
 
 
 if __name__ == "__main__":

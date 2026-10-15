@@ -15,6 +15,7 @@ const OFFSETS = {
 };
 const SLOT_NUMBERS = Object.keys(OFFSETS).map(Number);
 const phaseGeometryCache = new Map();
+const perf = { searches: 0, nodes: 0 };
 
 function distance(a, b) {
     return Math.max(Math.abs(OFFSETS[a][0] - OFFSETS[b][0]), Math.abs(OFFSETS[a][1] - OFFSETS[b][1]));
@@ -104,15 +105,19 @@ function planInPlace(tree, built, options) {
 
 function run(reactions, slots, waves) {
     const limit = reactions.length * 3 + 4;
-    let nodes = 0;
+    const guard = { nodes: 0, exhausted: false };
+    const failed = new Set();
+    const orders = { first: byCentre(slots, true), last: byCentre(slots, false), products: reactions.map((r) => r.product) };
     for (let budget = 0; budget <= limit; budget++) {
-        const found = search(reactions, 0, slots, { live: {}, dirty: {}, where: {}, used: {}, wave: -1 }, budget, [], () => ++nodes > 30000, waves);
+        const found = search(reactions, 0, slots, { live: {}, dirty: {}, where: {}, used: {}, wave: -1 }, budget, [], guard, waves, failed, orders);
         if (found) {
+            perf.nodes += guard.nodes;
             const parks = found.reduce((sum, p) => sum + p.ops.filter((o) => o.op === "park").length, 0);
             return { ok: true, moves: budget, mode: parks ? "park" : budget ? "reuse" : "tree", parallel: waves, phases: found };
         }
-        if (nodes > 30000) break;
+        if (guard.exhausted) break;
     }
+    perf.nodes += guard.nodes;
     return { ok: false, reason: slots.length < 3 ? "too-few-labs" : "no-phase-plan" };
 }
 
@@ -122,9 +127,20 @@ function byCentre(slots, centreFirst) {
     return slots.slice().sort((a, b) => (centreFirst ? centre(a) - centre(b) : centre(b) - centre(a)) || a - b);
 }
 
-function search(reactions, index, slots, state, budget, phases, stalled, waves) {
-    if (stalled()) return null;
+function search(reactions, index, slots, state, budget, phases, guard, waves, failed, orders) {
+    if (guard.exhausted) return null;
+    if (++guard.nodes > 30000) { guard.exhausted = true; return null; }
     if (index === reactions.length) return phases;
+    // Different assignment paths can leave the exact same future problem.
+    // Cache only exhaustive failures; the budget and wave occupancy are part
+    // of the key, and a search interrupted by the node guard proves nothing.
+    let dirty = 0, occupied = 0;
+    slots.forEach((s) => {
+        if (state.dirty[s]) dirty |= 1 << s;
+        if (waves && state.wave === reactions[index].wave && state.used[s]) occupied |= 1 << s;
+    });
+    const memoKey = [index, budget, dirty, occupied].concat(orders.products.map((p) => state.where[p] || 0)).join(",");
+    if (failed.has(memoKey)) return null;
     const node = reactions[index];
     // inside a wave no slot is shared between reactions (inputs or output)
     const used = waves && state.wave === node.wave ? state.used : {};
@@ -136,8 +152,8 @@ function search(reactions, index, slots, state, budget, phases, stalled, waves) 
     const root = reactions[reactions.length - 1];
     const isRoot = node === root;
     const feedsRoot = !isRoot && root.inputs.indexOf(node) >= 0;
-    const inOrder = byCentre(slots, isRoot);
-    const outOrder = byCentre(slots, feedsRoot);
+    const inOrder = isRoot ? orders.first : orders.last;
+    const outOrder = feedsRoot ? orders.first : orders.last;
     // choose slots for the two inputs (sub-products already placed, or leaves/reloads)
     function pickInputs(i, chosen, ops, cost, cont) {
         if (i === 2) return cont(chosen, ops, cost);
@@ -148,6 +164,10 @@ function search(reactions, index, slots, state, budget, phases, stalled, waves) 
         const parked = typeof input !== "string";
         for (const s of inOrder) {
             if (!free(s, chosen)) continue;
+            // Swapping two leaf inputs yields the same residual state. The
+            // first ordering is already exhaustive and preserves tie-breaking.
+            if (i === 1 && typeof node.inputs[0] === "string" && typeof input === "string" &&
+                inOrder.indexOf(s) < inOrder.indexOf(chosen[0])) continue;
             const extraCost = (state.dirty[s] ? 1 : 0) + (parked ? 1 : 0);
             if (cost + extraCost > budget) continue;
             const added = [];
@@ -158,7 +178,7 @@ function search(reactions, index, slots, state, budget, phases, stalled, waves) 
         }
         return null;
     }
-    return pickInputs(0, [], [], 0, (inputSlots, ops, cost) => {
+    const result = pickInputs(0, [], [], 0, (inputSlots, ops, cost) => {
         for (const out of outOrder) {
             if (!free(out, inputSlots) || !reaches(out, inputSlots[0], inputSlots[1])) continue;
             const outCost = cost + (state.dirty[out] ? 1 : 0);
@@ -176,7 +196,7 @@ function search(reactions, index, slots, state, budget, phases, stalled, waves) 
             const phase = { product: node.product, inputs: inputSlots, out, ops: phaseOps, wave: waves ? node.wave : index };
             const isRoot = index === reactions.length - 1;
             // keep in place first; parking (storage round trip) only as a fallback
-            const kept = search(reactions, index + 1, slots, next, budget - outCost, phases.concat(phase), stalled, waves);
+            const kept = search(reactions, index + 1, slots, next, budget - outCost, phases.concat(phase), guard, waves, failed, orders);
             if (kept) return kept;
             if (!isRoot && outCost + 2 <= budget) {
                 const parkedState = {
@@ -185,12 +205,14 @@ function search(reactions, index, slots, state, budget, phases, stalled, waves) 
                 };
                 delete parkedState.live[out]; parkedState.where[node.product] = "parked";
                 const parkedPhase = Object.assign({}, phase, { ops: phaseOps.concat({ op: "park", slot: out, item: node.product }) });
-                const result = search(reactions, index + 1, slots, parkedState, budget - outCost - 2, phases.concat(parkedPhase), stalled, waves);
+                const result = search(reactions, index + 1, slots, parkedState, budget - outCost - 2, phases.concat(parkedPhase), guard, waves, failed, orders);
                 if (result) return result;
             }
         }
         return null;
     });
+    if (!result && !guard.exhausted) failed.add(memoKey);
+    return result;
 }
 
 // --- strategies and production time (ROADMAP 0116) ------------------------------------
@@ -251,19 +273,32 @@ function planWide(tree, built) {
 function planPhases(tree, built, options) {
     // Search depends on topology/recipe shape, not batches or cooldowns.
     // Keep immutable search results in the heap and return independent copies.
-    const shape = (node) => typeof node === "string" ? node : [node.product, node.inputs.map(shape)];
+    // Chemistry labels do not change slot geometry. Canonical aliases preserve
+    // repeated-resource identity while sharing the search across equal trees.
+    const aliases = new Map(), resources = {};
+    const alias = (resource) => {
+        if (!aliases.has(resource)) {
+            const id = "r" + aliases.size; aliases.set(resource, id); resources[id] = resource;
+        }
+        return aliases.get(resource);
+    };
+    const shape = (node) => typeof node === "string" ? alias(node) :
+        { product: alias(node.product), inputs: node.inputs.map(shape) };
+    const canonical = shape(tree);
     const parallel = options && options.parallel !== undefined ? options.parallel : config.get("craft.parallelLabs", true);
-    const key = JSON.stringify([shape(tree), built.slice().sort((a, b) => a - b), parallel,
+    const key = JSON.stringify([canonical, built.slice().sort((a, b) => a - b), parallel,
         config.get("craft.parallelExtraMoves", 4)]);
     let geometry = phaseGeometryCache.get(key);
     if (!geometry) {
-        geometry = { base: planInPlace(tree, built, options), wide: planWide(tree, built) };
+        perf.searches++;
+        geometry = { base: planInPlace(canonical, built, options), wide: planWide(canonical, built) };
         phaseGeometryCache.set(key, geometry);
         const cap = Math.max(1, Number(config.get("craft.phaseCacheEntries", 128)) || 128);
         if (phaseGeometryCache.size > cap) phaseGeometryCache.delete(phaseGeometryCache.keys().next().value);
     }
     const copy = (plan) => plan && ({ ...plan, ...(plan.phases ? { phases: plan.phases.map((p) => ({ ...p,
-        inputs: p.inputs.slice(), ops: p.ops.map((op) => ({ ...op })) })) } : {}) });
+        product: resources[p.product], inputs: p.inputs.slice(), ops: p.ops.map((op) => ({ ...op,
+            ...(op.item ? { item: resources[op.item] } : {}) })) })) } : {}) });
     const base = copy(geometry.base);
     const work = options && options.work;
     if (!work) return base;
@@ -297,6 +332,7 @@ function finalOutputs(built, inputs, out) {
 }
 
 module.exports = {
+    perf,
     OFFSETS, SLOT_NUMBERS, distance, reaches, resolve, treeFromSteps,
     planPhases, planWide, workFromSteps, wideOutputs, finalOutputs,
     resetCache() { Object.keys(cache).forEach((k) => delete cache[k]); phaseGeometryCache.clear(); },

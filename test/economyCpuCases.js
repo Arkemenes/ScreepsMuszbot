@@ -150,12 +150,12 @@ module.exports = function (project, assert) {
         Object.defineProperty(phaseTree, "inputs", { enumerable: true, get() { shapeReads++; return rootInputs; } });
         const smallPhases = slots.planPhases(phaseTree, slots.SLOT_NUMBERS,
             { work: slots.workFromSteps(phaseSteps, phaseRecipe) });
-        const firstReads = shapeReads;
+        const firstSearches = slots.perf.searches;
         shapeReads = 0;
         const resizedSteps = phaseSteps.map((s) => ({ ...s, batches: 40 }));
         const resizedPhases = slots.planPhases(phaseTree, slots.SLOT_NUMBERS,
             { work: slots.workFromSteps(resizedSteps, phaseRecipe) });
-        assert(smallPhases.ok && resizedPhases.ok && resizedPhases.T > smallPhases.T && shapeReads < firstReads,
+        assert(smallPhases.ok && resizedPhases.ok && resizedPhases.T > smallPhases.T && slots.perf.searches === firstSearches,
             "ARK-116: resizing a lab lot reuses geometric search while updating production time");
         const originalPhases = JSON.stringify(resizedPhases);
         resizedPhases.phases[0].inputs[0] = -99;
@@ -168,9 +168,10 @@ module.exports = function (project, assert) {
         assert(slots.planPhases(phaseTree, slots.SLOT_NUMBERS, { work: slowerWork }).T > intact.T,
             "ARK-116: cooldown changes still update timing with cached geometry");
         Memory.settings.craft.parallelLabs = false;
+        const beforeSequential = slots.perf.searches;
         shapeReads = 0;
         const sequential = slots.planPhases(phaseTree, slots.SLOT_NUMBERS, { work: resizedWork, strategy: "waves" });
-        assert(sequential.ok && !sequential.parallel && sequential.strategy === "waves" && shapeReads > 1,
+        assert(sequential.ok && !sequential.parallel && sequential.strategy === "waves" && slots.perf.searches > beforeSequential,
             "ARK-116: parallel settings invalidate search and explicit strategy remains live");
         delete Memory.settings.craft.parallelLabs;
         const partial = slots.planPhases(phaseTree, [1, 2, 3], { work: resizedWork });
@@ -181,8 +182,9 @@ module.exports = function (project, assert) {
         slots.planPhases(phaseTree, slots.SLOT_NUMBERS, { work: resizedWork });
         slots.planPhases(phaseTree, [1, 2, 3], { work: resizedWork });
         shapeReads = 0;
+        const beforeEvicted = slots.perf.searches;
         slots.planPhases(phaseTree, slots.SLOT_NUMBERS, { work: resizedWork });
-        assert(shapeReads > 1, "ARK-116: phase geometry cache evicts at its configured bound");
+        assert(slots.perf.searches > beforeEvicted, "ARK-116: phase geometry cache evicts at its configured bound");
         delete Memory.settings.craft.phaseCacheEntries;
         const core = load("src/utils/labPlanModel"), originalEvaluate = core.evaluate, originalCpu = Game.cpu;
         let virtualCpu = 0, modelSteps = 0;
@@ -197,7 +199,16 @@ module.exports = function (project, assert) {
                 labs: [], stock: { ...research.rawStock(item.product, 100), CPU_BUDGET_PROBE: Game.time },
                 bandwidth: 4, delay: 50, buffer: 500, refillRatio: 0.5 };
             const budgetJob = policy.request(item, budgetScenario, false);
-            policy.poll(budgetJob);
+            const filter = Array.prototype.filter;
+            let candidateFilters = 0;
+            Array.prototype.filter = function (...args) {
+                if (this[0] && typeof this[0] === "object" && "generator" in this[0]) candidateFilters++;
+                return filter.apply(this, args);
+            };
+            try { policy.poll(budgetJob); }
+            finally { Array.prototype.filter = filter; }
+            assert(candidateFilters === 1,
+                "ARK-128: a policy poll filters candidate generators once rather than once per simulation step");
             assert(modelSteps === 2 && virtualCpu < 1.3,
                 "ARK-116: expensive simulation steps stop at the first exhausted per-tick CPU budget");
             policy.poll(budgetJob);

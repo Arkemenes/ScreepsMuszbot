@@ -126,11 +126,13 @@ function exportStats() {
     const interval = Math.max(1, Number(config.get("stats.publishInterval", 60)) || 60);
     const last = Memory.stats && Memory.stats.time;
     if (interval > 1 && globalResetSeen && last !== undefined && Game.time >= last && Game.time - last < interval) {
+        Memory.stats.terminalNetwork = terminalOps.terminalNetworkStats(Memory.stats.terminalNetwork);
         const fresh = cpuMeter.snapshot();
         if (Memory.stats.cpu) {
             Memory.stats.cpu.bucket = Game.cpu.bucket;
             Memory.stats.cpu.limit = Game.cpu.limit;
             Memory.stats.cpu.used = Game.cpu.getUsed();
+            Memory.stats.cpu.accounting = cpuMeter.accounting();
             if (fresh && Memory.stats.cpu.meter !== fresh) Memory.stats.cpu.meter = fresh;
         }
         return;
@@ -141,6 +143,7 @@ function exportStats() {
     // the CPU meter publishes a window every N ticks; between a global reset and the
     // first window the last published one is kept instead of leaving a gap in Grafana
     const previousMeter = Memory.stats && Memory.stats.cpu && Memory.stats.cpu.meter;
+    const previousNetwork = Memory.stats && Memory.stats.terminalNetwork;
 
     // Reset stats object
     Memory.stats = {
@@ -188,7 +191,7 @@ function exportStats() {
     // for real now. Source is terminalOps' own event log, not Game.market,
     // so no extra guard is needed here.
     Memory.stats.market.transactions = terminalOps.marketTransactionStats();
-    Memory.stats.terminalNetwork = { transfers: terminalOps.terminalTransferStats() };
+    Memory.stats.terminalNetwork = terminalOps.terminalNetworkStats(previousNetwork);
 
     // ROADMAP 0096: publish only liquid resources so the Grafana-facing
     // Memory snapshot stays sparse while the expensive calculation remains
@@ -260,6 +263,7 @@ function exportStats() {
     Memory.stats.cpu.bucket = Game.cpu.bucket;
     Memory.stats.cpu.limit = Game.cpu.limit;
     Memory.stats.cpu.used = Game.cpu.getUsed();
+    Memory.stats.cpu.accounting = cpuMeter.accounting();
     const meter = cpuMeter.snapshot() || previousMeter;
     if (meter) Memory.stats.cpu.meter = meter;
 }

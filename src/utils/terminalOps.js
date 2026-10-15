@@ -106,6 +106,10 @@ function lockConflict(kind, from, to, resourceType, automatic, options) {
         // two operations on the same marketOnly resource still conflict no
         // matter which room they were issued from.
         if (marketOnlyResource(resourceType) || marketOnlyResource(op.resourceType)) return op.resourceType === resourceType;
+        // Independent inbound lots do not spend the receiver's future BUY.
+        // The sender still funds cargo/freight from its current physical stock.
+        if (kind === "transfer" && automatic && op.kind === "buy" && op.sourceRoom === to &&
+            op.resourceType === resourceType) return false;
         // Named incoming requests and disjoint sales reserve quantities, not a room lock.
         if (options && options.owner && (sameFrom || sameTo) && op.resourceType === resourceType &&
             (kind === "buy" || kind === "sell" && op.kind === "sell")) {
@@ -201,6 +205,7 @@ function conflictResult(kind, roomName, resourceType, options) {
 function saleAvailable(source, resource, owner, includeTerminal = true) {
     const physical = claims.physicalFree(source, source.storage, resource, null, owner) +
         (includeTerminal ? claims.physicalFree(source, source.terminal, resource, null, owner) : 0);
+    if (physical <= 0) return 0;
     const committed = stockPolicy.commitments(source, claims.key(owner))[resource] || 0;
     const uncommitted = Math.max(0, storeValue(source.storage.store, resource) + (includeTerminal ? storeValue(source.terminal.store, resource) : 0) - committed -
         claims.withdrawn(source.storage, resource) - (includeTerminal ? claims.withdrawn(source.terminal, resource) : 0));
@@ -1308,38 +1313,20 @@ function completeReceipt(op) {
         }
     }
 }
-// Index of operation ids that may still be active. Walking every stored
-// operation (finished ones stay for operationRetentionTicks) several times a
-// tick was most of terminalOps' CPU. Rebuilt - and finished operations
-// garbage-collected - when the stored set changes (create() bumps nextId),
-// and at least every INDEX_REFRESH_TICKS as a fallback. Consumers still check
-// active(), so an op finishing mid-tick is harmless.
+// GC cadence remains independent from terminalIndex's per-tick membership.
+// create() bumps nextId; archived history is retained while a live chain needs it.
 const INDEX_REFRESH_TICKS = 60;
-const activeIndex = { ops: null, nextId: -1, tick: -Infinity, ids: [] };
+const activeIndex = { ops: null, nextId: -1, tick: -Infinity };
 function activeIds() {
     const mem = memory();
     if (activeIndex.ops !== mem.operations || activeIndex.nextId !== mem.nextId || Game.time - activeIndex.tick >= INDEX_REFRESH_TICKS || Game.time < activeIndex.tick) {
         gcOperations();
         activeIndex.ops = mem.operations; activeIndex.nextId = mem.nextId; activeIndex.tick = Game.time;
-        activeIndex.ids = Object.keys(mem.operations).filter((id) => active(mem.operations[id]));
     }
-    return activeIndex.ids;
+    return require("./terminalIndex").all().map((op) => op.id);
 }
 function gcOperations() {
-    const retention = config.get("terminalOps.operationRetentionTicks", 10000);
-    Object.keys(memory().operations).forEach((id) => {
-        const op = operation(id);
-        const linked = Object.values(Memory.craft && Memory.craft.active || {}).some((c) => (c.tradeIds || []).includes(id) || c.sellOpId === id || c.partialOpId === id || c.energyOpId === id || c.energyTransferId === id || Object.values(c.buys || {}).some((b) => b.opId === id));
-        if (!linked && op && FINAL_STATES.indexOf(op.state) >= 0 && Game.time - (op.updatedTick || op.createdTick || Game.time) >= retention) delete memory().operations[id];
-    });
-    const targets = memory().lotTargets || {};
-    if (!Object.keys(targets).length) return;
-    const liveOwners = new Set(Object.values(memory().operations).filter(active).map((op) => claims.owner(op)));
-    const chains = Memory.craft && Memory.craft.active || {};
-    Object.values(chains).forEach((c) => liveOwners.add("craft:" + (c.ownerId || c.id)));
-    Object.keys(targets).forEach((key) => {
-        if (Game.time - targets[key].updatedTick >= retention && !Array.from(liveOwners).some((owner) => key.startsWith(owner + ":"))) delete targets[key];
-    });
+    require("./terminalHistory").prune(memory());
 }
 const perf = {};
 function phase(name, fn) {
@@ -1625,18 +1612,38 @@ function terminalTransferStats() {
     });
     return Object.keys(byPair).map((key) => byPair[key]);
 }
+let networkCache = null;
+// Explicit zeros also work with exporters that only set labels present in a snapshot.
+// Cache the derived route map until a new event, expiry, configuration change or reset.
+function terminalNetworkStats(previous) {
+    const mem = memory(), window = config.get("terminalOps.statsWindowTicks", 60);
+    if (networkCache && networkCache.events === mem.events && networkCache.count === mem.events.length &&
+        networkCache.window === window && previous === networkCache.snapshot &&
+        Game.time >= networkCache.tick && Game.time < networkCache.expires) return networkCache.snapshot;
+    const routes = new Map();
+    const key = (t) => t.from + ">" + t.to + ":" + t.resourceType;
+    (previous && previous.transfers || []).forEach((t) => routes.set(key(t), { from: t.from, to: t.to, resourceType: t.resourceType, amount: 0 }));
+    terminalTransferStats().forEach((t) => routes.set(key(t), t));
+    let expires = Infinity;
+    mem.events.forEach((event) => {
+        if (event.kind === "transfer") expires = Math.min(expires, event.tick + window);
+    });
+    const snapshot = { transfers: Array.from(routes.values()) };
+    networkCache = { events: mem.events, count: mem.events.length, window, snapshot, tick: Game.time, expires };
+    return snapshot;
+}
 // Read-only quote: the relay executor is a separate, planned phase (0125).
 const terminalRouting = require("./terminalRouting");
 global.terminalRelayQuote = terminalRouting.quote;
 global.terminalTransfer = function () { return announce("terminalTransfer", transfer.apply(null, arguments)); };
 global.terminalBuy = buy;
 global.terminalSell = sell;
-global.terminalOperations = () => JSON.stringify(Object.keys(memory().operations).map(operation), null, 2);
+global.terminalOperations = (options) => JSON.stringify(Object.keys(memory().operations).map(operation)
+    .filter((op) => options && options.includeFinalized || active(op)), null, 2);
 global.cancelTerminalOperation = cancel;
-// One operation by id (terminalOperations() lists all of them, finished ones
-// included, which is far too long to read in the console).
+// One retained operation by id. The list defaults to active operations.
 global.terminalOperation = (id) => {
     const op = operation(id);
     return op ? JSON.stringify(op, null, 2) : "[terminalOps] operação desconhecida: " + id;
 };
-module.exports = { perf, lockConflict, transfer, buy, sell, sellLot, saleAvailable, evaluatePurchase: purchaseCost.evaluate, cancel, tick, runHauler, operation, activeForRoom, txCost, stats, marketTransactionStats, terminalTransferStats };
+module.exports = { perf, lockConflict, transfer, buy, sell, sellLot, saleAvailable, evaluatePurchase: purchaseCost.evaluate, cancel, tick, runHauler, operation, activeForRoom, txCost, stats, marketTransactionStats, terminalTransferStats, terminalNetworkStats };

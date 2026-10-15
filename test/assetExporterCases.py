@@ -44,3 +44,43 @@ assert stock.values == {(("resource", "O"),): 3} and prices.values == {} and cov
 update({"assets": {"resources": {}}, "market": {}})
 assert stock.values == {} and prices.values == {} and coverage.values[()] == 0
 print("asset exporter checks passed")
+
+# Accounting scalars use the existing generic collector; no new network poll.
+import json
+functions = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in ("_generic_stats", "update_generic_metrics")]
+values, info = Gauge(), Gauge()
+env = dict(math=math, CPU_METER_GROUPS=(), generic_stat_value=values, generic_stat_info=info)
+exec(compile(ast.Module(body=functions, type_ignores=[]), "exporter.py", "exec"), env)
+env["update_generic_metrics"]({"cpu": {"accounting": {"used": 20, "scriptUsed": 16, "residual": 4, "validTicks": 60}}})
+by_path = {dict(key)["path"]: value for key, value in values.values.items()}
+assert by_path["cpu.accounting.used"] == 20 and by_path["cpu.accounting.scriptUsed"] == 16 and by_path["cpu.accounting.residual"] == 4
+env["update_generic_metrics"]({"cpu": {"accounting": {"used": None, "validTicks": 0}}})
+assert all(dict(key)["path"] != "cpu.accounting.used" for key in values.values)
+dashboard = json.loads(Path(sys.argv[1], "grafana.json").read_text(encoding="utf-8"))
+queries = dashboard["spec"]["elements"]["panel-7"]["spec"]["data"]["spec"]["queries"]
+assert queries[0]["spec"]["query"]["spec"]["expr"] == 'screeps_stat_value{path="cpu.accounting.used"}'
+assert next(q for q in queries if q["spec"]["refId"] == "D")["spec"]["query"]["spec"]["expr"] == 'screeps_stat_value{path="cpu.accounting.scriptUsed"}'
+print("CPU accounting exporter/dashboard checks passed")
+
+terminal = Gauge()
+function = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "update_terminal_metrics")
+env = dict(math=math, terminal_transfer_energy=terminal, _previous_terminal_routes=set())
+exec(compile(ast.Module(body=[function], type_ignores=[]), "exporter.py", "exec"), env)
+update = env["update_terminal_metrics"]
+sample = {"terminalNetwork": {"transfers": [{"from": "A", "to": "B", "resourceType": "energy", "amount": 100}]}}
+update(sample); update(sample)
+assert list(terminal.values.values()) == [100]
+update({"terminalNetwork": {"transfers": []}})
+assert list(terminal.values.values()) == [0]
+update({"terminalNetwork": {"transfers": []}})
+assert terminal.values == {} and env["_previous_terminal_routes"] == set()
+update({"terminalNetwork": {"transfers": [
+    {"from": "A", "to": "B", "resourceType": "energy", "amount": 20},
+    {"from": "A", "to": "B", "resourceType": "O", "amount": 30}]}})
+assert sorted(terminal.values.values()) == [20, 30]
+print("Terminal network expiration/idempotency/resource checks passed")
+panel = dashboard["spec"]["elements"]["panel-241"]["spec"]
+query = panel["data"]["spec"]["queries"][0]["spec"]["query"]["spec"]
+assert query["expr"] == 'screeps_terminal_transfer_energy{resource="energy"}'
+assert query["legendFormat"] == "{{from_room}} → {{to_room}}"
+print("Terminal network dashboard query/labels checks passed")

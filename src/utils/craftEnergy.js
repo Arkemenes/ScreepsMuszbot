@@ -28,6 +28,7 @@ function ready(room, chain, item) {
     }
     const ops = require("./terminalOps");
     const op = chain.energyOpId && ops.operation(chain.energyOpId);
+    const previousWait = chain.energyWait;
     chain.energyWait = { reason: "energy-deficit", needed, held, available: Math.max(0, pool - floor), deficit,
         reserve: floor, since: chain.energyWait && chain.energyWait.since || Game.time };
     const replenishment = ops.activeForRoom(room.name).find((p) => p.resourceType === RESOURCE_ENERGY &&
@@ -40,7 +41,14 @@ function ready(room, chain, item) {
         }
         return false;
     }
-    if (chain.energyCheckTick && Game.time - chain.energyCheckTick < config.get("craft.energyRetryTicks", 30)) return false;
+    if (chain.energyCheckTick && Game.time - chain.energyCheckTick < config.get("craft.energyRetryTicks", 30)) {
+        if (previousWait && ["energy-margin-budget", "energy-no-offer", "energy-no-quote", "energy-buy-refused"].includes(previousWait.reason)) {
+            chain.energyWait.reason = previousWait.reason;
+            if (previousWait.economics) chain.energyWait.economics = previousWait.economics;
+            if (previousWait.detail) chain.energyWait.detail = previousWait.detail;
+        }
+        return false;
+    }
     chain.energyCheckTick = Game.time;
     const snapshot = market.snapshot();
     if (!snapshot) { chain.energyWait.reason = "energy-no-quote"; return false; }
@@ -54,14 +62,25 @@ function ready(room, chain, item) {
     // Preserve the room floor: funding only the recipe while the room is empty
     // would leave the factory blocked by the ordinary logistics reserve gate.
     const net = Math.ceil(deficit + Math.max(0, floor - pool));
+    const economics = chain.energyWait.economics = { checkedTick: Game.time, recipeDeficit: deficit,
+        reserveDeficit: Math.max(0, floor - pool), netNeeded: net, knownCost, known: totals.known,
+        spent: totals.spent, energyPrice, budget, donors: [] };
     // An internal sender can bootstrap an empty receiver. Do not disturb
     // existing factory work or spend another owner's energy.
-    const source = Object.values(Game.rooms || {}).find((r) => r.name !== room.name && r.controller && r.controller.my && r.storage && r.terminal &&
-        r.storage.store.getCapacity && claims.physicalFree(r, r.storage, RESOURCE_ENERGY) - require("./resourceTiers").reserveFloor(r) >=
-            net + ops.txCost(net, r.name, room.name));
-    if (source && totals.known && net * energyPrice + ops.txCost(net, source.name, room.name) * energyPrice <= budget) {
-        const sent = ops.transfer(source.name, room.name, RESOURCE_ENERGY, net, { automatic: true, owner: { kind: "craft", id: (chain.ownerId || chain.id) }, reason: "craft-energy-recovery", recoveryUnitPrice: energyPrice });
+    const sources = Object.values(Game.rooms || {}).filter((r) => r.name !== room.name && r.controller && r.controller.my && r.storage && r.terminal && r.storage.store.getCapacity)
+        .map((r) => {
+            const available = claims.physicalFree(r, r.storage, RESOURCE_ENERGY) - require("./resourceTiers").reserveFloor(r);
+            const freight = ops.txCost(net, r.name, room.name);
+            return { room: r.name, available, freight, cost: (net + freight) * energyPrice };
+        }).filter((s) => Number.isFinite(s.freight) && s.freight >= 0 && s.available >= net + s.freight)
+        .sort((a, b) => a.cost - b.cost || a.room.localeCompare(b.room));
+    for (const source of sources) {
+        const diagnostic = { ...source, reason: !totals.known ? "unknown-cost" : !(energyPrice > 0) ? "no-energy-reference" : source.cost > budget ? "margin-budget" : "eligible" };
+        economics.donors.push(diagnostic);
+        if (diagnostic.reason !== "eligible") continue;
+        const sent = ops.transfer(source.room, room.name, RESOURCE_ENERGY, net, { automatic: true, owner: { kind: "craft", id: (chain.ownerId || chain.id) }, reason: "craft-energy-recovery", recoveryUnitPrice: energyPrice });
         if (sent.ok) { chain.energyTransferId = sent.id; chain.energyWait.reason = "energy-transfer-pending"; chain.energyWait.opId = sent.id; return false; }
+        diagnostic.reason = sent.error;
     }
     if (pool <= 0) {
         chain.energyWait.bootstrap = "await-local-energy-or-internal-transfer";
@@ -71,6 +90,8 @@ function ready(room, chain, item) {
             (conversion.components.energy || 0) > pool ? "conversion-bootstrap-energy" : "conversion-not-selected";
     }
     const quote = require("./craftPurchaseBook").create(snapshot).quoteNet(room.name, RESOURCE_ENERGY, net);
+    economics.quote = { ok: quote.ok, reason: quote.reason, quantity: quote.quantity, netAmount: quote.netAmount,
+        cost: quote.cost, effective: quote.unit, ceiling: quote.ceiling };
     const conversion = typeof COMMODITIES !== "undefined" && COMMODITIES.energy;
     if (!item.started && conversion && conversion.components && conversion.amount > (conversion.components.energy || 0) &&
         net <= conversion.amount - (conversion.components.energy || 0) && pool - floor >= (conversion.components.energy || 0)) {

@@ -3,7 +3,68 @@
 Uma foto de como o bot está montado hoje. Atualize sempre que uma feature mudar
 a forma do sistema.
 
+## Coordenação econômica e CPU (0138 / ARK-128)
+
+Telemetria de rotas (0141follow-up): terminalNetworkStats retorna zeros
+explícitos por rota expirada, inclusive em exporter legado. O caminho leve
+de stats consulta cache por identidade/contagem de eventos, configuração e
+prazo; agrega somente em mudança/expiração. Labels prévios sobrevivem via
+snapshot persistido, sem retenção adicional de transações.
+cpuMeter (0144) expõe endpoints Game.time e total medido desde reset além da
+janela parcial de publicação; cpuTop explicita ambas as contagens.
+
+terminalHistory (0143/ARK-131) coleta operações finais sem dependentes na
+cadência existente60ticks ou mudança de nextId. Retenção padrão0, configurável
+em terminalOps.operationRetentionTicks. Set de vínculos protege craft/flip,
+owners em migração, intents/listings, jobs via census e pais transitivos de
+recibos. Totais contábeis/eventos recentes/seenIncoming permanecem intactos;
+lotTargets órfãos acompanham a liberação do proprietário. terminalOperations
+mostra ativas; {includeFinalized:true} inclui finais ainda retidas.
+
+craftLedger.sync (0142) compara os valores atuais dos registros econômicos e
+aplica somente deltas de quantidade/custo. Consultas repetidas não reescrevem
+inventário nem recriam snapshots; taxas/preço justo/confiança e recebimentos
+mudando no mesmo tick continuam visíveis. Não existe cache temporal de saldos.
+
+Terminal Network (0141): exporter publica a soma recente de transferências
+por rota/recurso; rota expirada recebe zero uma coleta e então desaparece.
+Painel241 filtra energy e usa from_room/to_room. Trata-se de janela recente
+(padrão60ticks), não contador cumulativo; a janela pode perder eventos entre
+coletas. Aplicar exporter/Grafana externo é independente do build do bot.
+
+terminalIndex compartilha membership de operações ativas no heap por
+tick/dicionário/nextId. Consumidores leem quantidades/estado/intents ao vivo;
+commitments reutiliza a lista local da consulta. GC preserva operações
+vinculadas a cadeias e mantém cadência independente do índice.
+craftPlanner separa atualização fina de políticas dos labs da cadência de
+cadeias convencionais/recuperação. Um resultado provisório de warming é
+reavaliado quando market.historyReady passa a verdadeiro; craftStatus inclui
+prontidão do scan/histórico, contagens e diagnóstico de segmentos.
+labSlots compartilha geometria entre árvores com aliases canônicos e memoiza
+falhas exaustivas durante a busca, respeitando guard e configuração. Respostas
+reconstituem química e copiam arrays; tempo usa quantidade/cooldown atuais.
+labPolicy.poll compartilha lista de generators dentro da chamada e preserva
+ordem e orçamento. Investigação/antes-depois: docs/economy-cpu-2026-10-14.md.
+
+Reposição de energia (0139): transferência automática de material físico pode
+coexistir com BUY no destinatário; continuam valendo conflitos entre envios,
+claims e custeio do remetente. craftEnergy ordena doadores elegíveis por custo
+total/material+frete, tenta alternativas recusadas e preserva orçamento.
+energyWait.economics informa última verificação, déficit da receita/reserva,
+necessidade líquida, orçamento, custos dos doadores e quote de mercado.
+Cooldown de reavaliação conserva último motivo econômico, sem fingir nova análise.
+
 ## Build
+
+Medição de CPU (0140): cpuMeter continua medindo o script até endTick, antes
+dos wrappers e fechamento/serialização do motor. cpuAccounting.begin/end
+pareia a leitura com o balanço do bucket no tick seguinte. Ring no heap de
+600intervalos configuráveis mantém somas reversíveis/O(1); ignora fronteiras,
+gaps e mudança de limite, contando falta de end sem apagar o débito inferido.
+Memory.stats.cpu.accounting e cpuTop expõem custo inferido, par observado,
+residual sem atribuição, folga e cobertura. Exporter genérico lê os novos
+escalares; consultas locais do grafana.json comparam médias pareadas. Aplicar
+o dashboard no Grafana externo é separado do build do bot.
 
 `src/main.js` é a entrada. O `grunt` (`grunt-scripts/mergeFiles.js`,
 `module-concat`) empacota o grafo de `require` em `dist/main.js`, que é o que o
@@ -814,6 +875,27 @@ lazy por sala/tick em `derived`, a partir de `roomCache.structuresByType`.
 O fast gate de grandes drops ignora essas pilhas, preservando picks cacheados
 de links; pickups cacheados são revalidados contra o índice. Sem nova coleta
 de estruturas, sem `lookForAt` e sem Memory. A ordem restante é preservada.
+
+## Insumos recuperados e custo atribuível (0137 / ARK-127)
+
+O pool recovered é reconciliado contra estoque físico/cargo após commitments de
+ativos, listings e recebimentos. Uma unidade não lastreia dois registros. Base
+confirmada tem prioridade por recurso; redução física move quantidades/base para
+unassignedItems/unassignedCosts, preservando historicalSpent. Não altera reservas
+de terceiros. A política nova força uma única reavaliação de candidatos.
+
+`recoveredBasis` retorna custo incremental acima da oportunidade já incluída,
+allocations por origem/recurso/qty/base/confiança e increments por recurso.
+Gasto total estimated de um abort legado não prova custo do recurso residual:
+permanece histórico, sem ser somado integralmente à próxima receita. Sem preço
+de oportunidade nem custo comprovado, há espera explícita por custo desconhecido.
+Planner e abertura usam o mesmo incremento; a abertura revalida somente a diferença.
+
+Adoção precede publicação do novo claim e possui recibo idempotente em
+recoveredAdoptions (retenção recoveredKeep; ativos protegidos). inventory recebe
+incremento no recurso correto. estimatedCosts propaga incerteza dos componentes
+ao produto; abort/finish preservam costConfidence por recurso e lucro desconhecido
+não vira confirmado. Custos conhecidos altos ainda podem vetar margem.
 
 ## Intents de mercado e retentativa (0136 / ARK-126)
 

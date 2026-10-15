@@ -6,13 +6,16 @@ function structures(room) { return cache.structuresByType(room, STRUCTURE_FACTOR
 function physical(room, r) { return value(room.storage, r) + value(room.terminal, r) + structures(room).reduce((n, s) => n + value(s, r), 0); }
 function consume(c, r, q) {
     const recipe = require("./marketPricing").recipeOf(r);
-    let basis = 0;
+    let basis = 0, estimated = false;
     if (recipe) Object.keys(recipe.components).forEach((k) => {
         const used = q / recipe.amount * recipe.components[k], balance = c.inventory.balances[k] || 0;
+        if (used > 0 && balance > 0 && c.inventory.estimatedCosts && c.inventory.estimatedCosts[k]) estimated = true;
         const cost = balance > 0 ? (c.inventory.costs[k] || 0) * Math.min(1, used / balance) : 0;
         basis += cost; c.inventory.costs[k] = Math.max(0, (c.inventory.costs[k] || 0) - cost);
         c.inventory.balances[k] = balance - used;
+        if (c.inventory.estimatedCosts && c.inventory.balances[k] <= 0) delete c.inventory.estimatedCosts[k];
     });
+    if (estimated) c.inventory.estimatedCosts[r] = true;
     return basis;
 }
 function ensure(c, owns) {
@@ -94,31 +97,40 @@ function sync(c) {
     ids.forEach((id) => {
         const op = ops[id]; if (!op) return;
         const a = economic(op);
-        economicOps[id] = { kind: op.kind, resource: op.resourceType, credits: a.credits, energy: a.energy,
-            fees: op.marketFees || 0, amount: a.amount, confidence: op.feeHistoryEstimated ? "incomplete" : a.confidence };
+        const energy = op.kind === "transfer" && op.targetRoom === c.room ? op.sentAmount > 0 ? op.transactionCost || 0 : 0 : a.energy;
+        const fees = op.marketFees || 0, confidence = op.feeHistoryEstimated ? "incomplete" : a.confidence;
+        const previousEconomic = economicOps[id];
+        if (!previousEconomic || previousEconomic.kind !== op.kind || previousEconomic.resource !== op.resourceType ||
+            previousEconomic.credits !== a.credits || previousEconomic.energy !== energy || previousEconomic.fees !== fees ||
+            previousEconomic.amount !== a.amount || previousEconomic.confidence !== confidence)
+            economicOps[id] = { kind: op.kind, resource: op.resourceType, credits: a.credits, energy,
+                fees, amount: a.amount, confidence };
         const q = op.kind === "buy" ? op.resourceType === RESOURCE_ENERGY ?
             op.netBought === undefined ? Math.max(0, (op.dealtAmount || 0) - (op.transactionCost || 0)) : op.netBought : op.dealtAmount || 0 : op.dealtAmount || 0;
         const seen = op.kind === "buy" ? inv.buys : inv.sales;
         if (op.kind === "transfer" && op.targetRoom === c.room) {
             const received = op.receivedAmount || 0, previous = inv.buys[id] || 0;
-            inv.balances[op.resourceType] = (inv.balances[op.resourceType] || 0) + received - previous;
-            c.ownCost = (c.ownCost || 0) + (received - previous) * (op.recoveryUnitPrice || 0);
-            inv.costs[op.resourceType] = (inv.costs[op.resourceType] || 0) + (received - previous) * (op.recoveryUnitPrice || 0);
-            inv.buys[id] = received;
-            economicOps[id].energy = op.sentAmount > 0 ? op.transactionCost || 0 : 0;
+            if (received !== previous) {
+                inv.balances[op.resourceType] = (inv.balances[op.resourceType] || 0) + received - previous;
+                c.ownCost = (c.ownCost || 0) + (received - previous) * (op.recoveryUnitPrice || 0);
+                inv.costs[op.resourceType] = (inv.costs[op.resourceType] || 0) + (received - previous) * (op.recoveryUnitPrice || 0);
+            }
+            if (inv.buys[id] !== received) inv.buys[id] = received;
         }
         if (["buy", "sell"].includes(op.kind)) {
             if (op.kind === "buy") {
                 const cost = -a.credits + (op.marketFees || 0) + (op.resourceType === RESOURCE_ENERGY ? 0 : a.energy * (op.energyFairPrice || 0));
-                inv.costs[op.resourceType] = (inv.costs[op.resourceType] || 0) + cost - (inv.costSeen[id] || 0);
-                inv.costSeen[id] = cost;
-            } else {
+                if (cost !== (inv.costSeen[id] || 0))
+                    inv.costs[op.resourceType] = (inv.costs[op.resourceType] || 0) + (cost - (inv.costSeen[id] || 0));
+                if (inv.costSeen[id] !== cost) inv.costSeen[id] = cost;
+            } else if (q !== (seen[id] || 0)) {
                 const balance = inv.balances[op.resourceType] || 0;
                 const basis = balance > 0 ? (inv.costs[op.resourceType] || 0) * Math.min(1, Math.max(0, q - (seen[id] || 0)) / balance) : 0;
                 inv.soldBasis += basis; inv.costs[op.resourceType] = Math.max(0, (inv.costs[op.resourceType] || 0) - basis);
             }
-            inv.balances[op.resourceType] = (inv.balances[op.resourceType] || 0) + (q - (seen[id] || 0)) * (op.kind === "buy" ? 1 : -1);
-            seen[id] = q;
+            if (q !== (seen[id] || 0))
+                inv.balances[op.resourceType] = (inv.balances[op.resourceType] || 0) + (q - (seen[id] || 0)) * (op.kind === "buy" ? 1 : -1);
+            if (seen[id] !== q) seen[id] = q;
         }
     });
     reconcileLegacy(c, ops);
@@ -246,40 +258,91 @@ function releaseRecovered(room) {
         // Transfer the reconciled balance to the room pool once; it no longer
         // blocks new chains. Retain provenance/cost instead of silently deleting it.
         recovered[id] = { room: entry.room, items: Object.assign({}, entry.items), spent: entry.spent,
-            costs: entry.costs && Object.assign({}, entry.costs), confidence: entry.confidence || "estimated", tick: Game.time };
+            costs: entry.costs && Object.assign({}, entry.costs), costConfidence: entry.costConfidence && Object.assign({}, entry.costConfidence),
+            confidence: entry.confidence || "estimated", tick: Game.time };
         entry.items = {}; entry.released = true;
     });
+    reconcileRecovered(room);
     const retained = Object.keys(recovered).sort((a, b) => recovered[b].tick - recovered[a].tick);
     const keep = require("./config").get("craft.recoveredKeep", 20);
     retained.slice(keep).forEach((id) => { if (!Object.values(recovered[id].items).some((q) => q > 0)) delete recovered[id]; });
 }
+function reconcileRecovered(room) {
+    const entries = Object.values(Memory.craft && Memory.craft.recovered || {}).filter((e) => e.room === room.name);
+    if (!entries.length) return;
+    if (Memory.craft.recoveredCostVersion !== 1) {
+        Memory.craft.recoveredCostVersion = 1;
+        Memory.craft.rescanAt = Game.time + 1;
+    }
+    const committed = require("./resourcePolicy").commitments(room), free = {}, carried = {};
+    require("./census").creepsByRole(room.name, "hauler").forEach((c) => Object.entries(c.store || {}).forEach(([r, q]) => {
+        if (typeof q === "number" && q > 0) carried[r] = (carried[r] || 0) + q;
+    }));
+    entries.forEach((e) => { if (e.historicalSpent === undefined) e.historicalSpent = e.spent || 0; });
+    const resources = new Set(entries.flatMap((e) => Object.keys(e.items || {})));
+    resources.forEach((r) => {
+        // Priority is per resource: mixed lots can contain known and unknown costs.
+        entries.slice().sort((a, b) => Number(!!knownRecoveredCost(b, r)) - Number(!!knownRecoveredCost(a, r)) || (a.tick || 0) - (b.tick || 0)).forEach((e) => {
+            const original = e.items && e.items[r]; if (!(original > 0)) return;
+            if (!(r in free)) free[r] = Math.max(0, physical(room, r) + (carried[r] || 0) - (committed[r] || 0));
+            const q = Math.max(0, original || 0), kept = Math.min(q, free[r]), removed = q - kept;
+            free[r] -= kept;
+            if (removed > 0) {
+                e.unassignedItems = e.unassignedItems || {}; e.unassignedItems[r] = (e.unassignedItems[r] || 0) + removed;
+                if (knownRecoveredCost(e, r) && q > 0) {
+                    const cost = (e.costs[r] || 0) * removed / q;
+                    e.costs[r] = Math.max(0, (e.costs[r] || 0) - cost);
+                    e.unassignedCosts = e.unassignedCosts || {}; e.unassignedCosts[r] = (e.unassignedCosts[r] || 0) + cost;
+                }
+            }
+            if (kept > 0) e.items[r] = kept; else delete e.items[r];
+        });
+    });
+}
 function recoveredBasis(room, owns, adoptId) {
-    let extra = 0, estimated = false;
+    const mem = Memory.craft || (Memory.craft = {});
+    if (adoptId && mem.recoveredAdoptions && mem.recoveredAdoptions[adoptId]) return mem.recoveredAdoptions[adoptId].result;
+    reconcileRecovered(room);
+    let extra = 0, estimated = false, blocked = null;
+    const allocations = [], increments = {};
     const remaining = Object.assign({}, owns || {});
     const snap = require("./market").snapshot();
-    Object.values(Memory.craft && Memory.craft.recovered || {}).filter((e) => e.room === room.name).forEach((e) => {
-        const quantities = Object.keys(remaining).filter((r) => (e.items[r] || 0) > 0 && remaining[r] > 0);
-        if (!quantities.length) return;
-        // Legacy entries cannot prove a per-resource basis. Carry their entire
-        // unpaid basis conservatively to the first new lot rather than inventing
-        // a historical unit price or counting it again in multiple lots.
-        let basis = 0;
-        quantities.forEach((r) => {
+    const entries = Object.entries(mem.recovered || {}).filter(([, e]) => e.room === room.name);
+    Object.keys(remaining).forEach((r) => {
+        entries.slice().sort(([, a], [, b]) => Number(!!knownRecoveredCost(b, r)) - Number(!!knownRecoveredCost(a, r)) || (a.tick || 0) - (b.tick || 0)).forEach(([id, e]) => {
+            if (!((e.items[r] || 0) > 0 && remaining[r] > 0)) return;
             const take = Math.min(remaining[r], e.items[r]); remaining[r] -= take;
             const resource = snap && snap.resources[r];
             const price = resource && require("./marketPricing").conservativeBid(r, resource.currentBuy) || 0;
-            if (e.costs && e.confidence === "confirmed") {
-                const cost = (e.costs[r] || 0) * take / e.items[r];
-                extra += Math.max(0, cost - take * price); basis += cost;
-                if (adoptId) e.costs[r] = Math.max(0, (e.costs[r] || 0) - cost);
+            const known = knownRecoveredCost(e, r);
+            const basis = known ? e.costs[r] * take / e.items[r] : take * price;
+            if (known) {
+                const increment = Math.max(0, basis - take * price);
+                extra += increment; increments[r] = (increments[r] || 0) + increment;
+            } else {
+                // Historical total spend does not identify the cost of this
+                // residual resource. Its opportunity cost is already in plan.total.
+                estimated = true; if (!(price > 0)) blocked = "recovered-cost-unknown:" + r;
             }
-            if (adoptId) e.items[r] -= take;
+            allocations.push({ source: id, resource: r, quantity: take, basis, confidence: known ? "confirmed" : "opportunity-estimate" });
         });
-        if (!e.costs || e.confidence !== "confirmed") { extra += Math.max(0, e.spent || 0); estimated = true; }
-        if (adoptId) {
-            e.spent = estimated ? 0 : Math.max(0, (e.spent || 0) - basis); e.adoptedBy = adoptId;
-        }
     });
-    return { extra, estimated };
+    const result = { extra, estimated, blocked, allocations, increments };
+    if (adoptId && !blocked) {
+        allocations.forEach((a) => {
+            const e = mem.recovered[a.source]; e.items[a.resource] -= a.quantity;
+            if (a.confidence === "confirmed") e.costs[a.resource] = Math.max(0, e.costs[a.resource] - a.basis);
+            e.adoptedBy = adoptId;
+        });
+        const receipts = mem.recoveredAdoptions || (mem.recoveredAdoptions = {});
+        receipts[adoptId] = { room: room.name, tick: Game.time, result };
+        const active = new Set(chains().map((c) => c.id));
+        Object.keys(receipts).sort((a, b) => receipts[b].tick - receipts[a].tick)
+            .slice(require("./config").get("craft.recoveredKeep", 20)).forEach((id) => { if (!active.has(id)) delete receipts[id]; });
+    }
+    return result;
 }
-module.exports = { ensure, economic, record, sync, totals, production, canProduce, settle, tick, preempt, migrateOwners, warehouse, physical, reconcileStranded, releaseRecovered, recoveredBasis };
+function knownRecoveredCost(e, r) {
+    return e.costs && typeof e.costs[r] === "number" && (e.costConfidence ? e.costConfidence[r] === "confirmed" : e.confidence === "confirmed");
+}
+module.exports = { ensure, economic, record, sync, totals, production, canProduce, settle, tick, preempt, migrateOwners, warehouse, physical, reconcileStranded, releaseRecovered, reconcileRecovered, recoveredBasis };

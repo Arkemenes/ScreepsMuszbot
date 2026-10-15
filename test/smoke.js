@@ -9973,11 +9973,14 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
     used = 10; meter.endTick();
     assert(meter.snapshot() === snap && meter.snapshot().roles.hauler.avg === 4.5, "0113: the snapshot does not change between publications");
     assert(meter.live().roles.hauler.avg === 100, "0113: live() shows the window in progress (cpuTop)");
+    assert(meter.live().totalTicks === 3 && meter.live().fromTick === Game.time && meter.live().toTick === Game.time,
+        "0144: partial window coverage is separate from all ticks since meter reset");
     meter.reset();
     assert(Object.keys(meter.live().roles).length === 0 && meter.snapshot() === snap, "0113: reset() restarts the window and keeps the last published snapshot");
     // each tick counts once
     Game.time++; meter.endTick(); meter.endTick();
     assert(meter.live().ticks === 1, "0113: endTick() counts a tick once however often it is called");
+    assert(meter.live().totalTicks === 1, "0144: manual reset restarts the measured total and duplicate end does not increment it");
 
     // spans measure, return the result and propagate exceptions (still counted)
     used = 0;
@@ -11976,20 +11979,21 @@ origLog("\nMemory:", memStr.length, "bytes  |  rooms.W1N1 keys:",
     Game.rooms = Object.assign({}, oldRooms, { W7N1: source, W7N2: target });
     Game.myRooms = [source, target];
     Memory.energyBalancing = { lastRun: 0, pending: {}, observations: {} };
-    const before = Object.keys(Memory.terminalOps.operations).length;
+    const before = Object.values(Memory.terminalOps.operations).filter((op) => !["completed", "cancelled", "failed"].includes(op.state)).length;
     energyBalancing.run();
     const pending = Object.keys(Memory.terminalOps.operations).filter((id) => Memory.terminalOps.operations[id].automatic);
     energyBalancing.run();
     assert(pending.length === 1 && Object.keys(Memory.terminalOps.operations).filter((id) => Memory.terminalOps.operations[id].automatic).length === 1, "0097 creates one automatic operation and remains idempotent");
     assert(Memory.energyBalancing.pending.W7N2 && Memory.energyBalancing.observations.W7N2.requestedAmount > 0, "0097 persists pending operation and requested amount for observability");
-    assert(Object.keys(Memory.terminalOps.operations).length === before + 1, "0097 delegates exactly one transfer to terminalOps");
+    assert(Object.values(Memory.terminalOps.operations).filter((op) => !["completed", "cancelled", "failed"].includes(op.state)).length === before + 1, "0097 delegates exactly one transfer to terminalOps");
     Game.rooms = oldRooms; Game.myRooms = oldMyRooms; Memory.energyBalancing = oldBalancing;
 }
 // ROADMAP 0098 regression coverage for the execution and recovery states.
 // These fixtures explicitly exercise zero-fuel-reserve legacy operation paths.
 const legacyTerminalSettings = Memory.settings;
 Memory.settings = Object.assign({}, Memory.settings, {
-    terminalOps: Object.assign({}, Memory.settings && Memory.settings.terminalOps, { tickInterval: 1 }),
+    // These execution fixtures inspect final records later; request explicit diagnostic retention.
+    terminalOps: Object.assign({}, Memory.settings && Memory.settings.terminalOps, { tickInterval: 1, operationRetentionTicks: 10000 }),
     logistics: Object.assign({}, Memory.settings && Memory.settings.logistics, { terminalReserveRatio: 0 }),
 });
 {
@@ -14985,7 +14989,7 @@ function priceSamples(bid, ask, n, vol) {
     });
     const run = (room, ticks) => {
         Game.rooms = { OrphanRoom: room }; Game.creeps = {}; Game.market = { credits: 1e6, incomingTransactions: [] };
-        Memory.settings = Object.assign({}, saved.settings);
+        Memory.settings = Object.assign({}, saved.settings, { terminalOps: Object.assign({}, saved.settings && saved.settings.terminalOps, { operationRetentionTicks: 10000 }) });
         Memory.terminalOps = freshOps();
         for (let i = 0; i < ticks; i++) { Game.time += 1; ops.tick(); }
         return Memory.terminalOps.operations["terminal-1"];
@@ -16087,4 +16091,9 @@ require("./terminalLotCases")(PROJECT, assert);
 require("./craftPurchaseCases")(PROJECT, assert);
 require("./craftRecoveryCases")(PROJECT, assert);
 require("./terminalIntentCases")(PROJECT, assert);
+require("./recoveredBasisCases")(PROJECT, assert);
+require("./economyCoordinationCpuCases")(PROJECT, assert);
+require("./cpuAccountingCases")(PROJECT, assert);
+require("./terminalHistoryCases")(PROJECT, assert);
+require("./terminalTelemetryCases")(PROJECT, assert);
 require("./assetStatsCases")(PROJECT, assert);

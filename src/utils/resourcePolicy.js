@@ -30,9 +30,7 @@ function target(room, r) {
 }
 function used(room, r) { return target(room, r) !== undefined; }
 function operations(room) {
-    const ops = Memory.terminalOps && Memory.terminalOps.operations || {};
-    return Object.keys(ops).map((id) => ops[id]).filter((op) => accounting.active(op) &&
-        (op.sourceRoom === room.name || op.targetRoom === room.name));
+    return require("./terminalIndex").forRoom(room.name);
 }
 function carried(room, r) { return census.creepsByRole(room.name, "hauler").reduce((n, c) => n + value(c, r), 0); }
 function stock(room, r) { return value(room.storage, r) + value(room.terminal, r) + carried(room, r); }
@@ -88,6 +86,7 @@ function consumerAvailable(room, source, resource, owner) {
 }
 function commitments(room, excludeId) {
     const sums = {}, coveredOps = {};
+    const roomOps = operations(room);
     const excludedOp = Memory.terminalOps && Memory.terminalOps.operations && Memory.terminalOps.operations[excludeId];
     const excludedOwner = excludedOp ? terminalClaims.owner(excludedOp) : excludeId;
     const add = (r, q) => { if (r) sums[r] = (sums[r] || 0) + Math.max(0, q || 0); };
@@ -115,7 +114,7 @@ function commitments(room, excludeId) {
             Object.keys(c.inventory.balances).forEach((r) => add(r, require("./craftLedger").warehouse(c, room, r)));
             Object.keys(c.buys || {}).forEach((r) => { coveredOps[c.buys[r].opId] = true; });
             coveredOps[c.sellOpId] = coveredOps[c.partialOpId] = coveredOps[c.energyOpId] = true;
-            operations(room).forEach((op) => {
+            roomOps.forEach((op) => {
                 const parent = op.parentId && Memory.terminalOps.operations[op.parentId];
                 if (op.kind === "receipt" && parent && parent.kind === "buy" && terminalClaims.owner(op) === "craft:" + (c.ownerId || c.id)) coveredOps[op.id] = true;
             });
@@ -160,7 +159,7 @@ function commitments(room, excludeId) {
         // Sweep releases these entries; retain until it has actually done so.
         if (e.room === room.name) Object.keys(e.items || {}).forEach((r) => add(r, e.items[r]));
     });
-    operations(room).forEach((op) => {
+    roomOps.forEach((op) => {
         if (op.id === excludeId || coveredOps[op.id] || excludedOwner && terminalClaims.owner(op) === excludedOwner) return;
         if (op.sourceRoom === room.name && (op.kind === "sell" || op.kind === "transfer"))
             add(op.resourceType, op.kind === "transfer" && op.sentAmount > 0 ? 0 : op.remaining);
@@ -169,7 +168,7 @@ function commitments(room, excludeId) {
     });
     // Legacy/manual market orders can exist without a terminalOps operation.
     const listed = Game.market && Game.market.orders || {};
-    const managed = new Set(operations(room).map((op) => op.marketOrderId).filter(Boolean));
+    const managed = new Set(roomOps.map((op) => op.marketOrderId).filter(Boolean));
     Object.keys(listed).forEach((id) => {
         const order = listed[id];
         if (!managed.has(id) && order.roomName === room.name && order.type === ORDER_SELL)

@@ -153,6 +153,71 @@ module.exports = function (project, assert) {
         c.energyCheckTick = 0; Game.time += 50;
         assert(!energy.ready(room, c, c.queue[0]) && c.energyWait.reason === "energy-margin-budget",
             "0135: replenishment cannot spend beyond the lot's economic budget");
+        const rejectedReason = c.energyWait.reason;
+        Game.time += 10;
+        energy.ready(room, c, c.queue[0]);
+        assert(c.energyWait.reason === rejectedReason,
+            "ARK-129: retry cooldown retains the last economic wait instead of oscillating to a generic deficit");
+        const donor = (name, quantity) => ({ name, controller: { my: true }, find: () => [],
+            storage: { id: name + "-storage", store: store({ energy: quantity }) },
+            terminal: { id: name + "-terminal", store: store({ energy: 0 }) } });
+        reset(); c = chain(); c.queue = [{ kind: "factory", product: "widgetA", target: 20 }];
+        ledger.ensure(c, {}); Memory.craft.active.Recovery = c; room.storage.store.energy = 0;
+        Game.rooms.Donor = donor("Donor", 20000);
+        const manual = Memory.terminalOps.operations.manual = { id: "manual", kind: "buy", sourceRoom: room.name,
+            resourceType: RESOURCE_ENERGY, amount: 100000, remaining: 100000, limit: 60, state: "waiting",
+            owner: { kind: "manual", id: "manual" }, accounting: { amount: 0, credits: 0, energy: 0, confidence: "confirmed" } };
+        const originalManual = JSON.stringify(manual);
+        energy.ready(room, c, c.queue[0]);
+        assert(c.energyTransferId && !c.energyOpId && ops.operation(c.energyTransferId).amount === 1400,
+            "ARK-129: manual energy BUY does not block a physically funded internal recovery transfer");
+        assert(JSON.stringify(manual) === originalManual,
+            "ARK-129: internal recovery preserves the manual purchase quantity, limit and accounting");
+        assert(ops.lockConflict("transfer", "Donor", room.name, RESOURCE_ENERGY, true),
+            "ARK-129: accepting inbound alongside BUY still blocks duplicate transfers to that target");
+        reset(); c = chain(); c.est.revenue = 40000;
+        c.queue = [{ kind: "factory", product: "widgetA", target: 20 }]; ledger.ensure(c, {});
+        Memory.craft.active.Recovery = c; room.storage.store.energy = 0;
+        Game.rooms.ExpensiveDonor = donor("ExpensiveDonor", 20000);
+        Game.rooms.CheapDonor = donor("CheapDonor", 20000);
+        Game.market.calcTransactionCost = (q, from) => from === "ExpensiveDonor" ? 4000 : from === "CheapDonor" ? 10 : Math.ceil(q * 0.5);
+        energy.ready(room, c, c.queue[0]);
+        assert(c.energyTransferId && ops.operation(c.energyTransferId).sourceRoom === "CheapDonor" && !c.energyOpId,
+            "ARK-129: an unaffordable first donor cannot hide a later cheaper eligible donor");
+        reset(); c = chain(); c.queue = [{ kind: "factory", product: "widgetA", target: 20 }];
+        ledger.ensure(c, {}); Memory.craft.active.Recovery = c; room.storage.store.energy = 0;
+        Game.rooms.FirstDonor = donor("FirstDonor", 20000);
+        Game.rooms.SecondDonor = donor("SecondDonor", 20000);
+        const realTransfer = ops.transfer;
+        try {
+            ops.transfer = (from, ...args) => from === "FirstDonor" ? { ok: false, error: "source-busy" } : realTransfer(from, ...args);
+            energy.ready(room, c, c.queue[0]);
+            assert(c.energyTransferId && ops.operation(c.energyTransferId).sourceRoom === "SecondDonor" &&
+                c.energyWait.economics.donors[0].reason === "source-busy" && !c.energyOpId,
+                "ARK-129: a refused donor leaves a diagnostic and tries the next funded source before market fallback");
+        } finally { ops.transfer = realTransfer; }
+        reset(); c = chain(); c.queue = [{ kind: "factory", product: "widgetA", target: 20 }];
+        ledger.ensure(c, {}); Memory.craft.active.Recovery = c; room.storage.store.energy = 0;
+        Game.rooms.ReservedDonor = donor("ReservedDonor", 20000);
+        Game.market.getAllOrders = () => [{ id: "reserved-fallback", type: ORDER_SELL, resourceType: RESOURCE_ENERGY, amount: 100000, price: 10, roomName: "Far" }];
+        Memory.terminalOps.operations.claim = { id: "claim", kind: "sell", state: "queued", sourceRoom: "ReservedDonor",
+            resourceType: RESOURCE_ENERGY, amount: 19000, remaining: 19000, owner: { kind: "manual", id: "claim" } };
+        energy.ready(room, c, c.queue[0]);
+        assert(!c.energyTransferId && c.energyOpId && c.energyWait.economics.donors.length === 0,
+            "ARK-129: recovery does not send another owner's reserved energy or spend the donor's operational floor");
+        reset(); c = chain(); c.est.revenue = 1;
+        Game.market.getAllOrders = () => [{ id: "budget-fallback", type: ORDER_SELL, resourceType: RESOURCE_ENERGY, amount: 100000, price: 10, roomName: "Far" }];
+        c.queue = [{ kind: "factory", product: "widgetA", target: 20 }]; ledger.ensure(c, {});
+        Memory.craft.active.Recovery = c; room.storage.store.energy = 0;
+        energy.ready(room, c, c.queue[0]);
+        const wait = c.energyWait;
+        assert(wait.reason === "energy-margin-budget" && wait.economics.budget === 0 &&
+            wait.economics.reserveDeficit === 1000 && wait.economics.recipeDeficit === 400 &&
+            wait.economics.netNeeded === 1400 && wait.economics.quote.cost > 0,
+            "ARK-129: rejected recovery distinguishes recipe demand, room reserve, quote and effective spending budget");
+        Game.time += 10; energy.ready(room, c, c.queue[0]);
+        assert(c.energyWait.reason === wait.reason && c.energyWait.economics.checkedTick === wait.economics.checkedTick,
+            "ARK-129: cached wait explicitly retains the tick of its last economic evaluation");
         reset(); c = chain(); c.buys.X = { opId: "recovering-buy", qty: 100 }; c.key = room.name;
         Memory.craft.active[room.name] = c; ledger.ensure(c, {}); room.terminal.store.X = 40;
         Memory.terminalOps.operations["recovering-buy"] = { id: "recovering-buy", kind: "buy", sourceRoom: room.name,
