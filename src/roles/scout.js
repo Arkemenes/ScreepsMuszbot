@@ -6,6 +6,7 @@ const nativePath = require("../utils/nativePath");
 const config = require("../utils/config");
 const observer = require("../utils/observer");
 const names = require("../utils/names");
+const mapExits = require("../utils/mapExits");
 
 let scoutSpawnRequestedTick = -1;
 
@@ -435,7 +436,7 @@ var scout = {
         }
 
         if (!creep.memory.targetRoom || creep.memory.targetRoom == creep.room.name) {
-            const exits = Memory.rooms[creep.room.name].exits || {};
+            const exits = mapExits.known(creep.room.name) || {};
             const cameFrom = creep.memory.cameFrom;
             let minLastVisit = Infinity;
             let targetRoom = null;

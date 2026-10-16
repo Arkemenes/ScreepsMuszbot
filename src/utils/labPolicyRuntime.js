@@ -10,6 +10,32 @@ const cpuMeter = require("./cpuMeter");
 const layoutCache = new Map();
 const activeCache = new Map();
 
+// [controller id, level, x, y, owner, then per lab: id, x, y, my, owner - or 0 and four 0s for a missing lab]
+function labSignature(controller, labs) {
+    const out = [controller.id, controller.level, controller.pos.x, controller.pos.y,
+        controller.owner && controller.owner.username];
+    labs.forEach((lab) => {
+        if (!lab) out.push(0, 0, 0, 0, 0);
+        else out.push(lab.id, lab.pos.x, lab.pos.y, lab.my, lab.owner && lab.owner.username);
+    });
+    return out;
+}
+function sameSignature(flat, controller, labs) {
+    if (flat.length !== 5 + labs.length * 5 || flat[0] !== controller.id || flat[1] !== controller.level ||
+        flat[2] !== controller.pos.x || flat[3] !== controller.pos.y ||
+        flat[4] !== (controller.owner && controller.owner.username)) return false;
+    for (let n = 0, i = 5; n < labs.length; n++, i += 5) {
+        const lab = labs[n];
+        if (!lab) { if (flat[i] !== 0) return false; continue; }
+        if (flat[i] !== lab.id || flat[i + 1] !== lab.pos.x || flat[i + 2] !== lab.pos.y || flat[i + 3] !== lab.my ||
+            flat[i + 4] !== (lab.owner && lab.owner.username)) return false;
+    }
+    return true;
+}
+function sameMethods(labs, methods) {
+    for (let n = 0; n < labs.length; n++) if ((labs[n] && labs[n].isActive) !== methods[n]) return false;
+    return true;
+}
 function activeLabs(room, labs) {
     const controller = room.controller;
     const stable = controller && controller.my === true && Number.isFinite(controller.level) &&
@@ -17,12 +43,12 @@ function activeLabs(room, labs) {
         labs.every((lab) => !lab || lab.pos && Number.isFinite(lab.pos.x) && Number.isFinite(lab.pos.y));
     const check = () => labs.map((lab) => !!lab && (!lab.isActive || lab.isActive()));
     if (!stable) return check();
-    const signature = JSON.stringify([controller.id, controller.level, controller.pos.x, controller.pos.y,
-        controller.owner && controller.owner.username,
-        labs.map((lab) => lab && [lab.id, lab.pos.x, lab.pos.y, lab.my, lab.owner && lab.owner.username])]);
+    // ROADMAP 0147: the signature is a flat array of primitives compared in place - building a
+    // JSON string of every lab each call was the whole cost of this cache hit.
     const cached = activeCache.get(room.name);
-    if (cached && Game.time >= cached.tick && cached.signature === signature &&
-        labs.every((lab, i) => (lab && lab.isActive) === cached.methods[i])) return cached.active;
+    if (cached && Game.time >= cached.tick && sameSignature(cached.signature, controller, labs) &&
+        sameMethods(labs, cached.methods)) return cached.active;
+    const signature = labSignature(controller, labs);
     const active = check();
     activeCache.delete(room.name);
     const cap = Math.max(1, config.get("craft.policyActiveCacheEntries", 64));
@@ -253,6 +279,18 @@ function assignments(room, chain, item, state, plan, resolved, labs) {
             keep: (phase.keep || []).includes(p) || consumers(i).length > 0,
             owner: chain.key || chain.room, remaining: phaseRemaining(state, p) });
     }
+    // ROADMAP 0147 probe: would this decision have been identical to the previous one?
+    // (an upper bound: it hashes the lab states and the plan position, not every input)
+    {
+        const probe = require("./probe");
+        let h = probe.fold(0, state.phase);
+        labs.forEach((lab, i) => {
+            h = probe.fold(h, lab.mineralType || ""); h = probe.fold(h, lab.mineralType ? lab.store[lab.mineralType] || 0 : 0);
+            h = probe.fold(h, !!lab.cooldown); h = probe.fold(h, state.desired[i] || ""); h = probe.fold(h, state.roles[i] || "");
+        });
+        phase.products.forEach((p) => { h = probe.fold(h, phaseRemaining(state, p)); });
+        probe.hit("labPolicy.assignments", room.name, h);
+    }
     const mem = Memory.rooms[room.name];
     delete mem.labReaction;
     mem.labReactions = reactions; mem.labReactionAuto = true;
@@ -360,4 +398,6 @@ function reconcile(room, chain, item) {
     const labs = ids.map((id) => Game.getObjectById(id)).filter(Boolean);
     confirm(room, chain, item, item.run, labs);
 }
-module.exports = { tick, snapshot, profile, resolve, clear, reconcile };
+module.exports = { tick, snapshot, profile, resolve, clear, reconcile,
+    // exposed for the offline oracle (ROADMAP 0147)
+    activeLabs };

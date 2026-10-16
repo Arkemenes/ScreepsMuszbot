@@ -8,6 +8,7 @@ let lastSnapshotTick = null;
 let firstSnapshotDueTick = null;
 let lastSnapshot = null;
 const temporalSnapshots = {};
+let sampleSummaryCache = new WeakMap();
 let marketHistoryLoaded = false;
 let historyDirty = false;
 
@@ -307,6 +308,7 @@ function scan() {
         const buyLevel = bestOrderLevel(groupedOrders[resourceType], buyType, true);
         if (!temporalSnapshots[resourceType]) temporalSnapshots[resourceType] = [];
         if (snapshotDue) {
+            sampleSummaryCache.delete(temporalSnapshots[resourceType]);
             temporalSnapshots[resourceType].push({
                 tick: Game.time,
                 scheduledTick,
@@ -319,6 +321,7 @@ function scan() {
         const windowTicks = Math.max(1, Number(config.get("market.snapshotWindowTicks", 604800)) || 604800);
         while (temporalSnapshots[resourceType].length &&
             Game.time - temporalSnapshots[resourceType][0].tick > windowTicks) {
+            sampleSummaryCache.delete(temporalSnapshots[resourceType]);
             temporalSnapshots[resourceType].shift();
         }
         resources[resourceType] = buildResource(
@@ -344,9 +347,28 @@ function snapshot() {
 }
 
 // ROADMAP 0111: raw hourly samples (heap-resident) for marketPricing's own
-// statistics - same data the medians above come from, never copied.
+// statistics - same read-only data the medians above come from, never copied.
 function samples(resourceType) {
     return temporalSnapshots[resourceType] || [];
+}
+
+// Counts/latest valid ticks depend only on history, not price, settings or age.
+// All canonical mutations invalidate here at their source; hydration replaces arrays.
+function sampleSummary(resourceType) {
+    const provider = module.exports.samples;
+    const rows = provider(resourceType);
+    const canonical = provider === samples;
+    let summary = canonical && sampleSummaryCache.get(rows);
+    if (!summary) {
+        summary = { length: rows.length, buyCount: 0, sellCount: 0, buyTick: null, sellTick: null };
+        for (const row of rows) {
+            if (row.buyPrice > 0) { summary.buyCount++; summary.buyTick = row.tick; }
+            if (row.sellPrice > 0) { summary.sellCount++; summary.sellTick = row.tick; }
+        }
+        // Replaced providers have no immutable-history contract, so read them live.
+        if (canonical) sampleSummaryCache.set(rows, summary);
+    }
+    return { ...summary };
 }
 
 function historyReady() {
@@ -363,6 +385,7 @@ function reset() {
     historyDirty = false;
     marketHistory.resetCache();
     medianCache = {};
+    sampleSummaryCache = new WeakMap();
     groupedFor = null;
     groupedResult = null;
 }
@@ -402,6 +425,7 @@ module.exports = {
     scan,
     snapshot,
     samples,
+    sampleSummary,
     historyReady,
     reset,
     groupOrders,

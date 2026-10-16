@@ -8,6 +8,7 @@
 // design writeup - this file is a direct implementation of that algorithm.
 
 const config = require("./config");
+const mapExits = require("./mapExits");
 const routing = require("./routing");
 const combat = require("./combat");
 
@@ -231,7 +232,7 @@ function avgHpRatio(squad) {
 }
 
 function hasSafeExit(roomName) {
-    const exits = (Memory.rooms[roomName] && Memory.rooms[roomName].exits) || {};
+    const exits = mapExits.known(roomName) || {};
     return _.some(
         Object.values(exits),
         (rn) => !(Memory.rooms[rn] && Memory.rooms[rn].enemies > 0)

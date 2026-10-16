@@ -29,12 +29,7 @@ const marketHistory = require("./marketHistoryStore");
 const heap = {};
 
 function segmentMap() {
-    if (!Memory.planSegments) {
-        // one-time migration from the old (unsafe) location
-        Memory.planSegments =
-            (Memory.settings && Memory.settings.planSegments) || {};
-        if (Memory.settings) delete Memory.settings.planSegments;
-    }
+    if (!Memory.planSegments) Memory.planSegments = {};
     return Memory.planSegments;
 }
 
@@ -55,23 +50,6 @@ function segmentId(roomName) {
         map[roomName] = id;
     }
     return map[roomName];
-}
-
-// Old format: plan sitting in Memory.rooms[roomName].buildings. Move it into a
-// segment and drop the Memory copy. Returns the moved plan, or null.
-function migrateFromMemory(roomName) {
-    const mem = Memory.rooms && Memory.rooms[roomName];
-    if (!mem || !mem.buildings) return null;
-    if (segmentId(roomName) == null) return null; // no segment free - leave it
-
-    const plan = {
-        buildings: mem.buildings,
-        mincutBoundries: mem.mincutBoundries || [],
-    };
-    setPlan(roomName, plan);
-    delete mem.buildings;
-    delete mem.mincutBoundries;
-    return plan;
 }
 
 // Parse RawMemory.segments[id] and return its plan, but only if the segment is
@@ -98,13 +76,9 @@ function readSegment(roomName, id) {
     }
 }
 
-// The room's plan, or null when it has none. Heap-cached; migrates the old
-// Memory format on first read.
+// The room's plan, or null when it has none. Heap-cached.
 function getPlan(roomName) {
     if (heap[roomName]) return heap[roomName];
-
-    const migrated = migrateFromMemory(roomName);
-    if (migrated) return migrated;
 
     const id = segmentId(roomName);
     if (id == null) return null;

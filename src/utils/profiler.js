@@ -292,12 +292,15 @@ const Profiler = {
             return "Profiler not active.";
         }
 
+        // ROADMAP 0145: ticks actually accumulated by endTick() - the old
+        // endTick - (enabledTick + 1) derivation reported 98 for a 100-tick session.
+        // Sessions started before the counter existed keep the old derivation.
         const endTick = Math.min(
             Memory.profiler.disableTick || Game.time,
             Game.time
         );
-        const startTick = Memory.profiler.enabledTick + 1;
-        const elapsedTicks = endTick - startTick;
+        const elapsedTicks = Memory.profiler.ticks ||
+            Math.max(1, endTick - (Memory.profiler.enabledTick + 1));
         const header = "calls\t\tself\t\tavg-self\t\ttotal\t\tfunction";
         const footer = [
             `Avg: ${(Memory.profiler.totalTime / elapsedTicks).toFixed(2)}`,
@@ -395,6 +398,7 @@ const Profiler = {
         if (Game.time >= Memory.profiler.enabledTick) {
             const cpuUsed = Game.cpu.getUsed();
             Memory.profiler.totalTime += cpuUsed;
+            Memory.profiler.ticks = (Memory.profiler.ticks || 0) + 1;
             Profiler.report();
         }
     },

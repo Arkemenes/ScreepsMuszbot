@@ -94,24 +94,20 @@ function recordRepair(roomName, structureType, amount) {
     record(roomName, categoryForRepair(structureType), amount);
 }
 
-// base power-per-WORK-part for each action (native engine constants) -
-// boost multiplier, if any, is read live per part from BOOSTS[WORK][boost]
-// (never hardcoded - a boost only ever affects the one action it lists)
-const BASE_POWER = {
-    build: BUILD_POWER,
-    repair: REPAIR_POWER,
-    upgradeController: UPGRADE_CONTROLLER_POWER,
-};
-
-function workPower(creep, action) {
+// Energy spent by a WORK action, as the engine computes it (screeps/engine
+// processor/intents/creeps/{build,repair,upgrade-controller}.js, read 2026-10-15):
+//   build      energy = min(WORK x BUILD_POWER, what is left to build, energy carried)
+//   repair     effect = min(WORK x REPAIR_POWER, energy / REPAIR_COST, hits missing)
+//              energy = min(energy carried, ceil(effect x REPAIR_COST))     -> 1 per WORK part
+//   upgrade    energy = min(WORK x UPGRADE_CONTROLLER_POWER, energy carried)
+// A boosted WORK part only adds PROGRESS / HITS on top ("without extra energy cost" in the
+// docs): the energy removed from the store is always the unboosted amount. The first version of
+// this ledger multiplied the energy by the boost and, for repair, counted the 100 hits per WORK
+// part as if they were energy (real cost: 1 energy per WORK part), so Grafana's repair categories
+// were far above what the engine really charged.
+function workParts(creep) {
     let total = 0;
-    for (const part of creep.body) {
-        if (part.type !== WORK || part.hits <= 0) continue;
-        let power = BASE_POWER[action];
-        const boost = part.boost && BOOSTS[WORK] && BOOSTS[WORK][part.boost];
-        if (boost && typeof boost[action] === "number") power *= boost[action];
-        total += power;
-    }
+    for (const part of creep.body) if (part.type === WORK && part.hits > 0) total++;
     return total;
 }
 
@@ -122,7 +118,7 @@ function workPower(creep, action) {
 // view (see the module comment above)
 function creditBuild(creep, site) {
     const amount = Math.min(
-        workPower(creep, "build"),
+        workParts(creep) * BUILD_POWER,
         creep.store[RESOURCE_ENERGY],
         site.progressTotal - site.progress
     );
@@ -130,16 +126,14 @@ function creditBuild(creep, site) {
 }
 
 function creditRepair(creep, target) {
-    const amount = Math.min(
-        workPower(creep, "repair"),
-        creep.store[RESOURCE_ENERGY],
-        target.hitsMax - target.hits
-    );
+    const energy = creep.store[RESOURCE_ENERGY];
+    const effect = Math.min(workParts(creep) * REPAIR_POWER, energy / REPAIR_COST, target.hitsMax - target.hits);
+    const amount = Math.min(energy, Math.ceil(effect * REPAIR_COST));
     recordRepair(creep.room.name, target.structureType, amount);
 }
 
 function creditUpgrade(creep, controller) {
-    const amount = Math.min(workPower(creep, "upgradeController"), creep.store[RESOURCE_ENERGY]);
+    const amount = Math.min(workParts(creep) * UPGRADE_CONTROLLER_POWER, creep.store[RESOURCE_ENERGY]);
     record(creep.room.name, "upgrade", amount);
 }
 

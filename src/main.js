@@ -109,7 +109,7 @@ function maybeAutoDisableProfiler() {
         // every wrapper off again - nothing keeps costing once the session is over
         cpuMeter.setFns(
             utils.profiler.rows(),
-            Memory.profiler.disableTick - Memory.profiler.enabledTick + 1
+            Memory.profiler.ticks || Memory.profiler.disableTick - Memory.profiler.enabledTick + 1
         );
         printCallers(15);
         disableProfiler();
@@ -184,14 +184,21 @@ function printCpuTop(n) {
     console.log("[cpuTop] " + live.ticks + " ticks in " + (closed ? "closed" : "partial") + " window (target " +
         config.get("stats.cpuWindowTicks", 60) + "; ticks " + live.fromTick + ".." + live.toTick +
         "; measured since meter reset " + current.totalTicks + "), script avg " + live.used.toFixed(2) + "/tick (before engine finalization), guarded " + (guarded / ticks).toFixed(2) + ", unguarded " + (live.used - guarded / ticks).toFixed(2) +
-        (closed ? " (closed window at tick " + live.at + ")" : ""));
+        (closed ? " (closed window at tick " + live.at + ")" : "") +
+        "; boot " + live.bootTick + (live.includesReset ? " includesReset(cold start in window)" : "") +
+        ", max tick " + live.maxTick.toFixed(2));
     const balance = cpuMeter.accounting();
     if (balance.validTicks) console.log("[cpuBalance] bucket balance " + balance.validTicks + "/" + balance.ticks +
         " intervals (" + balance.fromTick + ".." + balance.toTick + "): inferred " + balance.used +
         "/tick, headroom " + balance.headroom + "; paired " + balance.pairedTicks +
         ", paired debit " + balance.pairedUsed + ", script " + balance.scriptUsed + ", unobserved residual " + balance.residual +
-        ", missing end " + balance.missingEndTicks + ", invalid " + balance.skippedTicks + ", skipped game ticks " + balance.missingTicks);
+        ", missing end " + balance.missingEndTicks + ", invalid " + balance.skippedTicks + ", skipped game ticks " + balance.missingTicks +
+        "; boot " + balance.bootTick + (balance.includesReset ? " includesReset" : "") + ", warm " + balance.warmUsed +
+        (balance.coldUsed !== null ? ", cold tick " + balance.coldUsed : "") + ", max " + balance.maxUsed);
     else console.log("[cpuBalance] bucket balance unavailable: " + balance.ticks + " intervals, " + balance.skippedTicks + " invalid");
+    const probes = require("./utils/probe").snapshot();
+    if (probes.names.length) console.log("[probe] share of calls that saw the same inputs as the previous call (since tick " + probes.since + "): " +
+        probes.names.map((p) => p.name + " " + p.rate + "% of " + p.calls).join(", "));
     const limit = n > 0 ? n : 15;
     cpuMeter.GROUPS.forEach((group) => {
         const rows = Object.keys(live[group]).map((k) => ({ k, s: live[group][k] }));
@@ -240,6 +247,36 @@ global.cpuTop = function (n) {
     printCpuTop(n);
     if (n === 0) resetCpuMeter();
 };
+global.cpuAuditMemory = () => require("./utils/cpuAudit").memory();
+global.cpuAuditRoomFields = () => require("./utils/cpuAudit").roomFields();
+global.ordersAudit = (options) => require("./utils/ordersAudit").print(options);
+
+// ROADMAP 0145: cpuReport(n=600) arms a one-shot report. Once n warm intervals (the cold
+// start tick is not counted) have been measured with no global reset in between, the bot
+// prints the balance and the heaviest consumers by itself - nobody has to be watching.
+// A reset forgets it (the heap is gone) and so does the cold-start-polluted window.
+let cpuReportTarget; // undefined: not decided yet (the auto-report arms itself once per global); null: none pending
+global.cpuReport = function (n) {
+    const capacity = Math.max(2, Number(config.get("stats.cpuBalanceWindowTicks", 600)) || 600) - 1;
+    cpuReportTarget = Math.min(Math.max(1, Math.floor(Number(n) || 600)), capacity);
+    console.log("[cpuReport] armed: prints after " + cpuReportTarget + " warm intervals (from tick " + Game.time +
+        (n > capacity ? "; capped at the balance window " + capacity : "") + "); a global reset cancels it");
+};
+function maybeCpuReport() {
+    if (cpuReportTarget === undefined) {
+        // stats.autoReportIntervals (default 150, 0 = off): every deploy leaves a warm baseline in the
+        // console without anyone arming it; a manual cpuReport(n) overrides it
+        const auto = Number(config.get("stats.autoReportIntervals", 150)) || 0;
+        const capacity = Math.max(2, Number(config.get("stats.cpuBalanceWindowTicks", 600)) || 600) - 1;
+        cpuReportTarget = auto > 0 ? Math.min(Math.floor(auto), capacity) : null;
+    }
+    if (cpuReportTarget === null) return;
+    const balance = cpuMeter.accounting();
+    if (balance.pairedTicks - (balance.includesReset ? 1 : 0) < cpuReportTarget) return;
+    cpuReportTarget = null;
+    console.log("[cpuReport] reached at tick " + Game.time + " - warm baseline below");
+    printCpuTop(40);
+}
 
 module.exports.loop = function () {
     // what the tick had already used before our code ran (engine setup, a global reset's
@@ -266,6 +303,8 @@ module.exports.loop = function () {
             );
             // keep city-plan segments (0007) loadable for next tick
             guard("planStore", () => utils.planStore.activate());
+            // ROADMAP 0146: one pass per global that drops dead/derived fields from Memory.rooms
+            guard("memoryCleanup", () => require("./utils/memoryCleanup").run());
             // get intel for each room
             _.forEach(Game.rooms, (r) =>
                 guard("intel:" + r.name, () => roomLogic.getIntel(r))
@@ -378,6 +417,7 @@ module.exports.loop = function () {
             });
             guard("stats", () => utils.stats());
             cpuMeter.endTick();
+            maybeCpuReport();
         });
     });
 };

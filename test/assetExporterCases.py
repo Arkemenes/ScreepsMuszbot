@@ -62,6 +62,38 @@ assert queries[0]["spec"]["query"]["spec"]["expr"] == 'screeps_stat_value{path="
 assert next(q for q in queries if q["spec"]["refId"] == "D")["spec"]["query"]["spec"]["expr"] == 'screeps_stat_value{path="cpu.accounting.scriptUsed"}'
 print("CPU accounting exporter/dashboard checks passed")
 
+# Resource discovery must work before both sides have historical samples.
+import re
+resource_variable = next(v["spec"] for v in dashboard["spec"]["variables"] if v["spec"]["name"] == "resource")
+price_panel = dashboard["spec"]["elements"]["panel-256"]["spec"]
+price_queries = price_panel["data"]["spec"]["queries"]
+discovery = resource_variable["query"]["spec"]["query"]
+matcher = json.loads(re.search(r'path=~("(?:\\.|[^"\\])*")', discovery).group(1))
+extract_resource = re.compile(resource_variable["regex"].strip("/"))
+
+env["update_generic_metrics"]({"market": {"fairPrice": {
+    "O": {"fairPrice": None, "currentSell": 12, "currentBuy": None},
+    "H": {"fairPrice": 4, "buyPrice": 3, "sellPrice": 5},
+    "pixel": {"currentBuy": 0},
+    "empty": {"fairPrice": None, "currentBuy": None, "currentSell": None},
+}}})
+paths = [dict(key)["path"] for key in values.values]
+discovered = {extract_resource.search(path).group(1) for path in paths if re.fullmatch(matcher, path)}
+assert discovered == {"O", "H", "pixel"}, "Resource Prices must discover current-only quotes without fairPrice"
+assert resource_variable["query"]["datasource"] == price_queries[0]["spec"]["query"]["datasource"], "Resource Prices variable and panels must use the selected datasource"
+assert resource_variable["definition"] == discovery
+assert "screeps_stat_value{" in discovery
+for q in price_queries:
+    expr = q["spec"]["query"]["spec"]["expr"]
+    assert expr.startswith("screeps_stat_value{"), "Price selectors must exclude info metrics"
+    for selection in ("O", "(H|O)", ".*"):
+        interpolated = expr.replace("${resource:regex}", selection).replace("${resource}", selection)
+        pattern = json.loads(re.search(r'path=~("(?:\\.|[^"\\])*")', interpolated).group(1))
+        field = {"C": "sellPrice", "E": "currentSell", "A": "buyPrice", "D": "currentBuy", "B": "fairPrice"}[q["spec"]["refId"]]
+        assert re.fullmatch(pattern, "market.fairPrice.O." + field)
+        assert not re.fullmatch(pattern, "marketXfairPriceXO." + field)
+print("Resource Prices exporter/discovery/single/multi/All query checks passed")
+
 terminal = Gauge()
 function = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "update_terminal_metrics")
 env = dict(math=math, terminal_transfer_energy=terminal, _previous_terminal_routes=set())
@@ -84,3 +116,47 @@ query = panel["data"]["spec"]["queries"][0]["spec"]["query"]["spec"]
 assert query["expr"] == 'screeps_terminal_transfer_energy{resource="energy"}'
 assert query["legendFormat"] == "{{from_room}} → {{to_room}}"
 print("Terminal network dashboard query/labels checks passed")
+
+# The ordinary resource gauges must close expired/consumed series as well.
+names = ("_publish_sparse", "update_sparse_metrics", "update_collection_coverage")
+functions = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in names]
+assert len(functions) == len(names), "market/T3 and collection-coverage helpers are missing"
+gauges = {name: Gauge() for name in ("room_mineral", "room_compound_t3", "market_bought_amount", "market_sold_amount",
+    "market_bought_credits", "market_sold_credits", "collection_game_time", "collection_interval_ticks", "collection_gap_ticks",
+    "collection_window_ticks", "collection_window_covered", "collection_repeated")}
+env = dict(math=math, _previous_sparse={}, _previous_collection_tick=None, **gauges)
+exec(compile(ast.Module(body=functions, type_ignores=[]), "exporter.py", "exec"), env)
+sample = {"rooms": {"A": {"compoundsT3": {"XGH2O": 30}, "minerals": {"O": 9}}},
+    "market": {"transactions": {"bought": {"O": {"amount": 20, "credits": 56}}, "sold": {}}}}
+update = env["update_sparse_metrics"]
+update(sample); update(sample)
+assert list(gauges["market_bought_amount"].values.values()) == [20]
+assert list(gauges["room_compound_t3"].values.values()) == [30]
+update({"rooms": {"A": {}}, "market": {"transactions": {}}})
+assert list(gauges["market_bought_amount"].values.values()) == [0]
+assert list(gauges["market_bought_credits"].values.values()) == [0]
+assert list(gauges["room_compound_t3"].values.values()) == [0]
+assert list(gauges["room_mineral"].values.values()) == [0]
+update({"rooms": {}, "market": {}})
+assert all(not gauges[name].values for name in ("market_bought_amount", "market_bought_credits", "room_compound_t3", "room_mineral"))
+coverage = env["update_collection_coverage"]
+coverage({"telemetry": {"tick": 100, "windowTicks": 60}})
+assert gauges["collection_window_covered"].values[()] == 0
+coverage({"telemetry": {"tick": 160, "windowTicks": 60}})
+assert gauges["collection_interval_ticks"].values[()] == 60 and gauges["collection_window_covered"].values[()] == 1
+coverage({"telemetry": {"tick": 160, "windowTicks": 60}})
+assert gauges["collection_repeated"].values[()] == 1 and gauges["collection_gap_ticks"].values[()] == 0
+coverage({"telemetry": {"tick": 235, "windowTicks": 60}})
+assert gauges["collection_gap_ticks"].values[()] == 15 and gauges["collection_window_covered"].values[()] == 0
+coverage({"telemetry": {"tick": 235, "windowTicks": 60}})
+assert gauges["collection_gap_ticks"].values[()] == 15 and gauges["collection_window_covered"].values[()] == 0
+coverage({"telemetry": {"tick": 200, "windowTicks": 60}})
+assert gauges["collection_window_covered"].values[()] == 0
+coverage({"time": 300})
+assert gauges["collection_window_covered"].values[()] == 0
+print("Market/T3 sparse expiry, repeated polls and Game.time coverage checks passed")
+for name in ("panel-233", "panel-234"):
+    custom = dashboard["spec"]["elements"][name]["spec"]["vizConfig"]["spec"]["fieldConfig"]["defaults"]["custom"]
+    assert custom["drawStyle"] == "bars" and custom["spanNulls"] is False
+assert dashboard["spec"]["elements"]["panel-241"]["spec"]["data"]["spec"]["queries"][1]["spec"]["query"]["spec"]["expr"] == "screeps_collection_gap_ticks"
+print("Market window and collection-gap dashboard checks passed")

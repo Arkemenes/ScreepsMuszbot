@@ -209,17 +209,30 @@ function preempt(room, source, resource, quantity) {
         inv.preemptedBasis = (inv.preemptedBasis || 0) + basis; left -= take;
     });
 }
-function warehouse(c, room, r) {
-    const q = Math.max(0, sync(c).balances[r] || 0);
+// What the chain's structures hold is the same for every resource asked in one decision, so
+// it is computed once (ROADMAP 0147: commitments() asked for every balance of every chain and
+// each call rebuilt the chain's structure set - ~0,34 CPU per call). warehouse() keeps its
+// per-resource contract; warehouseMany() returns exactly what N warehouse() calls would.
+function warehouseContext(c, room) {
+    const inventory = sync(c);
     const ids = new Set(Object.keys(c.holds || {}));
     (c.queue || []).filter((i) => i.started && !i.finished).forEach((i) => {
         [i.input1, i.input2, i.output].concat(i.outputs || [], i.run && i.run.observation && i.run.observation.ids || [])
             .filter(Boolean).forEach((id) => ids.add(id));
     });
     const factoryOwned = (c.queue || []).some((i) => i.kind === "factory" && i.started);
-    const held = structures(room).filter((s) => s.structureType === STRUCTURE_FACTORY ? factoryOwned : ids.has(s.id))
-        .reduce((n, s) => n + value(s, r), 0);
+    return { inventory, held: structures(room).filter((s) => s.structureType === STRUCTURE_FACTORY ? factoryOwned : ids.has(s.id)) };
+}
+function warehouseOf(context, r) {
+    const q = Math.max(0, context.inventory.balances[r] || 0);
+    const held = context.held.reduce((n, s) => n + value(s, r), 0);
     return Math.max(0, q - Math.min(q, held));
+}
+function warehouse(c, room, r) { return warehouseOf(warehouseContext(c, room), r); }
+function warehouseMany(c, room, resources) {
+    const context = warehouseContext(c, room), out = {};
+    resources.forEach((r) => { out[r] = warehouseOf(context, r); });
+    return out;
 }
 function reconcileStranded(room) {
     const entries = Memory.craft && Memory.craft.stranded || {}, occupied = {}, free = {};
@@ -345,4 +358,4 @@ function recoveredBasis(room, owns, adoptId) {
 function knownRecoveredCost(e, r) {
     return e.costs && typeof e.costs[r] === "number" && (e.costConfidence ? e.costConfidence[r] === "confirmed" : e.confidence === "confirmed");
 }
-module.exports = { ensure, economic, record, sync, totals, production, canProduce, settle, tick, preempt, migrateOwners, warehouse, physical, reconcileStranded, releaseRecovered, reconcileRecovered, recoveredBasis };
+module.exports = { ensure, economic, record, sync, totals, production, canProduce, settle, tick, preempt, migrateOwners, warehouse, warehouseMany, physical, reconcileStranded, releaseRecovered, reconcileRecovered, recoveredBasis };

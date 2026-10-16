@@ -111,7 +111,9 @@ function commitments(room, excludeId) {
         }
         const local = {};
         if (c.inventory) {
-            Object.keys(c.inventory.balances).forEach((r) => add(r, require("./craftLedger").warehouse(c, room, r)));
+            // one structure scan for every balance of the chain (ROADMAP 0147), same values as per-resource calls
+            const resources = Object.keys(c.inventory.balances), held = require("./craftLedger").warehouseMany(c, room, resources);
+            resources.forEach((r) => add(r, held[r]));
             Object.keys(c.buys || {}).forEach((r) => { coveredOps[c.buys[r].opId] = true; });
             coveredOps[c.sellOpId] = coveredOps[c.partialOpId] = coveredOps[c.energyOpId] = true;
             roomOps.forEach((op) => {

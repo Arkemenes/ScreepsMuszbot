@@ -8,6 +8,7 @@
 
 const remotes = require("../rooms/remotes");
 const config = require("./config");
+const mapExits = require("./mapExits");
 const roomCache = require("./roomCache");
 const traffic = require("./traffic");
 const excuseMe = require("./excuseMe");
@@ -521,7 +522,7 @@ function selectGraphRoute(fromRoomName, toRoomName, opts) {
 // costCallback for Creep.moveTo(): the creep's current room, the
 // destination, whatever rooms findRoute() picked, AND (ROADMAP 0061,
 // researched from screeps-cartographer's findRoute enhancement) each of
-// those rooms' known neighbors (Memory.rooms[x].exits) are passable - every
+// those rooms' known neighbors (utils/mapExits.known) are passable - every
 // other room is excluded from the search. Game.map.findRoute only reasons
 // about room-graph adjacency, never terrain inside a room, so the exact
 // minimal hop sequence can leave the PathFinder with zero slack to route
@@ -542,7 +543,7 @@ function routeCostCallback(route, currentRoomName, toRoomName, opts) {
             // ROADMAP 0076 - see isKnownDeadEnd()'s own comment.
             if (isKnownDeadEnd(step.room)) continue;
             allowed.add(step.room);
-            const exits = Memory.rooms[step.room] && Memory.rooms[step.room].exits;
+            const exits = mapExits.known(step.room);
             if (!exits) continue;
             for (const neighbor of Object.values(exits)) {
                 if (avoid.indexOf(neighbor) !== -1) continue;

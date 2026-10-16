@@ -44,10 +44,15 @@ function carried(op, room, resource) {
         return sum + (job && job.operationId === op.id && job.direction === "load" && job.resourceType === resource ? value(c, resource) : 0);
     }, 0);
 }
-function physicalFree(room, source, resource, excludeId, excludeOwner) {
-    const pending = withdrawn(source, resource);
-    if (value(source, resource) <= pending) return 0;
-    if (source !== room.storage && source !== room.terminal) return Math.max(0, value(source, resource) - pending);
+// ROADMAP 0147 diagnostic (temporary): where does one reservation query spend its CPU?
+// claimsSpans(false) in the console turns the three spans off; off costs three boolean checks.
+let spansOn = false; // claimsSpans(true) turns the claims/fuel diagnostics on (ROADMAP 0147)
+global.claimsSpansOn = false;
+global.claimsSpans = function (on) { spansOn = on !== false; global.claimsSpansOn = spansOn; console.log("[claimsSpans] " + (spansOn ? "on" : "off")); };
+function physicalReservations(room, resource, excludeId, excludeOwner) {
+    const cpuMeter = spansOn ? require("./cpuMeter") : null;
+    let mark = spansOn ? Game.cpu.getUsed() : 0;
+    const lap = (name) => { const now = Game.cpu.getUsed(); cpuMeter.record("spans", name, now - mark); mark = now; };
     const ops = operationIndex.forRoom(room.name);
     const managed = new Set(ops.map((op) => op.marketOrderId).filter(Boolean));
     let terminal = 0, unstaged = 0;
@@ -72,10 +77,12 @@ function physicalFree(room, source, resource, excludeId, excludeOwner) {
         if (op.kind === "transfer" && resource === RESOURCE_ENERGY && op.loadedAmount > left) terminal += op.loadedAmount - left;
         unstaged += Math.max(0, left - staged - carried(op, room, resource));
     });
+    if (spansOn) lap("claims.reserve.ops");
     Object.entries(Game.market && Game.market.orders || {}).forEach(([id, order]) => {
         if (!managed.has(id) && order.roomName === room.name && order.type === ORDER_SELL && order.resourceType === resource)
             terminal += Math.max(0, order.remainingAmount === undefined ? order.amount || 0 : order.remainingAmount);
     });
+    if (spansOn) lap("claims.reserve.orders");
     // Existing physical storage backs unstaged cargo; excess spills into the terminal.
     Object.values(Memory.craft && Memory.craft.active || {}).forEach((c) => {
         if (c.room !== room.name || !c.inventory || excludeOwner && key(excludeOwner) === "craft:" + (c.ownerId || c.id)) return;
@@ -87,8 +94,24 @@ function physicalFree(room, source, resource, excludeId, excludeOwner) {
             }, 0);
         unstaged += Math.max(0, require("./craftLedger").warehouse(c, room, resource) - backed);
     });
+    if (spansOn) lap("claims.reserve.craft");
     const storage = Math.min(unstaged, value(room.storage, resource));
     terminal += unstaged - storage;
-    return Math.max(0, value(source, resource) - (source === room.terminal ? terminal : storage) - pending);
+    return { storage, terminal };
 }
-module.exports = { key, owner, active, outgoing, feeClaim, physicalFree, withdrawn, withdraw, carried };
+function physicalFree(room, source, resource, excludeId, excludeOwner) {
+    const pending = withdrawn(source, resource);
+    if (value(source, resource) <= pending) return 0;
+    if (source !== room.storage && source !== room.terminal) return Math.max(0, value(source, resource) - pending);
+    const reserved = physicalReservations(room, resource, excludeId, excludeOwner);
+    return Math.max(0, value(source, resource) - reserved[source === room.terminal ? "terminal" : "storage"] - pending);
+}
+// One decision only: never retain balances, reservations or ledger results.
+function physicalPool(room, resource, excludeId, excludeOwner) {
+    const storage = Math.max(0, value(room.storage, resource) - (room.storage ? withdrawn(room.storage, resource) : 0));
+    const terminal = Math.max(0, value(room.terminal, resource) - (room.terminal ? withdrawn(room.terminal, resource) : 0));
+    if (!storage && !terminal) return 0;
+    const reserved = physicalReservations(room, resource, excludeId, excludeOwner);
+    return Math.max(0, storage - reserved.storage) + Math.max(0, terminal - reserved.terminal);
+}
+module.exports = { key, owner, active, outgoing, feeClaim, physicalFree, physicalPool, withdrawn, withdraw, carried };

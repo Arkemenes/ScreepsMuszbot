@@ -4,6 +4,7 @@ const roomCache = require("../utils/roomCache");
 const planStore = require("../utils/planStore");
 const traffic = require("../utils/traffic");
 const config = require("../utils/config");
+const mapExits = require("../utils/mapExits");
 
 // The plan's building list / mincut boxes for a room, or [] when unplanned.
 function planBuildings(roomName) {
@@ -407,7 +408,7 @@ function planCity(room, opts) {
             // already being remote-mined - never pave a road to an arbitrary
             // exit (ROADMAP 0008 / 0020)
             const roomMem = Memory.rooms[roomName];
-            const exits = (roomMem && roomMem.exits) || {};
+            const exits = mapExits.known(roomName) || {};
             const remotes = (roomMem && roomMem.remotes) || [];
             for (const direction in exits) {
                 const neighborName = exits[direction];

@@ -47,6 +47,12 @@ market_sold_amount = Gauge('screeps_market_sold_amount', 'Quantidade vendida', [
 market_bought_credits = Gauge('screeps_market_bought_credits', 'Créditos gastos', ['resource'])
 market_sold_credits = Gauge('screeps_market_sold_credits', 'Créditos recebidos', ['resource'])
 terminal_transfer_energy = Gauge('screeps_terminal_transfer_energy', 'Transferência de energia entre salas', ['from_room', 'to_room', 'resource'])
+collection_game_time = Gauge('screeps_collection_game_time', 'Game.time do snapshot recente coletado')
+collection_interval_ticks = Gauge('screeps_collection_interval_ticks', 'Ticks entre coletas válidas distintas')
+collection_gap_ticks = Gauge('screeps_collection_gap_ticks', 'Ticks não cobertos pela janela recente entre as duas últimas coletas')
+collection_window_ticks = Gauge('screeps_collection_window_ticks', 'Tamanho da janela recente em ticks')
+collection_window_covered = Gauge('screeps_collection_window_covered', '1 se o intervalo observado cabe na janela; 0 se desconhecido ou incompleto')
+collection_repeated = Gauge('screeps_collection_repeated', '1 se a coleta repetiu o mesmo Game.time')
 
 # Fallback for new Memory.stats fields. Named metrics above remain the stable
 # dashboard contract; these families make new scalar fields observable without
@@ -195,6 +201,61 @@ def update_asset_metrics(stats):
 
 
 _previous_terminal_routes = set()
+_previous_sparse = {}
+_previous_collection_tick = None
+
+
+def _publish_sparse(name, gauge, current):
+    previous = _previous_sparse.get(name, set())
+    gauge.clear()
+    for labels in previous | current.keys():
+        gauge.labels(**dict(labels)).set(current.get(labels, 0))
+    _previous_sparse[name] = set(current)
+
+
+def update_sparse_metrics(stats):
+    """Replace window/stock gauges; a missing series closes at zero once."""
+    finite = lambda n: not isinstance(n, bool) and isinstance(n, (int, float)) and math.isfinite(n) and n >= 0
+    for field, label, gauge in (("minerals", "mineral", room_mineral), ("compoundsT3", "compound", room_compound_t3)):
+        current = {}
+        for room, values in stats.get("rooms", {}).items():
+            for resource, amount in values.get(field, {}).items():
+                if finite(amount):
+                    current[(("room", room), (label, resource))] = amount
+        _publish_sparse(field, gauge, current)
+    tx = stats.get("market", {}).get("transactions", {})
+    for side, amount_gauge, credit_gauge in (("bought", market_bought_amount, market_bought_credits),
+                                            ("sold", market_sold_amount, market_sold_credits)):
+        for field, gauge in (("amount", amount_gauge), ("credits", credit_gauge)):
+            current = {(("resource", r),): entry.get(field, 0) for r, entry in tx.get(side, {}).items()
+                       if finite(entry.get(field, 0))}
+            _publish_sparse(side + "." + field, gauge, current)
+
+
+def update_collection_coverage(stats):
+    """Coverage of recent Gauges in game ticks; never accumulate snapshots."""
+    global _previous_collection_tick
+    telemetry = stats.get("telemetry", {})
+    tick, window = telemetry.get("tick"), telemetry.get("windowTicks")
+    valid = lambda n: not isinstance(n, bool) and isinstance(n, (int, float)) and math.isfinite(n)
+    if not valid(tick) or not valid(window) or window <= 0:
+        collection_window_covered.set(0)
+        collection_repeated.set(0)
+        collection_interval_ticks.set(0)
+        collection_gap_ticks.set(0)
+        collection_window_ticks.set(0)
+        _previous_collection_tick = None
+        return
+    delta = tick - _previous_collection_tick if _previous_collection_tick is not None else None
+    collection_game_time.set(tick)
+    collection_window_ticks.set(window)
+    collection_repeated.set(int(delta == 0))
+    if delta == 0:
+        return
+    collection_interval_ticks.set(max(0, delta) if delta is not None else 0)
+    collection_gap_ticks.set(max(0, delta - window) if delta is not None else 0)
+    collection_window_covered.set(int(delta is not None and 0 <= delta <= window))
+    _previous_collection_tick = tick
 
 
 def update_terminal_metrics(stats):
@@ -221,6 +282,8 @@ def update_metrics():
 
     update_generic_metrics(stats)
     update_asset_metrics(stats)
+    update_sparse_metrics(stats)
+    update_collection_coverage(stats)
 
     # --- GCL ---
     gcl = stats.get("gcl", {})
@@ -273,11 +336,6 @@ def update_metrics():
         if "defcon" in r:
             room_defcon.labels(room=room).set(r["defcon"])
 
-        for mineral, amount in r.get("minerals", {}).items():
-            room_mineral.labels(room=room, mineral=mineral).set(amount)
-        for compound, amount in r.get("compoundsT3", {}).items():
-            room_compound_t3.labels(room=room, compound=compound).set(amount)
-
         # energySpent: spawn, renew, build, repairNormal, repairRampart, repairWall,
         # upgrade, towerAttack, towerHeal, towerRepair
         for category, amount in r.get("energySpent", {}).items():
@@ -287,12 +345,6 @@ def update_metrics():
     market = stats.get("market", {})
     if "credits" in market:
         market_credits.set(market["credits"])
-    for resource, tx in market.get("transactions", {}).get("bought", {}).items():
-        market_bought_amount.labels(resource=resource).set(tx.get("amount", 0))
-        market_bought_credits.labels(resource=resource).set(tx.get("credits", 0))
-    for resource, tx in market.get("transactions", {}).get("sold", {}).items():
-        market_sold_amount.labels(resource=resource).set(tx.get("amount", 0))
-        market_sold_credits.labels(resource=resource).set(tx.get("credits", 0))
 
     # --- Terminal Network ---
     update_terminal_metrics(stats)

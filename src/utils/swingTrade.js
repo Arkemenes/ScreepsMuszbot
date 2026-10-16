@@ -14,27 +14,27 @@ function memory() {
 }
 function reference(r, kind) {
     const side = kind === "buy" ? "sellPrice" : "buyPrice";
-    const samples = market.samples(r);
-    const rows = samples.filter((s) => s[side] > 0);
-    const newest = rows.length ? rows[rows.length - 1].tick : null;
+    const summary = market.sampleSummary(r);
+    const valid = kind === "buy" ? summary.sellCount : summary.buyCount;
+    const newest = kind === "buy" ? summary.sellTick : summary.buyTick;
     const requiredSamples = config.get("swing.minSamples", 30);
     const maxSampleAge = config.get("swing.maxSampleAge", 7200);
-    const details = { resourceType: r, kind, referenceSide: side, totalSamples: samples.length,
-        validSamples: rows.length, requiredSamples, latestSampleTick: newest,
+    const details = { resourceType: r, kind, referenceSide: side, totalSamples: summary.length,
+        validSamples: valid, requiredSamples, latestSampleTick: newest,
         sampleAge: newest === null ? null : Game.time - newest, maxSampleAge };
     if (!market.historyReady()) return Object.assign(details, { reason: "history-loading" });
-    if (rows.length < requiredSamples) return Object.assign(details, { reason: "insufficient-history" });
+    if (valid < requiredSamples) return Object.assign(details, { reason: "insufficient-history" });
     if (newest > Game.time || Game.time - newest > maxSampleAge) return Object.assign(details, { reason: "stale-history" });
     const snap = market.snapshot();
     const data = snap && snap.resources && snap.resources[r];
     if (!data || !(data[side] > 0)) return Object.assign(details, { reason: "missing-reference" });
     const energy = snap.resources[RESOURCE_ENERGY];
     if (!energy || !(energy.fairPrice > 0)) return Object.assign(details, { reason: "missing-energy-price" });
-    const energyRows = market.samples(RESOURCE_ENERGY).filter((s) => s.sellPrice > 0);
-    const lastEnergy = energyRows.length && energyRows[energyRows.length - 1].tick;
-    details.energyValidSamples = energyRows.length;
-    details.energySampleAge = energyRows.length ? Game.time - lastEnergy : null;
-    if (energyRows.length < requiredSamples || lastEnergy > Game.time || Game.time - lastEnergy > maxSampleAge)
+    const energyRows = market.sampleSummary(RESOURCE_ENERGY);
+    const lastEnergy = energyRows.sellCount && energyRows.sellTick;
+    details.energyValidSamples = energyRows.sellCount;
+    details.energySampleAge = energyRows.sellCount ? Game.time - lastEnergy : null;
+    if (energyRows.sellCount < requiredSamples || lastEnergy > Game.time || Game.time - lastEnergy > maxSampleAge)
         return Object.assign(details, { reason: "invalid-energy-history" });
     return Object.assign(details, { price: data[side], energy: energy.fairPrice });
 }
@@ -145,6 +145,7 @@ function expire() {
     });
 }
 let lastScan = null;
+const impl = { quote, observe, internalSource };
 function tick() {
     if (!config.get("stockPolicy.enabled", true) || !config.get("swing.enabled", true)) return;
     expire();
@@ -154,12 +155,20 @@ function tick() {
     lastScan = historyReady ? Game.time : null;
     const ops = require("./terminalOps"), mem = memory();
     const rooms = (Game.myRooms || Object.keys(Game.rooms || {}).map((n) => Game.rooms[n])).filter((r) => r.controller && r.controller.my && r.storage && r.terminal);
-    const orders = historyReady ? book.all() : [];
+    // ROADMAP 0147: each quote walks only its own resource's orders, not the whole book
+    const ordersFor = (r) => historyReady ? book.byResource(r) : [];
     const test = config.get("swing.test", true);
     mem.observations = {};
+    // ROADMAP 0147 diagnostic (temporary): where does one scan spend its ~18 CPU? Totals per
+    // scan are published as spans swing.scan.*; the calls below are the module's own functions.
+    const lapTotals = {};
+    const lap = (name, fn) => { const start = Game.cpu.getUsed(); try { return fn(); } finally { lapTotals[name] = (lapTotals[name] || 0) + Game.cpu.getUsed() - start; } };
+    const quote = (...args) => lap("quote", () => impl.quote(...args));
+    const observe = (...args) => lap("observe", () => impl.observe(...args));
+    const internalSource = (...args) => lap("internalSource", () => impl.internalSource(...args));
     rooms.forEach((room) => {
         Object.keys(policy.targets(room)).forEach((r) => {
-            const need = policy.deficit(room, r);
+            const need = lap("policy", () => policy.deficit(room, r));
             if (!need) { observe(room, r, "buy", { reason: "target-satisfied" }); return; }
             const source = internalSource(room, r, need, rooms);
             if (source) {
@@ -167,7 +176,7 @@ function tick() {
                 if (!test) ops.transfer(source.source, room.name, r, source.quantity, { automatic: true, policy: "swing", reason: "usage-target" });
                 return;
             }
-            const q = quote(room, "buy", r, Infinity, { orders });
+            const q = quote(room, "buy", r, Infinity, { orders: ordersFor(r) });
             observe(room, r, "buy", q.order ? { reason: "eligible", quantity: q.quantity, netAmount: q.netAmount,
                 effective: q.effective, reference: q.reference, limit: q.limit, cost: q.cost, orderId: q.order.id } : q);
             if (!test && q.order) {
@@ -181,7 +190,7 @@ function tick() {
             const owner = { kind: "swing", id: room.name + ":" + r };
             const active = ops.activeForRoom(room.name).filter((op) => op.resourceType === r);
             const sales = active.filter((op) => op.kind === "sell" && require("./terminalClaims").owner(op) === "swing:" + owner.id);
-            const free = Math.floor(policy.available(room, r, sales.length ? "swing:" + owner.id : undefined));
+            const free = Math.floor(lap("policy", () => policy.available(room, r, sales.length ? "swing:" + owner.id : undefined)));
             const pending = active.some((op) => sales.indexOf(op) < 0);
             if (!free || pending) { observe(room, r, "sell", { reason: pending ? "pending-operation" : "reserved-stock" }); return; }
             const lotId = sales.length && sales[0].lots && sales[0].lots[0].id || room.name + ":" + r + ":" + Game.time;
@@ -189,7 +198,7 @@ function tick() {
             const target = Memory.terminalOps && Memory.terminalOps.lotTargets && Memory.terminalOps.lotTargets[targetKey];
             const sold = Math.max(0, (target && target.accepted || 0) - sales.reduce((n, op) => n + op.remaining, 0));
             const saleOptions = { policy: "swing", effectiveLimit: true, owner, lotId };
-            const q = quote(room, "sell", r, free, { orders, excludeId: sales.length ? sales[0].id : undefined });
+            const q = quote(room, "sell", r, free, { orders: ordersFor(r), excludeId: sales.length ? sales[0].id : undefined });
             if (q.order) {
                 observe(room, r, "sell", { reason: "eligible", quantity: q.quantity, effective: q.effective, reference: q.reference, limit: q.limit, cost: q.cost, orderId: q.order.id });
                 if (!test) {
@@ -203,12 +212,13 @@ function tick() {
             const blocked = Math.min(free, mem.noRelist[key] || 0);
             const qty = Math.floor(Math.min(free - blocked, policy.value(room.terminal, r) + policy.terminalFree(room)));
             if (!qty) { observe(room, r, "sell", { reason: blocked ? "expired-lot" : "no-staging-space" }); return; }
-            const price = listingPrice(room, r, q.limit, orders);
+            const price = listingPrice(room, r, q.limit, ordersFor(r));
             if (price * qty * 0.05 > accounting.available()) { observe(room, r, "sell", { reason: "listing-fee-budget" }); return; }
             observe(room, r, "sell", { reason: "eligible-listing", quantity: qty, effective: price * 0.95, price, reference: q.reference, limit: q.limit });
             if (!test) ops.sellLot(room.name, r, sold + qty, q.limit, true, true, Object.assign({}, saleOptions, { fixedListing: true }));
         });
     });
+    Object.keys(lapTotals).forEach((k) => require("./cpuMeter").record("spans", "swing.scan." + k, lapTotals[k]));
 }
 function status(roomName) {
     const observations = memory().observations;

@@ -37,5 +37,23 @@ module.exports = function (project, assert) {
         assert(Memory.stats.terminalNetwork.transfers[0].amount === 45, "ARK-130: routes retain only their actual recent window amount");
         Game.time++; stats();
         assert(Memory.stats.terminalNetwork.transfers[0].amount === 0, "ARK-130: stats clears expired route amounts at the exact boundary");
+        Memory.terminalOps.events.push({ ...event, tick: Game.time, kind: "buy", resourceType: "O", amount: 12, credits: -36 });
+        Memory.terminalOps.events.push({ ...event, tick: Game.time, kind: "buy", resourceType: "O", amount: 8, credits: -20 });
+        Memory.terminalOps.events.push({ ...event, tick: Game.time, kind: "sell", resourceType: "O", amount: 7, credits: 28 });
+        stats();
+        let tx = Memory.stats.market && Memory.stats.market.transactions;
+        assert(tx && tx.bought.O && tx.bought.O.amount === 20 && tx.bought.O.credits === 56 && tx.sold.O.amount === 7,
+            "ARK-130: lightweight market snapshot sums confirmed events by side and resource");
+        const marketSnapshot = tx;
+        Game.time++; stats();
+        assert(Memory.stats.market && Memory.stats.market.transactions === marketSnapshot,
+            "ARK-130: idle market ticks reuse the snapshot without replaying events");
+        Game.time += 59; stats();
+        tx = Memory.stats.market && Memory.stats.market.transactions;
+        assert(tx && tx.bought.O && tx.bought.O.amount === 0 && tx.bought.O.credits === 0 && tx.sold.O.amount === 0,
+            "ARK-130: expired market resources explicitly zero both amount and credits");
+        assert(Memory.stats.telemetry && Memory.stats.telemetry.tick === Game.time && Memory.stats.telemetry.windowTicks === 60 &&
+            Memory.stats.telemetry.windowStart === Game.time - 59,
+            "ARK-130: external collector receives actual Game.time window endpoints");
     } finally { global.Game = saved.game; global.Memory = saved.memory; }
 };

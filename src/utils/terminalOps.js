@@ -203,8 +203,8 @@ function conflictResult(kind, roomName, resourceType, options) {
     return response;
 }
 function saleAvailable(source, resource, owner, includeTerminal = true) {
-    const physical = claims.physicalFree(source, source.storage, resource, null, owner) +
-        (includeTerminal ? claims.physicalFree(source, source.terminal, resource, null, owner) : 0);
+    const physical = includeTerminal ? claims.physicalPool(source, resource, null, owner) :
+        claims.physicalFree(source, source.storage, resource, null, owner);
     if (physical <= 0) return 0;
     const committed = stockPolicy.commitments(source, claims.key(owner))[resource] || 0;
     const uncommitted = Math.max(0, storeValue(source.storage.store, resource) + (includeTerminal ? storeValue(source.terminal.store, resource) : 0) - committed -
@@ -790,6 +790,14 @@ function listResidual(op, target) {
     // Cheap interval check first: competitivePrice() scans the order book, and
     // a live order inside its reprice window needs nothing from it.
     const liveOrder = op.marketOrderId && Game.market.orders && Game.market.orders[op.marketOrderId];
+    {
+        // ROADMAP 0147 probe (read-only): how often a listing sees the same inputs as last time
+        const probe = require("./probe");
+        let h = probe.fold(0, op.state); h = probe.fold(h, op.remaining || 0);
+        h = probe.fold(h, liveOrder ? liveOrder.price : 0); h = probe.fold(h, liveOrder ? liveOrder.remainingAmount || 0 : 0);
+        h = probe.fold(h, target && target.terminal ? storeValue(target.terminal.store, op.resourceType) : 0);
+        probe.hit("terminalOps.listResidual", op.id, h);
+    }
     if (op.createdListing && !liveOrder && op.listedTick !== undefined) {
         // Never create twice while waiting for the engine to expose an order ID.
         if (Game.time - op.listedTick > config.get("terminalOps.orderConfirmationTicks", 10)) {
@@ -848,7 +856,7 @@ function listResidual(op, target) {
     if (liveOrder && Game.time - (op.repriceTick || op.listedTick || 0) < config.get("terminalOps.repriceInterval", 1000)) { touch(op, "listed"); return; }
     const ceiling = op.kind === "buy" ? buyListingCeiling(op, liveOrder) : Infinity;
     const floor = op.kind === "sell" ? op.limit / 0.95 : 0;
-    const price = op.fixedListing && op.kind === "sell" ? require("./swingTrade").listingPrice(target, op.resourceType, op.limit, require("./orderBook").all()) : op.kind === "buy" ? Math.min(competitivePrice(op), ceiling) : Math.max(competitivePrice(op), floor);
+    const price = op.fixedListing && op.kind === "sell" ? require("./swingTrade").listingPrice(target, op.resourceType, op.limit, require("./orderBook").byResource(op.resourceType)) : op.kind === "buy" ? Math.min(competitivePrice(op), ceiling) : Math.max(competitivePrice(op), floor);
     if (!(price > 0) || (op.kind === "buy" && price > ceiling) || (op.kind === "sell" && price < floor)) { op.error = "não há preço competitivo dentro do limite líquido"; touch(op, "waiting"); return; }
     const old = op.marketOrderId && Game.market.orders && Game.market.orders[op.marketOrderId];
     const interval = config.get("terminalOps.repriceInterval", 1000);
@@ -1565,10 +1573,16 @@ function cancel(id) {
 // Shared by stats()/marketTransactionStats()/terminalTransferStats() so the
 // window is trimmed once and all three read the same events, not three
 // independently-filtered copies of the same array.
+let eventCache = null;
 function recentEvents() {
     const window = config.get("terminalOps.statsWindowTicks", 60);
-    memory().events = memory().events.filter((event) => Game.time - event.tick < window);
-    return memory().events;
+    const mem = memory();
+    if (eventCache && eventCache.events === mem.events && eventCache.count === mem.events.length &&
+        eventCache.window === window && Game.time >= eventCache.tick && Game.time < eventCache.expires) return mem.events;
+    mem.events = mem.events.filter((event) => Game.time - event.tick < window);
+    eventCache = { events: mem.events, count: mem.events.length, window, tick: Game.time,
+        expires: mem.events.reduce((min, event) => Math.min(min, event.tick + window), Infinity) };
+    return mem.events;
 }
 function stats(roomName) {
     const summary = { pending: 0, waiting: 0, lastError: null, count: 0, amount: 0, credits: 0, transactionEnergy: 0 };
@@ -1583,15 +1597,22 @@ function stats(roomName) {
 // credits is stored negative for "buy" (money leaving) by record() above;
 // both buckets are reported as a positive magnitude here since the bucket
 // name (bought/sold) already carries the sign's meaning.
-function marketTransactionStats() {
+let marketStatsCache = null;
+function marketTransactionStats(previous) {
+    const events = recentEvents(), window = config.get("terminalOps.statsWindowTicks", 60);
+    if (marketStatsCache && marketStatsCache.events === events && marketStatsCache.count === events.length &&
+        marketStatsCache.window === window && previous === marketStatsCache.snapshot) return marketStatsCache.snapshot;
     const summary = { bought: {}, sold: {} };
-    recentEvents().forEach((event) => {
+    for (const side of ["bought", "sold"]) for (const r of Object.keys(previous && previous[side] || {}))
+        summary[side][r] = { amount: 0, credits: 0 };
+    events.forEach((event) => {
         if (event.kind !== "buy" && event.kind !== "sell") return;
         const bucket = event.kind === "buy" ? summary.bought : summary.sold;
         const entry = bucket[event.resourceType] || (bucket[event.resourceType] = { amount: 0, credits: 0 });
         entry.amount += event.amount;
         entry.credits += Math.abs(event.credits);
     });
+    marketStatsCache = { events, count: events.length, window, snapshot: summary };
     return summary;
 }
 // ROADMAP 0079 follow-up: terminalNetwork.transfers for the "Transferência

@@ -13,13 +13,21 @@ function optionalAllowed(room, cost) {
     const available = Math.max(0, value(room.storage) + value(room.terminal) - committed);
     return Number.isFinite(cost) && cost <= available * config.get("terminalFuel.scarceOptionalRatio", 0.1);
 }
+// ROADMAP 0147 diagnostic (temporary): which part of plan() costs its ~0,4 CPU per call?
+// Spans fuel.plan.{scarce,ops,commit,obs}; they share claimsSpans(false) with the claims spans.
 function plan(room) {
+    const timed = global.claimsSpansOn ? require("./cpuMeter") : null;
+    let mark = timed ? Game.cpu.getUsed() : 0;
+    const lap = (name) => { if (!timed) return; const now = Game.cpu.getUsed(); timed.record("spans", name, now - mark); mark = now; };
     const low = scarce(room);
+    lap("fuel.plan.scarce");
     let optionalLimit;
     const optional = (cost) => {
         if (!enabled() || !low) return true;
         if (optionalLimit === undefined) {
+            const commitStart = timed ? Game.cpu.getUsed() : 0;
             const committed = require("./resourcePolicy").commitments(room)[RESOURCE_ENERGY] || 0;
+            if (timed) { timed.record("spans", "fuel.plan.commit", Game.cpu.getUsed() - commitStart); mark += Game.cpu.getUsed() - commitStart; }
             optionalLimit = Math.max(0, value(room.storage) + value(room.terminal) - committed) *
                 config.get("terminalFuel.scarceOptionalRatio", 0.1);
         }
@@ -56,6 +64,7 @@ function plan(room) {
         quotes.push({ cost, paid, priority: op.kind === "buy" && op.resourceType === RESOURCE_ENERGY ? 0 : 1, tick: op.createdTick || 0 });
         covered.add(op.id);
     });
+    lap("fuel.plan.ops");
     const observations = Memory.swing && Memory.swing.observations || {};
     Object.keys(observations).forEach((key) => {
         const q = observations[key];
@@ -65,6 +74,7 @@ function plan(room) {
             q.kind === "sell" && !optional(q.cost)) return;
         quotes.push({ cost: q.cost, paid: 0, priority: q.kind === "buy" && q.resourceType === RESOURCE_ENERGY ? 0 : 1, tick: q.tick });
     });
+    lap("fuel.plan.obs");
     quotes.sort((a, b) => a.priority - b.priority || a.tick - b.tick);
     const next = quotes.slice(0, Math.max(0, config.get("terminalFuel.transactions", 2)));
     const forecast = next.reduce((n, q) => n + q.cost, 0);

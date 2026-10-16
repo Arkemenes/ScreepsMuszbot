@@ -130,6 +130,30 @@ module.exports = function (project, assert) {
                     "ARK-116: freight reuse does not escape into the next selection in the same tick");
             } finally { Game.market.calcTransactionCost = originalCost; }
         }
+        // ROADMAP 0147 oracle: the per-resource index must give the scan exactly what filtering the whole book gave
+        {
+            fresh();
+            const resources = ["energy", "O", "Z", "H", "X", "U", "L"], rooms = ["Remote", "FarA", "FarB", "Near"];
+            let seed = 7; const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+            orders = [];
+            for (let i = 0; i < 3000; i++) {
+                const r = resources[Math.floor(rnd() * resources.length)];
+                orders.push({ id: "bk" + i, resourceType: r, type: rnd() < 0.5 ? ORDER_SELL : ORDER_BUY, roomName: rooms[Math.floor(rnd() * rooms.length)],
+                    price: Math.round((5 + rnd() * 12) * 1000) / 1000, remainingAmount: Math.floor(rnd() * 20000), amount: 20000 });
+            }
+            orders.push(null); orders.push({ id: "bad", resourceType: "O", type: ORDER_SELL, price: 8, remainingAmount: 100 });
+            const run = () => { book.reset(); swing.resetScan(); Game.time += 1; swing.tick(); return JSON.stringify(Memory.swing && Memory.swing.observations); };
+            const indexed = run();
+            const realBy = book.byResource;
+            book.byResource = () => book.all(); // the old behaviour: every quote sees the whole book
+            Game.time -= 1;
+            const whole = run();
+            book.byResource = realBy;
+            assert(indexed === whole && /orderId/.test(indexed), "0147: per-resource book index leaves the swing scan observations identical (" + indexed.length + " chars)");
+            assert(JSON.stringify(book.byResource("O").map((o) => o.id)) === JSON.stringify(book.all().filter((o) => o && o.resourceType === "O").map((o) => o.id)),
+                "0147: byResource keeps the book's relative order");
+            fresh();
+        }
         assert(swing.effective("sell", "O", 13, 100, 20, 10) === 11, "0124: immediate sale subtracts freight rather than listing fee");
         orders = [q(7)]; book.reset();
         Memory.settings.swing.scanInterval = 120;

@@ -469,6 +469,14 @@ const defaults = {
         // a load pick is kept this many ticks while its target still holds 50+ energy
         // (roles/hauler.js pickLoad: no path search every tick on the way there)
         repickTicks: 5,
+        // ROADMAP 0152: an idle hauler (empty, nothing to load, no mineral/chain job) searches again
+        // only every this many ticks (the tick it goes idle always searches); 1 = every tick (old
+        // behaviour). A hungry spawn/extension, or any load in the tank, keeps the per-tick search.
+        idleRecheckTicks: 5,
+        // ROADMAP 0152: a delivery pick is kept this many ticks while the target still takes energy and
+        // nothing of higher priority (hungry spawn/extension, critical tower, storage below reserve)
+        // appeared; 1 = pick again every tick (old behaviour)
+        deliverRepickTicks: 5,
         // a source container needs more than this much energy before a
         // hauler bothers with the trip
         minContainerLoad: 1000,
@@ -496,6 +504,9 @@ const defaults = {
         minCountWithMineral: 2,
     },
     builder: {
+        // ROADMAP 0152: an empty builder that found no pile to take (dry room) searches again only every
+        // this many ticks; 1 = every tick (old behaviour)
+        idleRecheckTicks: 5,
         // utils/autoscale.js (ROADMAP 0040): pickableEnergy() thresholds
         // gating the incremental grow/shrink, set at the same boundaries
         // rooms/needs.js's own byEnergy tier already uses (>50000 -> its
@@ -832,7 +843,17 @@ const defaults = {
         // is otherwise unconditional whenever any Power sits in the store
         enabled: true,
     },
+    // ROADMAP 0145: optional live comparison of a pure reference decision with the
+    // candidate that actually acts. Off by default; capped per tick (utils/shadowBudget.js).
+    shadow: {
+        enabled: false,
+        minBucket: 9000,
+        maxCpuPerTick: 0.5,
+    },
     stats: {
+        // main.js cpuReport: warm intervals after which the bot prints its own CPU report once
+        // per global reset (0 turns the automatic report off; cpuReport(n) in the console still works)
+        autoReportIntervals: 150,
         // utils/stats.js (ROADMAP 0079): rooms.<room>.avgBarrierHits iterates
         // every rampart/wall in the room (roomCache.myStructures, no new
         // room.find, but still real work on a big base) - throttled to once

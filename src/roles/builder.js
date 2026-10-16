@@ -221,6 +221,26 @@ global.builderStats = function (enabled) {
     console.log("[builderStats] " + JSON.stringify(Memory.builderDebug || {}));
 };
 
+// ROADMAP 0152: the empty-and-no-pile builder searches again every builder.idleRecheckTicks ticks.
+// Heap only; a reset, a room change or a clock rewind forgets the mark (the next tick searches).
+const idleChecks = {}; // creep name -> { tick, room }
+let idleChecksGc = 0;
+function idleSkip(creep) {
+    const every = config.get("builder.idleRecheckTicks", 5);
+    if (!(every > 1)) return false;
+    const mark = idleChecks[creep.name];
+    return !!mark && mark.room === creep.room.name && Game.time >= mark.tick && Game.time - mark.tick < every;
+}
+function markIdle(creep) {
+    idleChecks[creep.name] = { tick: Game.time, room: creep.room.name };
+    if (Game.time - idleChecksGc >= 300 || Game.time < idleChecksGc) {
+        idleChecksGc = Game.time;
+        Object.keys(idleChecks).forEach((name) => {
+            if (!Game.creeps[name] || Game.time - idleChecks[name].tick > 50) delete idleChecks[name];
+        });
+    }
+}
+
 var builder = {
     /** @param {Creep} creep **/
     run: function (creep) {
@@ -254,24 +274,32 @@ var builder = {
         // mining without a container/link/tower to receive it just spills
         // energy on the ground; a dry room means wait, not mine.
         if (creep.store[RESOURCE_ENERGY] == 0) {
-            // don't take a pile an economy creep (hauler / bootstrap) is going
-            // for while the room still wants spawn / extensions filled
-            const piles = energyPiles(creep.room);
-            const linkSafe = reservations.economyStable(creep.room);
-            const eligiblePiles = linkSafe
-                ? piles
-                : _.filter(piles, (p) => p.structureType !== STRUCTURE_LINK);
-            const pile = cpuMeter.span("builder.pickPile", () => creep.pos.findClosestByPath(
-                reservations.usable(creep, eligiblePiles)
-            ));
-            if (pile) {
-                reservations.claim(creep, pile.id);
-                creep.pushState("GetEnergy", pile.id);
-                if (!creep.invokeState()) creep.say("zzz");
-                return;
-            }
+            // ROADMAP 0152: an empty builder that found no pile (dry room) looks again every
+            // builder.idleRecheckTicks (5) ticks instead of running the path search every tick
+            if (idleSkip(creep)) {
+                cpuMeter.record("spans", "builder.idleSkip", 0); // calls/tick = searches avoided
+            } else {
+                delete idleChecks[creep.name];
+                // don't take a pile an economy creep (hauler / bootstrap) is going
+                // for while the room still wants spawn / extensions filled
+                const piles = energyPiles(creep.room);
+                const linkSafe = reservations.economyStable(creep.room);
+                const eligiblePiles = linkSafe
+                    ? piles
+                    : _.filter(piles, (p) => p.structureType !== STRUCTURE_LINK);
+                const pile = cpuMeter.span("builder.pickPile", () => creep.pos.findClosestByPath(
+                    reservations.usable(creep, eligiblePiles)
+                ));
+                if (pile) {
+                    reservations.claim(creep, pile.id);
+                    creep.pushState("GetEnergy", pile.id);
+                    if (!creep.invokeState()) creep.say("zzz");
+                    return;
+                }
 
-            reservations.release(creep);
+                reservations.release(creep);
+                markIdle(creep);
+            }
 
             // room is dry - wait by a receiving link for the network to fill
             // it, and grab whatever it's actually holding once in range. This
@@ -422,5 +450,9 @@ var builder = {
         return { name, body, memory };
     },
 };
+
+// exposed for the offline smoke test only
+builder.idleSkip = idleSkip;
+builder.markIdle = markIdle;
 
 module.exports = builder;

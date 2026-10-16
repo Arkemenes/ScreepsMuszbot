@@ -436,6 +436,39 @@ module.exports = function labPolicyCases(PROJECT, assert) {
             assert(reference.phases.every((phase) => phase.layout.filter((p) => p === phase.products[0]).length === count - 2),
                 "0127: cold wide reference uses every eligible output on " + count + " labs");
         }
+        // Multiple real runtimes share one Game/Memory. Claims/listings are varied
+        // independently in economyScaleCases; here transport and engine settle intents.
+        for (const roomCount of [3, 5, 10]) for (const labCount of [3, 7, 10]) {
+            const worlds = [], rooms = {}, objects = {}, mem = {}, active = {};
+            for (let i = 0; i < roomCount; i++) {
+                const next = world("XLH2O", 5, slots.SLOT_NUMBERS.slice(0, labCount));
+                worlds.push(next); rooms[next.room.name] = next.room;
+                Object.assign(objects, next.objects); mem[next.room.name] = Memory.rooms[next.room.name];
+                active[next.chain.key] = next.chain;
+            }
+            Game.rooms = rooms; Game.getObjectById = (id) => objects[id] || null;
+            Memory.rooms = mem; Memory.craft.active = active;
+            const meter = load("src/utils/cpuMeter"), span = meter.span;
+            let assignmentCalls = 0, ticks = 0;
+            meter.span = (key, fn) => { if (key === "labPolicy.assignments") assignmentCalls++; return span(key, fn); };
+            try {
+                for (; ticks < 5000 && worlds.some((v) => !v.item.run || !v.item.run.done); ticks++) {
+                    for (const v of worlds) {
+                        if (v.item.run && v.item.run.done) continue;
+                        runtime.tick(v.room, v.chain, v.item);
+                        transport(v, Infinity);
+                        v.labs.forEach((lab) => reactions.execute(lab));
+                        engine(v, false);
+                    }
+                    Game.time++;
+                }
+            } finally { meter.span = span; }
+            assert(ticks < 5000 && worlds.every((v) => v.item.run.done && v.item.run.produced.XLH2O === 5),
+                "ARK-128: simultaneous rooms preserve exact T3 production at scale " + roomCount + "/" + labCount);
+            assert(assignmentCalls <= ticks * roomCount,
+                "ARK-128: assignments execute at most once per working room/tick at scale " + roomCount + "/" + labCount);
+            console.log("ARK-128 lab scale " + JSON.stringify({ rooms: roomCount, labs: labCount, ticks, assignmentCalls }));
+        }
         console.log("0127: runtime policy, confirmation, cooldown, pipelines, inventory, heap reset and logistics passed");
     } finally {
         Object.assign(global, saved);

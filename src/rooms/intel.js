@@ -3,6 +3,7 @@ const roomCache = require("../utils/roomCache");
 const cpuMeter = require("../utils/cpuMeter");
 const transitSafety = require("../utils/transitSafety");
 const keeperTransit = require("../utils/keeperTransit");
+const mapExits = require("../utils/mapExits");
 
 const STALE_COUNTERS = [
     "numberOfDefenders", "numberOfUpgraders", "numberOfBuilders", "numberOfMiners",
@@ -23,12 +24,14 @@ function getIntel(room) {
     }
     const mem = Memory.rooms[room.name];
 
-    if (!mem.exits) {
-        mem.exits = Game.map.describeExits(room.name);
+    // First look at this room: its neighbours get their (empty) record so the scouts know
+    // them. The exits themselves are not stored - utils/mapExits.js (ROADMAP 0146).
+    if (mem.lastVisit === undefined && !mem.exits) {
+        const exits = mapExits.exits(room.name) || {};
 
-        for (let exit in mem.exits) {
-            if (!Memory.rooms[mem.exits[exit]]) {
-                Memory.rooms[mem.exits[exit]] = {};
+        for (let exit in exits) {
+            if (!Memory.rooms[exits[exit]]) {
+                Memory.rooms[exits[exit]] = {};
             }
         }
     }
@@ -62,7 +65,9 @@ function getIntel(room) {
 
     cpuMeter.span("intel.transitSafety", () => transitSafety.observeRoom(room));
     const hostiles = cpuMeter.span("intel.hostiles", () => getHostiles(room));
-    mem.enemies = hostiles.length;
+    // ROADMAP 0146: the zero/false defaults are not stored (undefined is not serialised);
+    // every reader treats a missing enemies/enemyStructures/numberOfTowers/hasInvaderCore as 0/false
+    mem.enemies = hostiles.length || undefined;
     cpuMeter.span("intel.keeperTransit", () => keeperTransit.observe(room));
     if (room.controller && room.controller.my) {
         mem.defenseActive = hostiles.length > 0;
@@ -83,26 +88,22 @@ function getIntel(room) {
             const enemyStructures = room.find(FIND_HOSTILE_STRUCTURES, {
                 filter: (s) => s.structureType != STRUCTURE_POWER_BANK,
             });
-            mem.enemyStructures = enemyStructures.length;
+            mem.enemyStructures = enemyStructures.length || undefined;
             // ROADMAP 0032 O2 - console raidRoom() targets this directly.
             mem.hasInvaderCore = enemyStructures.some(
                 (s) => s.structureType === STRUCTURE_INVADER_CORE
-            );
+            ) || undefined;
             // a room we do not own has no towers of ours: the hostile ones are all there are, so
             // observing a room needs no full FIND_STRUCTURES just to count them (see below)
             if (!(room.controller && room.controller.my)) {
                 mem.numberOfTowers = enemyStructures.filter(
                     (s) => s.structureType === STRUCTURE_TOWER
-                ).length;
+                ).length || undefined;
             }
         });
     }
 
     mem.lastVisit = Game.time;
-
-    if (!mem.builds) {
-        mem.builds = {};
-    }
 
     // The numberOfDefenders/Upgraders/Builders/Miners/Haulers/Scouts/... counters (12
     // census lookups and as many Memory writes per room per tick) were read by nothing - gone
@@ -115,7 +116,7 @@ function getIntel(room) {
 
     // read by rooms/raiding.js only, for rooms we do not own (counted by the enemy scan above)
     if (room.controller && room.controller.my) {
-        mem.numberOfTowers = roomCache.structuresByType(room, STRUCTURE_TOWER).length;
+        mem.numberOfTowers = roomCache.structuresByType(room, STRUCTURE_TOWER).length || undefined;
     }
 }
 

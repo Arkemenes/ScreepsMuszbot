@@ -11,7 +11,7 @@ function ready(room, chain, item) {
     const factory = require("./roomCache").structuresByType(room, STRUCTURE_FACTORY)[0];
     const held = factory && factory.store[RESOURCE_ENERGY] || 0;
     const claims = require("./terminalClaims"), owner = "craft:" + (chain.ownerId || chain.id);
-    const pool = claims.physicalFree(room, room.storage, RESOURCE_ENERGY, null, owner) + claims.physicalFree(room, room.terminal, RESOURCE_ENERGY, null, owner);
+    const pool = claims.physicalPool(room, RESOURCE_ENERGY, null, owner);
     const floor = room.storage.store.getCapacity ? require("./resourceTiers").reserveFloor(room) : 0;
     const deficit = Math.max(0, needed - held - Math.max(0, pool - floor));
     if (!deficit) {
@@ -100,7 +100,7 @@ function ready(room, chain, item) {
         const feasible = inputs.every((r) => {
             const data = snapshot.resources[r], quantity = conversion.components[r];
             const price = data && require("./marketPricing").conservativeBid(r, data.currentBuy);
-            if (!(price > 0) || claims.physicalFree(room, room.storage, r, null, owner) + claims.physicalFree(room, room.terminal, r, null, owner) < quantity) return false;
+            if (!(price > 0) || claims.physicalPool(room, r, null, owner) < quantity) return false;
             costs[r] = quantity * price; return true;
         });
         const cost = Object.values(costs).reduce((n, q) => n + q, 0) + (conversion.components.energy || 0) * energyPrice;

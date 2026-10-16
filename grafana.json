@@ -1757,7 +1757,7 @@
               "transformations": []
             }
           },
-          "description": "Requer rooms.<room>.compoundsT3 no Memory.stats. Só relevante se o bot usa labs/boosts.",
+          "description": "Estoque físico T3 em storage + terminal por sala, atualizado na publicação de stats. Labs, cargo, ordens e reservas não entram nesta métrica. Estoque consumido zera; não é produção por janela.",
           "id": 222,
           "links": [],
           "title": "Compostos T3 por sala",
@@ -1787,7 +1787,7 @@
                       "viz": false
                     },
                     "insertNulls": false,
-                    "lineInterpolation": "linear",
+                    "lineInterpolation": "stepAfter",
                     "lineWidth": 2,
                     "pointSize": 5,
                     "scaleDistribution": {
@@ -1795,7 +1795,7 @@
                     },
                     "showPoints": "auto",
                     "showValues": false,
-                    "spanNulls": true,
+                    "spanNulls": false,
                     "stacking": {
                       "group": "A",
                       "mode": "normal"
@@ -2078,7 +2078,7 @@
               "transformations": []
             }
           },
-          "description": "Requer instrumentação em Game.market.deal() para registrar market.transactions no Memory.stats.",
+          "description": "Soma das transações confirmadas nos últimos 60 ticks (janela configurável no bot), por recurso/lado. Zero indica ausência nessa janela; não é contador cumulativo nem valor da última transação. Não somar pontos sobrepostos. Cobertura externa: série de gaps no Terminal Network.",
           "id": 233,
           "links": [],
           "title": "Transações — Quantidade (compra/venda)",
@@ -2099,7 +2099,7 @@
                     "axisPlacement": "auto",
                     "barAlignment": 0,
                     "barWidthFactor": 0.6,
-                    "drawStyle": "line",
+                    "drawStyle": "bars",
                     "fillOpacity": 10,
                     "gradientMode": "none",
                     "hideFrom": {
@@ -2108,7 +2108,7 @@
                       "viz": false
                     },
                     "insertNulls": false,
-                    "lineInterpolation": "linear",
+                    "lineInterpolation": "stepAfter",
                     "lineWidth": 2,
                     "pointSize": 5,
                     "scaleDistribution": {
@@ -2116,7 +2116,7 @@
                     },
                     "showPoints": "auto",
                     "showValues": false,
-                    "spanNulls": true,
+                    "spanNulls": false,
                     "stacking": {
                       "group": "A",
                       "mode": "normal"
@@ -2214,7 +2214,7 @@
               "transformations": []
             }
           },
-          "description": "Mesma instrumentação do painel acima.",
+          "description": "Soma das transações confirmadas nos últimos 60 ticks (janela configurável no bot), por recurso/lado. Zero indica ausência nessa janela; não é contador cumulativo nem valor da última transação. Não somar pontos sobrepostos. Cobertura externa: série de gaps no Terminal Network.",
           "id": 234,
           "links": [],
           "title": "Transações — Créditos (compra/venda)",
@@ -2235,7 +2235,7 @@
                     "axisPlacement": "auto",
                     "barAlignment": 0,
                     "barWidthFactor": 0.6,
-                    "drawStyle": "line",
+                    "drawStyle": "bars",
                     "fillOpacity": 10,
                     "gradientMode": "none",
                     "hideFrom": {
@@ -2244,7 +2244,7 @@
                       "viz": false
                     },
                     "insertNulls": false,
-                    "lineInterpolation": "linear",
+                    "lineInterpolation": "stepAfter",
                     "lineWidth": 2,
                     "pointSize": 5,
                     "scaleDistribution": {
@@ -2252,7 +2252,7 @@
                     },
                     "showPoints": "auto",
                     "showValues": false,
-                    "spanNulls": true,
+                    "spanNulls": false,
                     "stacking": {
                       "group": "A",
                       "mode": "normal"
@@ -2556,13 +2556,32 @@
                     },
                     "refId": "A"
                   }
+                },
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "hidden": false,
+                    "query": {
+                      "datasource": {
+                        "name": "${DS_PROMETHEUS}"
+                      },
+                      "group": "prometheus",
+                      "kind": "DataQuery",
+                      "spec": {
+                        "expr": "screeps_collection_gap_ticks",
+                        "legendFormat": "Coleta: ticks fora da janela"
+                      },
+                      "version": "v0"
+                    },
+                    "refId": "B"
+                  }
                 }
               ],
               "queryOptions": {},
               "transformations": []
             }
           },
-          "description": "Soma de energia em transferências confirmadas na janela recente do bot (padrão60ticks). Rotas expiradas recebem zero na coleta seguinte e depois deixam de ser exportadas. Não é contador acumulado nem valor instantâneo por transação.",
+          "description": "Soma das transferências confirmadas nos últimos 60 ticks (janela configurável no bot), por origem/destino/recurso. Gaps de coleta medem ticks sem cobertura entre snapshots, não transferências. Gap > 0 implica possível perda; repetição de snapshot não adiciona eventos.",
           "id": 241,
           "links": [],
           "title": "Energia transferida entre salas (janela recente)",
@@ -2624,7 +2643,46 @@
                   },
                   "unit": "none"
                 },
-                "overrides": []
+                "overrides": [
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Coleta: ticks fora da janela"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.axisPlacement",
+                        "value": "right"
+                      },
+                      {
+                        "id": "custom.axisLabel",
+                        "value": "ticks sem cobertura"
+                      },
+                      {
+                        "id": "custom.drawStyle",
+                        "value": "line"
+                      },
+                      {
+                        "id": "custom.lineWidth",
+                        "value": 2
+                      },
+                      {
+                        "id": "custom.stacking",
+                        "value": {
+                          "mode": "none",
+                          "group": "B"
+                        }
+                      },
+                      {
+                        "id": "color",
+                        "value": {
+                          "mode": "fixed",
+                          "fixedColor": "red"
+                        }
+                      }
+                    ]
+                  }
+                ]
               },
               "options": {
                 "legend": {
@@ -2904,7 +2962,7 @@
                       "kind": "DataQuery",
                       "spec": {
                         "editorMode": "code",
-                        "expr": "{path=~\"market\\\\.fairPrice\\\\.${resource}\\\\.sellPrice\"}",
+                        "expr": "screeps_stat_value{path=~\"market[.]fairPrice[.]${resource:regex}[.]sellPrice\"}",
                         "instant": false,
                         "legendFormat": "Sell Value",
                         "range": true
@@ -2926,7 +2984,7 @@
                       "kind": "DataQuery",
                       "spec": {
                         "editorMode": "code",
-                        "expr": "{path=~\"market\\\\.fairPrice\\\\.${resource}\\\\.currentSell\"}",
+                        "expr": "screeps_stat_value{path=~\"market[.]fairPrice[.]${resource:regex}[.]currentSell\"}",
                         "instant": false,
                         "legendFormat": "Sell Price",
                         "range": true
@@ -2948,7 +3006,7 @@
                       "kind": "DataQuery",
                       "spec": {
                         "editorMode": "code",
-                        "expr": "{path=~\"market\\\\.fairPrice\\\\.${resource}\\\\.buyPrice\"}",
+                        "expr": "screeps_stat_value{path=~\"market[.]fairPrice[.]${resource:regex}[.]buyPrice\"}",
                         "instant": false,
                         "legendFormat": "Buy Value",
                         "range": true
@@ -2970,7 +3028,7 @@
                       "kind": "DataQuery",
                       "spec": {
                         "editorMode": "code",
-                        "expr": "{path=~\"market\\\\.fairPrice\\\\.${resource}\\\\.currentBuy\"}",
+                        "expr": "screeps_stat_value{path=~\"market[.]fairPrice[.]${resource:regex}[.]currentBuy\"}",
                         "instant": false,
                         "legendFormat": "Buy Price",
                         "range": true
@@ -2992,7 +3050,7 @@
                       "kind": "DataQuery",
                       "spec": {
                         "editorMode": "code",
-                        "expr": "{path=~\"market\\\\.fairPrice\\\\.${resource}\\\\.fairPrice\"}",
+                        "expr": "screeps_stat_value{path=~\"market[.]fairPrice[.]${resource:regex}[.]fairPrice\"}",
                         "instant": false,
                         "legendFormat": "Fair Value",
                         "range": true
@@ -4760,13 +4818,32 @@
                     },
                     "refId": "D"
                   }
+                },
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "hidden": false,
+                    "query": {
+                      "datasource": {
+                        "name": "${DS_PROMETHEUS}"
+                      },
+                      "group": "prometheus",
+                      "kind": "DataQuery",
+                      "spec": {
+                        "expr": "screeps_stat_value{path=\"cpu.accounting.warmUsed\"}",
+                        "legendFormat": "CPU aquecida (sem o tick frio do deploy)"
+                      },
+                      "version": "v0"
+                    },
+                    "refId": "E"
+                  }
                 }
               ],
               "queryOptions": {},
               "transformations": []
             }
           },
-          "description": "CPU inferida pelo balanço do bucket em ticks consecutivos válidos, janela móvel padrão600ticks. Inclui custos após o fechamento do script. Script observado usa os mesmos ticks pareados. Fronteiras0/10000, gaps e mudança de limite são excluídos; veja cpu.accounting.validTicks/skippedTicks/missingEndTicks. Residual não identifica GC ou serialização isoladamente.",
+          "description": "CPU inferida pelo balanço do bucket em ticks consecutivos válidos, janela móvel padrão600ticks. Inclui custos após o fechamento do script. Script observado usa os mesmos ticks pareados. Fronteiras0/10000, gaps e mudança de limite são excluídos; veja cpu.accounting.validTicks/skippedTicks/missingEndTicks. Residual não identifica GC ou serialização isoladamente. A série CPU aquecida (warmUsed) exclui o tick frio do último deploy (167–197 CPU), que infla a média da janela por ~600 ticks.",
           "id": 7,
           "links": [],
           "title": "CPU pelo bucket e script vs limite",
@@ -6015,7 +6092,7 @@
               "pixel"
             ]
           },
-          "definition": "query_result({path=~\"market\\\\.fairPrice\\\\..*\\\\.fairPrice\"})",
+          "definition": "query_result(screeps_stat_value{path=~\"market[.]fairPrice[.][^.]+[.](fairPrice|sellPrice|buyPrice|currentSell|currentBuy)\"})",
           "hide": "dontHide",
           "includeAll": true,
           "label": "Resource",
@@ -6024,19 +6101,19 @@
           "options": [],
           "query": {
             "datasource": {
-              "name": "afyaif5bwnq4gd"
+              "name": "${DS_PROMETHEUS}"
             },
             "group": "prometheus",
             "kind": "DataQuery",
             "spec": {
               "qryType": 3,
-              "query": "query_result({path=~\"market\\\\.fairPrice\\\\..*\\\\.fairPrice\"})",
+              "query": "query_result(screeps_stat_value{path=~\"market[.]fairPrice[.][^.]+[.](fairPrice|sellPrice|buyPrice|currentSell|currentBuy)\"})",
               "refId": "PrometheusVariableQueryEditor-VariableQuery"
             },
             "version": "v0"
           },
           "refresh": "onDashboardLoad",
-          "regex": "/market\\.fairPrice\\.([^.]+)\\.fairPrice/",
+          "regex": "/market[.]fairPrice[.]([^.]+)[.](?:fairPrice|sellPrice|buyPrice|currentSell|currentBuy)/",
           "regexApplyTo": "value",
           "skipUrlSync": false,
           "sort": "disabled"

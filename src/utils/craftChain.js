@@ -434,7 +434,7 @@ function startItem(room, chain) {
         const owner = "craft:" + (chain.ownerId || chain.id), claims = require("./terminalClaims");
         const missing = Object.keys(recipe.components).filter((r) => r !== RESOURCE_ENERGY).map((r) => {
             const need = batches * recipe.components[r];
-            const have = claims.physicalFree(room, room.storage, r, null, owner) + claims.physicalFree(room, room.terminal, r, null, owner) +
+            const have = claims.physicalPool(room, r, null, owner) +
                 (factory && factory.store[r] || 0);
             return { resource: r, needed: need, available: have, deficit: Math.max(0, need - have) };
         }).filter((r) => r.deficit > 0);

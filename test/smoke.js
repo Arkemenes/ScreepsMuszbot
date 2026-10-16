@@ -51,7 +51,7 @@ const constants = {
     OBSERVER_RANGE: 10, HARVEST_POWER: 2, ATTACK_POWER: 30, RANGED_ATTACK_POWER: 10,
     // ROADMAP 0081: real, unboosted per-WORK-part power for each action -
     // used by utils/energyLedger.js's formula-based spend estimate
-    BUILD_POWER: 5, REPAIR_POWER: 100, UPGRADE_CONTROLLER_POWER: 1,
+    BUILD_POWER: 5, REPAIR_POWER: 100, REPAIR_COST: 0.01, UPGRADE_CONTROLLER_POWER: 1,
     TOWER_ENERGY_COST: 10,
     LINK_LOSS_RATIO: 0.03,
     // ROADMAP 0036 revision: BOOSTS is a genuine Screeps-provided global
@@ -846,12 +846,9 @@ global.Memory.rooms.Wmig = {
     buildings: [{ x: 9, y: 9, structureType: "tower", minimalRCL: 3 }],
     mincutBoundries: [{ x1: 8, y1: 8, x2: 10, y2: 10 }],
 };
-const migrated = planStore.getPlan("Wmig");
-assert(migrated && migrated.buildings[0].structureType === "tower",
-    "planStore migrates a legacy Memory.rooms[x].buildings plan");
-assert(global.Memory.rooms.Wmig.buildings === undefined &&
-    global.Memory.rooms.Wmig.mincutBoundries === undefined,
-    "the legacy plan keys are removed from Memory after migration");
+// 0146: the one-off migration from Memory.rooms[x].buildings is gone (live: no room has one)
+assert(planStore.getPlan("Wmig") === null,
+    "0146: a legacy Memory.rooms[x].buildings plan is no longer migrated (the migration was retired)");
 
 // --- 0013: stamp scoring sums each covered tile's depth, not the origin's -
 {
@@ -10571,14 +10568,14 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
     });
     energyRepairer.runBuild("energyRampart1");
     assert(
-        energyLedger.snapshot("EnergyRoomRepair").repairRampart === REPAIR_POWER,
-        "runBuild's repair branch credits REPAIR_POWER per WORK part to 'repairRampart' (got " +
+        energyLedger.snapshot("EnergyRoomRepair").repairRampart === REPAIR_POWER * REPAIR_COST,
+        "runBuild's repair branch credits the ENERGY the engine charges (REPAIR_POWER x REPAIR_COST = 1 per WORK part, not the 100 hits) to 'repairRampart' (got " +
             energyLedger.snapshot("EnergyRoomRepair").repairRampart + ")"
     );
     delete REG.energyRampart1;
 
-    // a boosted WORK part multiplies its own contribution, read live from
-    // BOOSTS[WORK][boost] - never a hardcoded multiplier
+    // a boosted WORK part adds hits/progress but NO energy: the engine removes the unboosted amount
+    // (screeps/engine repair.js: repairCost comes from the unboosted repairEffect)
     Game.time++;
     const rampartTarget2 = Object.assign(new OwnedStructure(), {
         id: "energyRampart2", structureType: STRUCTURE_RAMPART, hits: 10, hitsMax: 10000,
@@ -10591,8 +10588,8 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
     });
     boostedRepairer.runBuild("energyRampart2");
     assert(
-        energyLedger.snapshot("EnergyRoomRepairBoost").repairRampart === REPAIR_POWER * 1.5,
-        "a boosted WORK part's repair contribution is multiplied per BOOSTS[WORK][boost].repair (got " +
+        energyLedger.snapshot("EnergyRoomRepairBoost").repairRampart === REPAIR_POWER * REPAIR_COST,
+        "a boosted WORK part's repair energy is the same as an unboosted one: boosts add hits, never energy (got " +
             energyLedger.snapshot("EnergyRoomRepairBoost").repairRampart + ")"
     );
     delete REG.energyRampart2;
@@ -16093,6 +16090,13 @@ require("./craftRecoveryCases")(PROJECT, assert);
 require("./terminalIntentCases")(PROJECT, assert);
 require("./recoveredBasisCases")(PROJECT, assert);
 require("./economyCoordinationCpuCases")(PROJECT, assert);
+require("./economyScaleCases")(PROJECT, assert);
+require("./swingReferenceCpuCases")(PROJECT, assert);
+require("./equivalenceCases")(PROJECT, assert);
+require("./memoryCleanupCases")(PROJECT, assert);
+require("./steadyStateCases")(PROJECT, assert);
+require("./idleRepickCases")(PROJECT, assert);
+require("./energyLedgerEngineCases")(PROJECT, assert);
 require("./cpuAccountingCases")(PROJECT, assert);
 require("./terminalHistoryCases")(PROJECT, assert);
 require("./terminalTelemetryCases")(PROJECT, assert);

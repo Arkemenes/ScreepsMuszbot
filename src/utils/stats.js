@@ -78,6 +78,28 @@ function minerals(room) {
     return result;
 }
 
+function compoundsT3(room) {
+    const result = {};
+    // The catalyst reactions define all T3 boost compounds, including catalyzed acids.
+    const products = typeof REACTIONS !== "undefined" && REACTIONS[RESOURCE_CATALYST] || {};
+    for (const type of new Set(Object.values(products))) {
+        const total = (room.storage && room.storage.store[type] || 0) + (room.terminal && room.terminal.store[type] || 0);
+        if (total > 0) result[type] = total;
+    }
+    return result;
+}
+
+function recentTelemetry(previousNetwork, previousMarket) {
+    Memory.stats.terminalNetwork = terminalOps.terminalNetworkStats(previousNetwork);
+    if (!Memory.stats.market) Memory.stats.market = {};
+    Memory.stats.market.transactions = terminalOps.marketTransactionStats(previousMarket);
+    const window = config.get("terminalOps.statsWindowTicks", 60);
+    const telemetry = Memory.stats.telemetry || (Memory.stats.telemetry = {});
+    telemetry.tick = Game.time;
+    telemetry.windowStart = Game.time - window + 1;
+    telemetry.windowTicks = window;
+}
+
 // Sparse physical inventory: reservations and orders are not additional assets.
 function resourceAssets() {
     const resources = {};
@@ -116,7 +138,8 @@ function resourceAssets() {
 }
 
 function exportStats() {
-    // Grafana samples Memory.stats once a minute (60 ticks), so rebuilding the whole
+    // The exporter polls on its own wall-clock cadence; publications use Game.time.
+    // Rebuilding the whole
     // object every tick (~0.9 CPU/tick, 2026-10-03) published numbers nobody read.
     // Between publishes the last object stays as is, except what a dashboard reads as a
     // live gauge: cpu.used/bucket/limit follow every tick (held for 60 ticks, the global
@@ -126,7 +149,7 @@ function exportStats() {
     const interval = Math.max(1, Number(config.get("stats.publishInterval", 60)) || 60);
     const last = Memory.stats && Memory.stats.time;
     if (interval > 1 && globalResetSeen && last !== undefined && Game.time >= last && Game.time - last < interval) {
-        Memory.stats.terminalNetwork = terminalOps.terminalNetworkStats(Memory.stats.terminalNetwork);
+        recentTelemetry(Memory.stats.terminalNetwork, Memory.stats.market && Memory.stats.market.transactions);
         const fresh = cpuMeter.snapshot();
         if (Memory.stats.cpu) {
             Memory.stats.cpu.bucket = Game.cpu.bucket;
@@ -144,6 +167,7 @@ function exportStats() {
     // first window the last published one is kept instead of leaving a gap in Grafana
     const previousMeter = Memory.stats && Memory.stats.cpu && Memory.stats.cpu.meter;
     const previousNetwork = Memory.stats && Memory.stats.terminalNetwork;
+    const previousMarket = Memory.stats && Memory.stats.market && Memory.stats.market.transactions;
 
     // Reset stats object
     Memory.stats = {
@@ -190,8 +214,7 @@ function exportStats() {
     // that, so the "Mercado"/"Terminal Network" dashboard panels can be fed
     // for real now. Source is terminalOps' own event log, not Game.market,
     // so no extra guard is needed here.
-    Memory.stats.market.transactions = terminalOps.marketTransactionStats();
-    Memory.stats.terminalNetwork = terminalOps.terminalNetworkStats(previousNetwork);
+    recentTelemetry(previousNetwork, previousMarket);
 
     // ROADMAP 0096: publish only liquid resources so the Grafana-facing
     // Memory snapshot stays sparse while the expensive calculation remains
@@ -243,6 +266,7 @@ function exportStats() {
             roomStats.hatcheryUptime = hatcheryUptime(room);
             roomStats.avgBarrierHits = avgBarrierHits(room);
             roomStats.minerals = minerals(room);
+            roomStats.compoundsT3 = compoundsT3(room);
             const economy = resourceTiers.getEconomySnapshot(room);
             roomStats.economyState = economy.state;
             roomStats.economyReason = economy.reason;

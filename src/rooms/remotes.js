@@ -8,6 +8,7 @@
 // mining, not a parallel goal.
 
 const config = require("../utils/config");
+const mapExits = require("../utils/mapExits");
 const claimDiagnostics = require("../utils/claimDiagnostics");
 const { isAlly } = require("../utils/hostiles");
 // Tunables (defaults + Memory.settings override path) live in utils/config:
@@ -114,7 +115,7 @@ function nearestOwnedRoom(targetRoomName) {
 // the cap - only new candidates are).
 function eligible(room) {
     const mem = Memory.rooms[room.name];
-    const exits = (mem && mem.exits) || {};
+    const exits = mapExits.known(room.name) || {};
     const already = (mem && mem.remotes) || [];
     const results = [];
 

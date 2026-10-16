@@ -19,7 +19,7 @@ const GROUPS = ["modules", "roles", "structures", "spans", "tick"];
 function fresh() {
     const groups = {};
     GROUPS.forEach((g) => { groups[g] = {}; });
-    return { ticks: 0, total: 0, fromTick: null, toTick: null, groups };
+    return { ticks: 0, total: 0, maxTick: 0, fromTick: null, toTick: null, groups };
 }
 
 let acc = fresh();
@@ -54,7 +54,12 @@ function span(key, fn) {
 function build(source) {
     const ticks = Math.max(1, source.ticks);
     const out = { window: source.ticks, ticks: source.ticks, at: Game.time, used: round(source.total / ticks),
-        totalTicks, fromTick: source.fromTick, toTick: source.toTick };
+        totalTicks, fromTick: source.fromTick, toTick: source.toTick,
+        // ROADMAP 0145: heap-only aggregates. maxTick is the heaviest whole script tick of
+        // the window (record().max is one call, not a tick); includesReset flags a window
+        // that holds this global's cold start.
+        maxTick: round(source.maxTick), bootTick: accounting.boot(),
+        includesReset: source.fromTick !== null && accounting.boot() !== null && source.fromTick <= accounting.boot() };
     Object.keys(source.groups).forEach((group) => {
         out[group] = {};
         Object.keys(source.groups[group]).forEach((key) => {
@@ -82,6 +87,7 @@ function endTick() {
     acc.ticks++;
     const used = Game.cpu.getUsed();
     acc.total += used;
+    if (used > acc.maxTick) acc.maxTick = used;
     accounting.end(used);
     if (acc.ticks >= Math.max(1, Number(config.get("stats.cpuWindowTicks", 60)) || 60)) publish();
 }

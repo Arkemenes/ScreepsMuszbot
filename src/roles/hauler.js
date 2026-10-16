@@ -686,8 +686,51 @@ function isSourceDefenseTower(structure) {
 // extension with 50 free capacity and a hauler already en route with
 // 50+ energy) drops out so a second hauler doesn't also head there to
 // dump into an already-spoken-for slot.
+// ROADMAP 0152: a hauler walking to its destination used to re-run the whole delivery cascade
+// (a path search among hungry spawns/extensions included) every tick. The pick is now kept
+// for up to hauler.deliverRepickTicks (5) while it is still the answer: the target exists and
+// still takes energy, and nothing that outranks it appeared. Priority order of the cascade is
+// 0 hungry spawn/extension, 1 critical tower, 2 storage below its reserve, 3 optional consumer,
+// 4 storage, 5 last-resort tower. Ranks 3 and 5 are never kept (their rules are per-tick).
+// A higher class with demand always forces the full cascade. 1 turns it off.
+let deliverRank = -1;
+const deliverPicks = {}; // creep name -> { id, rank, tick, room } (heap only)
+let deliverPicksGc = 0;
+function deliverPickValid(creep, last) {
+    if (last.room !== creep.room.name || Game.time < last.tick || Game.time - last.tick >= config.get("hauler.deliverRepickTicks", 5)) return false;
+    if (last.rank !== 0 && last.rank !== 1 && last.rank !== 2 && last.rank !== 4) return false;
+    const target = Game.getObjectById(last.id);
+    if (!target || !(reservations.availableDeliver(creep, target) > 0)) return false;
+    const hungry = spawnExtNeedingEnergy(creep.room);
+    if (last.rank === 0) return hungry.some((x) => x.id === last.id);
+    if (hungry.length) return false;
+    const critical = criticalTowers(creep.room);
+    if (last.rank === 1) return critical.some((x) => x.id === last.id);
+    if (critical.length) return false;
+    const storage = creep.room.storage;
+    if (!storage) return false;
+    return last.rank === 2 ? !resourceTiers.aboveReserve(creep.room) : resourceTiers.aboveReserve(creep.room);
+}
 function pickDeliver(creep) {
-    return cpuMeter.span("hauler.pickDeliver", () => pickDeliverNow(creep));
+    if (config.get("hauler.deliverRepickTicks", 5) > 1) {
+        const last = deliverPicks[creep.name];
+        if (last && deliverPickValid(creep, last)) {
+            cpuMeter.record("spans", "hauler.deliverKept", 0); // calls/tick = cascades avoided
+            return last.id;
+        }
+    }
+    deliverRank = -1;
+    const id = cpuMeter.span("hauler.pickDeliver", () => pickDeliverNow(creep));
+    if (id && deliverRank >= 0) {
+        deliverPicks[creep.name] = { id, rank: deliverRank, tick: Game.time, room: creep.room.name };
+        if (Game.time - deliverPicksGc >= 300 || Game.time < deliverPicksGc) {
+            deliverPicksGc = Game.time;
+            Object.keys(deliverPicks).forEach((name) => {
+                if (!Game.creeps[name] || Game.time - deliverPicks[name].tick > 50) delete deliverPicks[name];
+            });
+        }
+    } else delete deliverPicks[creep.name];
+    return id;
 }
 
 function pickDeliverNow(creep) {
@@ -699,19 +742,20 @@ function pickDeliverNow(creep) {
     // A consumer already in transfer range needs no path selection.
     let target = productionTargets.find((s) => creep.pos.isNearTo(s));
     if (!target && productionTargets.length) target = creep.pos.findClosestByPath(productionTargets);
-    if (target) return target.id;
+    if (target) { deliverRank = 0; return target.id; }
 
     target = creep.pos.findClosestByRange(
         criticalTowers(creep.room).filter(
             (s) => reservations.availableDeliver(creep, s) > 0
         )
     );
-    if (target) return target.id;
+    if (target) { deliverRank = 1; return target.id; }
 
     // keep a minimum emergency buffer in storage - below the reserve it
     // outranks topping towers/labs beyond their essential needs, since an
     // empty storage means the room has nothing to fall back on
     if (creep.room.storage && !resourceTiers.aboveReserve(creep.room)) {
+        deliverRank = 2;
         return creep.room.storage.id;
     }
 
@@ -724,12 +768,13 @@ function pickDeliverNow(creep) {
     // only controls selecting a new optional destination.
     const economy = resourceTiers.getEconomySnapshot(creep.room);
     if (economy.state !== "critical") target = satisfactoryConsumer(creep);
-    if (target) return target.id;
+    if (target) { deliverRank = 3; return target.id; }
 
     if (
         creep.room.storage &&
         creep.room.storage.store.getFreeCapacity(RESOURCE_ENERGY) > 0
     ) {
+        deliverRank = 4;
         return creep.room.storage.id;
     }
 
@@ -747,7 +792,7 @@ function pickDeliverNow(creep) {
             (s) => reservations.availableDeliver(creep, s) > 0
         )
     );
-    if (target) return target.id;
+    if (target) { deliverRank = 5; return target.id; }
 
     return null;
 }
@@ -819,6 +864,34 @@ function idleNear(creep) {
 
 // nothing to pick up anywhere: wait next to a receiving link so we're ready
 // the moment a collector link sends energy over
+// ROADMAP 0152: an idle hauler (empty, nothing to load, no mineral/chain job) used to repeat
+// that whole search every tick - pickLoad + the mineral cascade, ~0,5 CPU per idle hauler-tick.
+// It now looks once when it goes idle and then every hauler.idleRecheckTicks (default 5)
+// ticks, standing by in between. Never while a spawn/extension is hungry (that errand is
+// urgent and keeps its per-tick search), never while carrying anything, and a reset or a room
+// change simply forgets the mark (the next tick searches). 1 turns it off.
+const idleChecks = {}; // creep name -> { tick, room } of the last empty search (heap only)
+let idleChecksGc = 0;
+function idleSkip(creep) {
+    const every = config.get("hauler.idleRecheckTicks", 5);
+    if (!(every > 1)) return false;
+    const mark = idleChecks[creep.name];
+    if (!mark || mark.room !== creep.room.name || Game.time < mark.tick || Game.time - mark.tick >= every) return false;
+    if (creep.store.getUsedCapacity() > 0) return false;
+    const d = derived(creep.room);
+    if (d.spawnHungry === undefined) d.spawnHungry = !spawnsAndExtensionsFull(creep.room);
+    return !d.spawnHungry;
+}
+function markIdle(creep) {
+    idleChecks[creep.name] = { tick: Game.time, room: creep.room.name };
+    if (Game.time - idleChecksGc >= 300 || Game.time < idleChecksGc) {
+        idleChecksGc = Game.time;
+        Object.keys(idleChecks).forEach((name) => {
+            if (!Game.creeps[name] || Game.time - idleChecks[name].tick > 50) delete idleChecks[name];
+        });
+    }
+}
+
 function waitForEnergy(creep) {
     const link = receivingLink(creep.room, creep.pos, {
         awayFromController: true,
@@ -1517,6 +1590,12 @@ var hauler = {
         }
 
         if (creep.memory.job === "load") {
+            if (idleSkip(creep)) {
+                cpuMeter.record("spans", "hauler.idleSkip", 0); // calls/tick = searches avoided
+                waitForEnergy(creep);
+                return;
+            }
+            delete idleChecks[creep.name];
             const src = pickLoad(creep);
 
             // ROADMAP 0107 (user request): a >500 dropped pile wins outright
@@ -1583,6 +1662,7 @@ var hauler = {
                     runMineralJob(creep);
                     return;
                 }
+                markIdle(creep);
                 waitForEnergy(creep);
                 return;
             }
@@ -1650,6 +1730,9 @@ var hauler = {
     optionalConsumer,
     spawnsAndExtensionsFull,
     shouldMinerFeedTower,
+    idleSkip,
+    markIdle,
+    deliverPickValid,
 };
 
 module.exports = hauler;

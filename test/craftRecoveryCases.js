@@ -34,6 +34,47 @@ module.exports = function (project, assert) {
         Game.market.orders.manual = { roomName: room.name, type: ORDER_SELL, resourceType: "utrium_bar", remainingAmount: 300 };
         ledger.reconcileStranded(room);
         assert(!Memory.craft.stranded.old.items.utrium_bar, "0135: legacy migration protects all published manual listing cargo");
+        // ROADMAP 0147 oracle: one structure scan for all balances = N independent warehouse() calls
+        {
+            reset();
+            const policy = load("resourcePolicy");
+            const lab = (id, values) => ({ id, structureType: STRUCTURE_LAB, store: store(values), room: { name: "Recovery" } });
+            const labs = [lab("lab-a", { X: 40, Y: 5 }), lab("lab-b", { Y: 12, XLH2O: 30 }), lab("lab-c", { XLH2O: 55, energy: 100 }), lab("lab-other", { X: 999 })];
+            room.find = (type) => (type === FIND_MY_STRUCTURES || type === FIND_STRUCTURES ? [factory].concat(labs) : [factory].concat(labs));
+            Game.getObjectById = (id) => [factory].concat(labs).find((o) => o.id === id) || null;
+            factory.store = store({ X: 7, XLH2O: 11 });
+            const worldChain = () => {
+                const w = chain(); ledger.ensure(w, { X: 120, Y: 30, XLH2O: 80, energy: 500, utrium_bar: 300 });
+                w.holds = { "lab-a": "X" };
+                w.queue = [{ kind: "lab", product: "XLH2O", started: true, finished: false, input1: "lab-a", input2: "lab-b", output: "lab-c", target: 100 },
+                    { kind: "lab", product: "Y", started: false, input1: "lab-other", input2: "lab-other", output: "lab-other" }];
+                return w;
+            };
+            const referenceWarehouse = (w, r) => {
+                const q = Math.max(0, ledger.sync(w).balances[r] || 0);
+                const ids = new Set(Object.keys(w.holds || {}));
+                (w.queue || []).filter((i) => i.started && !i.finished).forEach((i) => {
+                    [i.input1, i.input2, i.output].concat(i.outputs || [], i.run && i.run.observation && i.run.observation.ids || []).filter(Boolean).forEach((id) => ids.add(id));
+                });
+                const factoryOwned = (w.queue || []).some((i) => i.kind === "factory" && i.started);
+                const held = [factory].concat(labs).filter((s) => s.structureType === STRUCTURE_FACTORY ? factoryOwned : ids.has(s.id)).reduce((n, s) => n + (s.store[r] || 0), 0);
+                return Math.max(0, q - Math.min(q, held));
+            };
+            const chainA = worldChain(), resources = Object.keys(chainA.inventory.balances).concat(["unknown", "XLH2O"]);
+            const many = ledger.warehouseMany(chainA, room, resources);
+            const mismatches = resources.filter((r) => many[r] !== referenceWarehouse(chainA, r) || many[r] !== ledger.warehouse(chainA, room, r));
+            assert(mismatches.length === 0 && many.X > 0 && many.XLH2O !== undefined,
+                "0147: warehouseMany equals N independent warehouse() calls (" + mismatches.join(",") + ")");
+            Memory.craft.active.Recovery = worldChain();
+            const batched = JSON.stringify(policy.commitments(room));
+            const realMany = ledger.warehouseMany;
+            ledger.warehouseMany = (w, r, list) => Object.fromEntries(list.map((k) => [k, referenceWarehouse(w, k)]));
+            const perResource = JSON.stringify(policy.commitments(room));
+            ledger.warehouseMany = realMany;
+            assert(batched === perResource && /"X"|"XLH2O"/.test(batched),
+                "0147: resource commitments are identical with one scan per chain");
+            room.find = () => [factory]; Game.getObjectById = (id) => id === factory.id ? factory : null;
+        }
         reset(); c = chain(); c.buys.X = { opId: "buy", qty: 100 };
         Memory.terminalOps.operations.buy = { id: "buy", kind: "buy", resourceType: "X", dealtAmount: 40, remaining: 60,
             netBought: 40, buyCredits: 400, transactionCost: 10, state: "waiting", marketFees: 20 };

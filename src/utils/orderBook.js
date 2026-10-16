@@ -54,11 +54,35 @@ function matching(type, resourceType) {
     return subset;
 }
 
+// ROADMAP 0147: the full book grouped by resource, built once per tick from all(). A scan that
+// quotes the same book for dozens of (room, resource) pairs used to filter the whole book for
+// each of them (swingTrade.tick: ~30 CPU per scan); each pair now walks only its resource.
+// Same orders, same relative order as filtering all() by resourceType. Read-only.
+const EMPTY = [];
+let byResourceIndex = null;
+let byResourceFor = null;
+function byResource(resourceType) {
+    const book = all();
+    if (byResourceFor !== book) {
+        byResourceIndex = new Map();
+        for (let i = 0; i < book.length; i++) {
+            const order = book[i];
+            if (!order) continue;
+            const list = byResourceIndex.get(order.resourceType);
+            if (list) list.push(order); else byResourceIndex.set(order.resourceType, [order]);
+        }
+        byResourceFor = book;
+    }
+    return byResourceIndex.get(resourceType) || EMPTY;
+}
+
 function reset() {
     tick = -1;
     orders = null;
     source = null;
     filtered.clear();
+    byResourceIndex = null;
+    byResourceFor = null;
 }
 
-module.exports = { all, matching, reset };
+module.exports = { all, matching, byResource, reset };

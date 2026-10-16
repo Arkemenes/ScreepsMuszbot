@@ -30,8 +30,9 @@ const cache = {};
 function resolve(room, labs) {
     const list = labs || roomCache.structuresByType(room, STRUCTURE_LAB);
     if (!list.length) return null;
-    const signature = list.map((lab) => lab.id).sort().join(",");
-    if (cache[room.name] && cache[room.name].signature === signature) return cache[room.name].value;
+    // ROADMAP 0147: same lab set <=> same size and every id known; no map/sort/join per call
+    const known = cache[room.name];
+    if (known && known.ids.size === list.length && list.every((lab) => known.ids.has(lab.id))) return known.value;
     let best = null;
     SLOT_NUMBERS.forEach((slot) => {
         const x0 = list[0].pos.x - OFFSETS[slot][1];
@@ -48,7 +49,7 @@ function resolve(room, labs) {
         if (!best || rank < best.rank) best = { rank, ids, origin: { x: x0, y: y0 } };
     });
     const value = best ? { ids: best.ids, origin: best.origin, built: Object.keys(best.ids).map(Number).sort((a, b) => a - b) } : null;
-    cache[room.name] = { signature, value };
+    cache[room.name] = { ids: new Set(list.map((lab) => lab.id)), value };
     return value;
 }
 
