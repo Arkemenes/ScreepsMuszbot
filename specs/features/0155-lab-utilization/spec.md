@@ -39,7 +39,8 @@ reagente/transporte**.
 1. The smoke test asserts the counters reproduce the `state.wait` states of a scripted lab sequence, per lab.
 2. The smoke test asserts `reactionLimited` is true for a fixture with ~95% productive ticks and false (with `inputLimited` true) for one with ~50%.
 3. The smoke test asserts the report prints by itself after the window and does not alter any lab decision.
-4. O custo de CPU do contador é O(labs) por chamada de `assignments` (medir pelos spans do `cpuReport`).
+4. The smoke test asserts the report prints the **top 3 idle reasons** (`input`, `switch`, `unavailable`, `capacity`) per room with their share of ticks and a one-line suggestion (e.g. "limited by reagent/transport: improve hauler supply before considering OPERATE_LAB").
+5. O custo de CPU do contador é O(labs) por chamada de `assignments` (medir pelos spans do `cpuReport`).
 
 ## Constitution check
 

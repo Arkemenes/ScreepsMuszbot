@@ -87,10 +87,41 @@ produção pelo `cpuReport` automático (contadores `hauler.idleSkip`, `builder.
 7. Linear: issues criadas no **Backlog**, filhas de ARK-128, para revisão do dono: **ARK-133** (0154), **ARK-134** (0155), **ARK-135** (0148), **ARK-136** (0149), **ARK-137** (0150), **ARK-138** (0153), **ARK-139** (0156). Mover para *In Progress* ao começar cada uma e para *Done* ao concluir.
 8. `memoryCleanup` e spans temporários (O3): remover depois de um deploy confirmando `removed = 0`.
 9. Reimportar `grafana.json` para a série `warmUsed`.
-10a. **Git:** nada foi commitado desde `5b85549`. A árvore tem ~78 arquivos alterados/novos (pacotes 0138–0147 anteriores, 0145–0152 desta sessão, specs, docs). O agente deve **pedir ao dono para commitar** (ou commitar por pacote, só se o dono pedir) antes de começar, para ter uma linha de base limpa.
+10a. **Git:** tudo commitado em 2026-10-15 (`da543a0` código e testes; `f989c46` specs, plano e passagem); árvore limpa. Um commit por pacote daqui em diante.
 10. **Listagens (0153), especificada com o dono em 2026-10-15** (spec completa: mecânica de taxas, 5 itens P1–P5 e seção de pixel).
     Dados de `ordersAudit()` 23:06: 19 de 30 listagens ativas acima do mercado (taxa 3,88 M, valor travado 74,6 M); a listagem de
     **997 pixels a 62.947 (+12,4%)** tem 81% da taxa. Regras do dono: **não perder a taxa paga** (não cancelar; baixar preço é
     grátis; aumentar paga 5% x aumento x restante); o dono trará **~1.000 pixels da Steam** para vender (via `deal` em bids, sem
     taxa; o restante por `extendOrder` na ordem existente só se compensar; nunca uma segunda ordem de pixel). Decisões do dono: **padrões propostos na spec** (relativos ao mercado, ajustáveis sem deploy); não esperar resposta. Ordem: P1 listar só se competitiva, P2 limpar
     esgotadas, P3 prazo em tempo real, P4 descida grátis (desligada por padrão), P5 pixel.
+
+## 8. Como conferir e ajustar (console do Screeps; cada linha cabe no limite de 1024 caracteres)
+
+**Dados de jogo** (colar uma linha por vez):
+
+```
+REACTION_TIME.XLH2O
+JSON.stringify(Game.gpl)
+Object.values(Game.rooms).filter(r=>r.controller&&r.controller.my).map(r=>r.name+': storage '+((r.storage&&r.storage.store.power)||0)+', terminal '+((r.terminal&&r.terminal.store.power)||0)).join(' | ')
+Object.values(Game.structures).filter(s=>s.structureType==='powerSpawn').map(s=>s.room.name+': power '+s.store.power+', energy '+s.store.energy).join(' | ')
+Game.rooms.W7N49.find(FIND_MY_STRUCTURES,{filter:s=>s.structureType==='lab'}).map(l=>[l.id.slice(-4),l.cooldown,l.mineralType||'-',l.store[l.mineralType]||0].join(':')).join(' ')
+```
+A última mostra cada lab de W7N49 como `id:cooldown:mineral:quantidade`; `cooldown > 0` = reagindo agora. Uma amostra isolada não prova nada; o `labReport` (0155) mede por dia.
+
+**Duty hoje, sem esperar o `energyReport`:** o Grafana já tem `screeps_room_energy_spent{room,category}` (soma dos últimos 60 ticks). Por tick =
+valor / 60. `duty_build ~ (build/60) / (WORK dos builders x 5)`; `duty_upgrade ~ (upgrade/60) / WORK dos upgraders`;
+`duty_repair ~ (repair/60) / WORK dos builders`. Os valores de **repair anteriores a 2026-10-15 estavam inflados** (corrigido no `energyLedger`).
+
+**Limpeza (`memoryCleanup`):** cada global imprime uma linha `[memoryCleanup] removed N legacy field(s)` ~5 ticks depois do boot. `removed 0` em
+dois resets seguidos = o módulo pode ser removido (spec 0156/O3). Spans temporários: `claimsSpans(false)` (já é o padrão) desliga os de claims; os
+`swing.scan.*` são baratos e saem junto com o módulo.
+
+**Reverter ou ajustar um ajuste de CPU sem deploy** (nunca `Memory.settings = {...}`, que apaga as outras configurações):
+
+```
+Memory.settings.hauler = Object.assign(Memory.settings.hauler||{}, {idleRecheckTicks:1})
+Memory.settings.hauler = Object.assign(Memory.settings.hauler||{}, {deliverRepickTicks:1})
+Memory.settings.builder = Object.assign(Memory.settings.builder||{}, {idleRecheckTicks:1})
+delete Memory.settings.hauler.idleRecheckTicks
+```
+`1` = comportamento antigo (busca todo tick); `delete` volta ao padrão (5).

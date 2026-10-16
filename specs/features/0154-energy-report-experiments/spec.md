@@ -40,7 +40,8 @@ política (ex.: tirar o builder quando não há obra) exige olhar a tela e rever
 2. The smoke test asserts `energyReport` prints by itself once the window has enough ticks and reports duty, RCL pace and ETA correctly for a fixture.
 3. The smoke test asserts `experiment` applies the setting to one room only, prints its report at the end, and restores the setting at the end, on abort and after a reset.
 4. The smoke test asserts the experiment rolls back by itself when its guard fires and records the reason.
-5. Overhead of the long-window accumulators is O(1) per ledger record (no new `find`, no per-tick JSON).
+5. The smoke test asserts the report prints, per room and action (build, repair, upgrade), the **duty** and the **effective break-even energy price `E*/duty`** for the compounds in use (GH/GH2O/XGH2O for upgrade, LH/LH2O/XLH2O for build and repair), using executable prices (energy included), so the boost decision can be read straight from the report.
+6. Overhead of the long-window accumulators is O(1) per ledger record (no new `find`, no per-tick JSON).
 
 ## Constitution check
 
