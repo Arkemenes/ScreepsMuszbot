@@ -303,6 +303,27 @@ escopo desta spec (ver Out of scope).
 
 ## Open questions
 
+### Correção Resource Prices — ARK-132 (2026-10-15)
+
+O seletor `resource` não pode depender de `fairPrice` numérico: o snapshot
+aceita recursos com apenas `currentBuy`/`currentSell`, enquanto a média
+histórica ainda está ausente. A consulta antiga exclui esses recursos e
+deixa a repetição sem opções. A variável também deve consultar o mesmo
+`DS_PROMETHEUS` dos painéis, sem UID fixo de outra instalação.
+
+Critérios: descobrir recursos a partir de qualquer um dos cinco preços
+numéricos em `screeps_stat_value`, extrair somente o nome do recurso,
+preservar a distinção entre preço atual e valor histórico e aceitar seleção
+única/múltipla/All. Campos nulos não viram zero. Cobrir o contrato
+exporter→consulta→variável offline, incluindo snapshot sem `fairPrice`.
+Correção restrita ao dashboard; sem nova coleta, Memory ou custo de CPU.
+
+Validação: cenário com `currentSell`/`currentBuy` numéricos e `fairPrice=null`
+falhou antes e passou após corrigir `grafana.json`. Smoke, syntax check,
+testes Python do exporter/dashboard e build de111módulos passaram.
+Usuário confirmou que esta sessão não tem acesso ao Grafana; aplicação do
+JSON e confirmação da causa no snapshot de produção seguem pendentes.
+
 - **Design do canário de `persistent.lastMemoryReset`** — que campo serve
   de canário (um contador incremental? um valor fixo conhecido?), onde
   fica gravado, e como evitar falso positivo (ex. o campo ainda não

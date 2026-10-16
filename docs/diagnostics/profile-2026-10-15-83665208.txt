@@ -1,0 +1,98 @@
+profile(100)
+[1:03:00 PM][shard3][profile] profiling 100 ticks (until tick 83665307); report and the cpuTop table print automatically, then the profiler turns itself off
+undefined
+[1:03:35 PM][shard3][terminalOps] terminal-13089 (buy energy em W7N49): effective-price-limit; bruto 1164, líquido 327, frete 837, efetivo 139.08554128440366, máximo 28.24074
+marketPrice("O")
+[1:04:55 PM][shard3]{"resourceType":"O","currentBuy":31.301,"currentSell":25,"currentBuyVolume":2230,"currentSellVolume":341,"buyPrice":36.566,"sellPrice":31,"fairPrice":33.566,"sampleCount":117,"windowCoverageTicks":263453,"confidence":"warming"}
+[object Object]
+[1:09:54 PM][shard3]calls		self		avg-self		total		function
+1200		380.6		0.317		533.9		role:hauler.run
+610		138.8		0.228		146.4		roomLogic.getIntel
+679		133.3		0.196		133.3		Creep.move
+974		82.6		0.085		83.4		Creep.harvest
+455		77.8		0.171		181.2		role:builder.run
+1300		72.8		0.056		78.3		structure:tower.run
+1042		59.9		0.058		176.6		role:miner.run
+963		57.1		0.059		64.2		RoomPosition.findClosestByPath
+500		54.0		0.108		86.7		roomLogic.spawning
+362		54.0		0.149		54.3		Creep.upgradeController
+372		33.5		0.090		34.2		Creep.transfer
+784		32.1		0.041		169.1		Creep.moveTo
+4719		23.5		0.005		28.2		RoomPosition.findClosestByRange
+188		22.8		0.121		23.0		Creep.build
+6027		20.8		0.003		21.5		Room.find
+500		17.4		0.035		19.5		roomLogic.planCity
+1900		17.3		0.009		21.7		structure:lab.run
+252		14.5		0.058		15.0		Creep.withdraw
+500		14.0		0.028		139.1		role:upgrader.run
+500		13.0		0.026		13.0		structure:rampart.runRoom
+100		12.9		0.129		12.9		structure:observer.run
+Avg: 18.14	Total: 1777.30	Ticks: 98
+[1:09:59 PM][shard3][profile] Room.find callers: 60.3 calls/tick
+[1:09:59 PM][shard3]  Object.foreignCreeps<-getHostiles: 6.10 calls/tick, 0.010 cpu/tick
+[1:09:59 PM][shard3]  structures<-Object.structuresByType: 5.00 calls/tick, 0.012 cpu/tick
+[1:09:59 PM][shard3]  Object.constructionSites<-planScanDue: 5.00 calls/tick, 0.005 cpu/tick
+[1:09:59 PM][shard3]  Object.mySpawns<-Object.spawnCreeps: 5.00 calls/tick, 0.006 cpu/tick
+[1:09:59 PM][shard3]  findHealingTarget<-Object.run: 5.00 calls/tick, 0.055 cpu/tick
+[1:09:59 PM][shard3]  _findClosestByPath2<-RoomPosition.<anonymous>: 3.02 calls/tick, 0.047 cpu/tick
+[1:09:59 PM][shard3]  Object.droppedResources<-biggestEnergyDrop: 2.92 calls/tick, 0.003 cpu/tick
+[1:09:59 PM][shard3]  Object.minerals<-mineralOutput: 2.90 calls/tick, 0.006 cpu/tick
+[1:09:59 PM][shard3]  Object.tombstones<-battlefieldLootJob: 2.89 calls/tick, 0.004 cpu/tick
+[1:09:59 PM][shard3]  Object.ruins<-battlefieldLootJob: 2.89 calls/tick, 0.004 cpu/tick
+[1:09:59 PM][shard3]  Object.sources<-main:2193:31: 2.84 calls/tick, 0.006 cpu/tick
+[1:09:59 PM][shard3]  Object.myStructures<-criticalTowers: 2.62 calls/tick, 0.006 cpu/tick
+[1:09:59 PM][shard3]  RoomPosition.<anonymous><-findNearbyFullSource: 1.89 calls/tick, 0.012 cpu/tick
+[1:09:59 PM][shard3]  Object.myStructures<-computeEconomySnapshot: 1.08 calls/tick, 0.002 cpu/tick
+[1:09:59 PM][shard3]  RoomPosition.<anonymous><-Object.patch: 1.00 calls/tick, 0.018 cpu/tick
+[1:09:59 PM][shard3][profile] cpuTop da janela (inclui o overhead do profiler):
+[1:09:59 PM][shard3][cpuTop] 40 ticks in partial window (target 60; ticks 83665268..83665307; measured since meter reset 100), script avg 17.04/tick (before engine finalization), guarded 16.44, unguarded 0.60
+[1:09:59 PM][shard3][cpuBalance] bucket balance 100/100 intervals (83665208..83665307): inferred 20.22/tick, headroom -0.22; paired 100, paired debit 20.22, script 17.763, unobserved residual 2.457, missing end 0, invalid 0, skipped game ticks 0
+[1:09:59 PM][shard3]  creep: 10.211/tick, 34.4 calls/tick, max 1.83
+[1:09:59 PM][shard3]  intel: 1.432/tick, 6.1 calls/tick, max 0.71
+[1:09:59 PM][shard3]  structure: 1.261/tick, 47.0 calls/tick, max 1.71
+[1:09:59 PM][shard3]  craftPlanner: 1.035/tick, 1.0 calls/tick, max 2.02
+[1:09:59 PM][shard3]  spawn: 0.898/tick, 5.0 calls/tick, max 1.20
+[1:09:59 PM][shard3]  terminalOps: 0.878/tick, 1.0 calls/tick, max 5.71
+[1:09:59 PM][shard3]  plan: 0.227/tick, 5.0 calls/tick, max 1.18
+[1:09:59 PM][shard3]  rampart: 0.131/tick, 5.0 calls/tick, max 0.26
+[1:09:59 PM][shard3]  defense: 0.124/tick, 5.0 calls/tick, max 0.20
+[1:09:59 PM][shard3]  traffic: 0.076/tick, 36.4 calls/tick, max 0.07
+[1:09:59 PM][shard3]  craftLedger: 0.050/tick, 1.0 calls/tick, max 0.10
+[1:09:59 PM][shard3]  swingTrade: 0.032/tick, 1.0 calls/tick, max 0.06
+[1:09:59 PM][shard3]  stats: 0.030/tick, 1.0 calls/tick, max 0.06
+[1:09:59 PM][shard3]  energyBalancing: 0.020/tick, 1.0 calls/tick, max 0.32
+[1:09:59 PM][shard3]  planStore: 0.015/tick, 1.0 calls/tick, max 0.04
+[1:09:59 PM][shard3]  [roles]
+[1:09:59 PM][shard3]  hauler: 5.171/tick, 12.0 calls/tick, max 1.83
+[1:09:59 PM][shard3]  builder: 1.822/tick, 4.4 calls/tick, max 1.30
+[1:09:59 PM][shard3]  miner: 1.587/tick, 10.0 calls/tick, max 0.56
+[1:09:59 PM][shard3]  upgrader: 1.525/tick, 5.0 calls/tick, max 1.19
+[1:09:59 PM][shard3]  defenderMedic: 0.085/tick, 1.0 calls/tick, max 0.12
+[1:09:59 PM][shard3]  defenderStriker: 0.022/tick, 2.0 calls/tick, max 0.06
+[1:09:59 PM][shard3]  [structures]
+[1:09:59 PM][shard3]  tower: 0.816/tick, 13.0 calls/tick, max 0.52
+[1:09:59 PM][shard3]  lab: 0.273/tick, 19.0 calls/tick, max 1.71
+[1:09:59 PM][shard3]  rampart: 0.131/tick, 5.0 calls/tick, max 0.26
+[1:09:59 PM][shard3]  observer: 0.120/tick, 1.0 calls/tick, max 0.63
+[1:09:59 PM][shard3]  link: 0.043/tick, 11.0 calls/tick, max 0.37
+[1:09:59 PM][shard3]  factory: 0.005/tick, 2.0 calls/tick, max 0.00
+[1:09:59 PM][shard3]  powerSpawn: 0.005/tick, 1.0 calls/tick, max 0.02
+[1:09:59 PM][shard3]  [spans]
+[1:09:59 PM][shard3]  hauler.pickLoad: 1.439/tick, 5.3 calls/tick, max 0.88
+[1:09:59 PM][shard3]  hauler.pickMineralJob: 1.134/tick, 2.8 calls/tick, max 1.22
+[1:09:59 PM][shard3]  craft.chains: 0.928/tick, 1.0 calls/tick, max 1.97
+[1:09:59 PM][shard3]  craft.chain.working: 0.798/tick, 2.1 calls/tick, max 0.69
+[1:09:59 PM][shard3]  terminalOps.operations: 0.768/tick, 0.2 calls/tick, max 5.03
+[1:09:59 PM][shard3]  craft.startItem: 0.684/tick, 2.1 calls/tick, max 0.60
+[1:09:59 PM][shard3]  hauler.stockPolicy: 0.574/tick, 2.8 calls/tick, max 0.73
+[1:09:59 PM][shard3]  builder.opportunistic: 0.568/tick, 4.4 calls/tick, max 0.51
+[1:09:59 PM][shard3]  hauler.pickDeliver: 0.563/tick, 6.3 calls/tick, max 0.90
+[1:09:59 PM][shard3]  miner.distribute: 0.518/tick, 10.0 calls/tick, max 0.29
+[1:09:59 PM][shard3]  terminalOps.op sell:listed: 0.504/tick, 3.0 calls/tick, max 0.48
+[1:09:59 PM][shard3]  hauler.terminalFuel: 0.474/tick, 2.8 calls/tick, max 0.68
+[1:09:59 PM][shard3]  hauler.chainFeed: 0.396/tick, 2.9 calls/tick, max 0.34
+[1:09:59 PM][shard3]  labPolicy.assignments: 0.343/tick, 2.0 calls/tick, max 0.35
+[1:09:59 PM][shard3]  intel.hostiles: 0.332/tick, 6.1 calls/tick, max 0.23
+[1:09:59 PM][shard3]  [tick]
+[1:09:59 PM][shard3]  entry: 0.053/tick, 1.0 calls/tick, max 0.18
+[1:09:59 PM][shard3]  prelude: 0.043/tick, 1.0 calls/tick, max 0.10

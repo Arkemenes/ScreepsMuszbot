@@ -37,6 +37,43 @@ para1chamada/tick, incluindo releaseRecovered de todas as salas.
 
 ## Review
 
+## Follow-up15/10: resumo do histórico de referência
+
+Reprodução100consultas idênticas no mesmo Game.time/100amostras:
+200chamadas a samples e20000inspeções de preços. Cachear somente contagem
+válida por lado e tick da última amostra válida, no heap do proprietário
+market. Preço corrente/histórico de referência, energia, configuração,
+prontidão e idade continuam lidos/calculados a cada reference.
+
+Critérios: resumo compartilhado entre salas/lados/consumidores e ticks
+enquanto histórico canônico não muda. Nova coleta, poda (inclusive mantendo
+mesmo tamanho), hidratação e reset invalidam antes da próxima leitura.
+`samples()` é consulta read-only; todos os consumidores do repo apenas leem.
+Provider substituído em testes/integrações não possui esse contrato: analisar
+seus dados a cada consulta, sem reuso opaco. Testar valores e motivos antes/
+depois, com mutações intratick de snapshot/config/prontidão e vencimento da
+idade. Não mover gate de reprice nem mudar seleção, custos ou cadências.
+
+Review: a versão está no ponto de mutação do histórico, sem TTL de preço.
+Resumo tem somente escalares derivados; sem Memory adicional ou amostras
+duplicadas. Alterações externas arbitrárias nos arrays read-only não são
+um mecanismo de atualização de mercado.
+
+## Follow-up 15/10: consulta física por decisão
+
+Hipótese a reproduzir: somar `physicalFree(storage)` e `physicalFree(terminal)`
+repete as mesmas enumerações de operações, listings, cadeias e ledger. Expor
+`physicalPool` que calcula ambas as disponibilidades numa única decisão;
+sem cache entre chamadas, ticks ou mutações. Manter clamp individual por fonte,
+exclusão de owner, frete/carga de intents e retiradas pendentes. Fonte vazia
+continua evitando análise. Medir 3/5/10 salas, 3/7/10 consumidores e ordens
+0/20/100; variar histórico independentemente. Contadores não equivalem a CPU
+Screeps nem a quantidade de negócios/recibos criados.
+
+Review: reuso estritamente local não exige versionar estoque ou Memory;
+leituras seguintes reavaliam os campos vivos. Comparar com duas consultas
+independentes sob reservas, listings, recebimentos, cargo e mutações intratick.
+
 Escopo revisado contra constituição: dado derivado só no heap; nenhum cache
 de estoque, preço, quantidade ou saldo. Índice retém identidade de operações
 e lê campos mutáveis a cada consulta. Memo de busca vive apenas na busca.

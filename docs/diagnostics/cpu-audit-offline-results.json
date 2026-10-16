@@ -1,0 +1,2776 @@
+{
+  "inventory": [
+    {
+      "file": "src/main.js",
+      "bytes": 19254,
+      "sha256": "9dd6287e87a0135a7ac65228a926eadfb928ce8e94da8257f982b45a012455a8",
+      "hits": {
+        "globalCreepAccess": [
+          320,
+          321,
+          336
+        ],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [
+          250
+        ],
+        "sorting": [
+          198
+        ]
+      }
+    },
+    {
+      "file": "src/prototypes/creep.js",
+      "bytes": 5172,
+      "sha256": "698951f8f5d8decaec41087474f95744665d3a626e9a4dd24d8750f966c210e5",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/prototypes/index.js",
+      "bytes": 102,
+      "sha256": "096a72ff29359e9d4537800bebcfa87f5c26c0f9269d00ff46f833b18fa71e61",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/prototypes/link.js",
+      "bytes": 894,
+      "sha256": "25b36ff23e704224ecc27c2e3a97feb215a2da4b5181992c434bbcaabfa931a4",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/prototypes/move.js",
+      "bytes": 813,
+      "sha256": "1b7409193ab1ab871720842429cbe6f9eabf347782122e3cae9de59d65598ebd",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/prototypes/room.js",
+      "bytes": 4034,
+      "sha256": "eec481dc267b8dc7352dae55f8ab0b79e44efc2f4c714369a009748eb74ba23a",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/prototypes/roomObject.js",
+      "bytes": 2959,
+      "sha256": "52266dccfe974085bb1f77a8d048ede476c0f23864d5234e36f3075ca80e5d00",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/roles/bootstrap.js",
+      "bytes": 6017,
+      "sha256": "b625750819dfed24946d13107c1788d27542621f55ab01a326ba1eb08b560a51",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [
+          23,
+          24,
+          116
+        ],
+        "serialization": [],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/roles/builder.js",
+      "bytes": 18405,
+      "sha256": "19e4b434e69970c5d747842c36f465c1def84480411a85606ae12457107dc218",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [
+          264
+        ],
+        "serialization": [
+          221
+        ],
+        "sorting": [
+          132,
+          145,
+          336
+        ]
+      }
+    },
+    {
+      "file": "src/roles/defender.js",
+      "bytes": 4646,
+      "sha256": "667354e7d3cdd22fb943ba638c4b05315465a43a06ea05c69059a518ea8b0e0a",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/roles/defenderMedic.js",
+      "bytes": 3466,
+      "sha256": "679da12b42cdd6a4c599ec695c1357c146b5fdeca2ecf53b1c3d7fe1b8c41453",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/roles/defenderStriker.js",
+      "bytes": 8128,
+      "sha256": "980f4ed086e72cbe847979b1b60d44f2ae7ff2c889d0578de2189fc678e820cd",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [
+          53
+        ],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/roles/hauler.js",
+      "bytes": 76445,
+      "sha256": "4a6a62e4ffba8523f95fc12cda314aac80939482b5ec78ece3c79a6e5d80dcaa",
+      "hits": {
+        "globalCreepAccess": [
+          480
+        ],
+        "findCall": [
+          216,
+          581,
+          700,
+          863,
+          885,
+          1082,
+          1089,
+          1093
+        ],
+        "pathSelection": [
+          380,
+          488,
+          592,
+          626,
+          701
+        ],
+        "serialization": [],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/roles/index.js",
+      "bytes": 682,
+      "sha256": "f520b99048de1171270547fc0cb4f0e6b570047551e4196ac393f22d38737927",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/roles/miner.js",
+      "bytes": 23508,
+      "sha256": "c134890a1561e5baecc90f64597868c2c706a77bf4674f5edf34cd4e747ea484",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [
+          18,
+          31,
+          45,
+          129,
+          176,
+          274,
+          294,
+          332,
+          356,
+          380,
+          427,
+          528,
+          541,
+          559
+        ],
+        "pathSelection": [
+          188
+        ],
+        "serialization": [],
+        "sorting": [
+          352
+        ]
+      }
+    },
+    {
+      "file": "src/roles/mineralMiner.js",
+      "bytes": 4391,
+      "sha256": "dba4ba90709271e56d97d15ab95d25d4c8d2bdf5c17177a4fa3e5f431542d4dd",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/roles/pioneer.js",
+      "bytes": 10572,
+      "sha256": "beea7f9941afcc20a75cfc226d1d854e6db689e7c57654e70cea3905aa04c500",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [
+          89,
+          188,
+          190
+        ],
+        "pathSelection": [
+          106
+        ],
+        "serialization": [],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/roles/raider.js",
+      "bytes": 4896,
+      "sha256": "c41c6b23cdd0d1f7675b5fc8f7c1288e16a29ed0afea0d82789abf03a9822d29",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [
+          62,
+          79
+        ],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/roles/remoteHauler.js",
+      "bytes": 7070,
+      "sha256": "c3964ae44b42f22553c6b150441a9dfdd56baddf16c2af9a3ee37869465ffa59",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [
+          31,
+          41
+        ],
+        "serialization": [],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/roles/remoteMiner.js",
+      "bytes": 5931,
+      "sha256": "18ad1c31b45e22c138136cfcb8c79d95216fbdfba20b6b286e0d4b54aa68b1a3",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [
+          32
+        ],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/roles/reserver.js",
+      "bytes": 11379,
+      "sha256": "0287bd5f8ce5206715549079c1216fe0dbc0213f3aa24b8d7c6dbdc751cbe8cf",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/roles/scout.js",
+      "bytes": 24748,
+      "sha256": "9d2b5b22298b0751e2413211c3ff439a72185b8958f3eefc65b6f8762d9771a8",
+      "hits": {
+        "globalCreepAccess": [
+          44,
+          45
+        ],
+        "findCall": [],
+        "pathSelection": [
+          162
+        ],
+        "serialization": [
+          33,
+          66,
+          137
+        ],
+        "sorting": [
+          198
+        ]
+      }
+    },
+    {
+      "file": "src/roles/squadDismantler.js",
+      "bytes": 2205,
+      "sha256": "db0d07a7a0406f787e9e330a8dfc327c8ed64866663fe7b51f28439993d10b26",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [
+          38
+        ],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/roles/upgrader.js",
+      "bytes": 8892,
+      "sha256": "1e99d893a5b276cdf97fe14a99d468eb44c5b45034025d346c5d374cc28f7b5b",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [
+          110,
+          145
+        ],
+        "serialization": [],
+        "sorting": [
+          32
+        ]
+      }
+    },
+    {
+      "file": "src/rooms/architect.js",
+      "bytes": 57328,
+      "sha256": "ddc8437c15e1fc8be1480c2beaadea1574a39b84f431246b5bf6db8045956ff8",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [
+          190,
+          671,
+          694,
+          714,
+          715,
+          736,
+          737,
+          745,
+          775,
+          804,
+          829,
+          1109,
+          1439,
+          1502
+        ],
+        "pathSelection": [
+          1562
+        ],
+        "serialization": [
+          1380
+        ],
+        "sorting": [
+          593,
+          716,
+          741,
+          745,
+          804,
+          883
+        ]
+      }
+    },
+    {
+      "file": "src/rooms/defense.js",
+      "bytes": 4476,
+      "sha256": "20ed4953026a6efa774b8fdeb95ced765b44f126ebdb29988b33b5173a472bd0",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [
+          45
+        ],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/rooms/energyBalancing.js",
+      "bytes": 11174,
+      "sha256": "776c1571be85c676dbb9aff99bb2f363661b7d32ee86e684ff8bda488261d71e",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [
+          25,
+          31,
+          76
+        ],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": [
+          117,
+          132
+        ]
+      }
+    },
+    {
+      "file": "src/rooms/index.js",
+      "bytes": 653,
+      "sha256": "451514688a0ee5c015f55f9205fdfc98491dd2f6eaa5b23d19e1d71ae2afd51b",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/rooms/intel.js",
+      "bytes": 4909,
+      "sha256": "20c7fd7c1e182c15f027ce07ba30e1f596fba1697ef093d57b73f6cd00342fd7",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [
+          83
+        ],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/rooms/needs.js",
+      "bytes": 29055,
+      "sha256": "f4ac304da0bee28bf0b060797ce194818055a2a36972d90e46fca1ce9e287129",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [
+          80,
+          88
+        ],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/rooms/pioneering.js",
+      "bytes": 10015,
+      "sha256": "a50bdc1df5c3a2d8e83253f7beaa82be742b301927ac7ea36bb55a20efc8c003",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [
+          207
+        ],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/rooms/raiding.js",
+      "bytes": 13393,
+      "sha256": "9ba1b2cac6bf25ee20002e82970b54727e6863d6d479faf9e3ea5ddb8a6222e7",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/rooms/refining.js",
+      "bytes": 5949,
+      "sha256": "5ac394e359de0428e96669f1a0a41ee66b015695a6215836f3deac962983c031",
+      "hits": {
+        "globalCreepAccess": [
+          90
+        ],
+        "findCall": [
+          96
+        ],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/rooms/remotes.js",
+      "bytes": 14413,
+      "sha256": "2f264e043ae144ce16033c1a58b3dd3f55bf34c5fc2d8dd113efe0aea10ddf91",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [
+          174
+        ],
+        "serialization": [
+          351
+        ],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/rooms/spawning.js",
+      "bytes": 12444,
+      "sha256": "ec3712fda005f78ce0c40cb36e78acbdc2a63efe8936b0a378c00a3bd06ba9fa",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [
+          81
+        ],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": [
+          43
+        ]
+      }
+    },
+    {
+      "file": "src/structures/factory.js",
+      "bytes": 1192,
+      "sha256": "dfac7ab172d646e3eb0fa78ad8dc6b2d1c2e691093fe016d4ef6b9c2d073ca8a",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/structures/index.js",
+      "bytes": 295,
+      "sha256": "9d877fded253cbf918bede532e7aced41965b8eb9e0ba44d2afbee7c08f4255c",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/structures/lab.js",
+      "bytes": 850,
+      "sha256": "e93f50269f32ef1496e23904cf7339fd60d6c6264abd275dbced3e32509b3412",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/structures/link.js",
+      "bytes": 5391,
+      "sha256": "b1c305a7b6ae607ff161aae56a912a9960c72f49977f93c9f33c3e769a9c739c",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [
+          33,
+          37
+        ],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": [
+          54
+        ]
+      }
+    },
+    {
+      "file": "src/structures/observer.js",
+      "bytes": 9075,
+      "sha256": "9bd90d187c5cc51034549b1ea14c77ab3dc3b8a8bdfe0cedc09495f5d7416ef7",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/structures/powerSpawn.js",
+      "bytes": 783,
+      "sha256": "3674cf2ce7d44c7f990fa6e14b98b15166a1417d744d4edd980f7a8288bbc420",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/structures/rampart.js",
+      "bytes": 2838,
+      "sha256": "25ef8c796209e34ae99f10bd8d046e0e33d750fdff018e9e4a16cab75a3cb2c1",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/structures/tower.js",
+      "bytes": 9356,
+      "sha256": "31fd2a8790f80fa98ee222aec666e2c14beba793488c4aea08dd242f05cb8d4e",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [
+          115
+        ],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": [
+          89,
+          118
+        ]
+      }
+    },
+    {
+      "file": "src/utils/autoscale.js",
+      "bytes": 5369,
+      "sha256": "6f7f746577ccb799fc14ce4c7bbd2cb976a39db1d14566b27373adf7e6c26014",
+      "hits": {
+        "globalCreepAccess": [
+          17
+        ],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/utils/cadence.js",
+      "bytes": 878,
+      "sha256": "c9d8935fa583d2d11d0ad2d4edf876fa2d4d6bd2e43a7718eebcf3242bed72e0",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/utils/census.js",
+      "bytes": 2618,
+      "sha256": "c82f4a0544804075b0cde9cfcb7e99d73934a25fa9fd1bf4437a23cb75728e1d",
+      "hits": {
+        "globalCreepAccess": [
+          1,
+          2,
+          13,
+          14,
+          43
+        ],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/utils/claimDiagnostics.js",
+      "bytes": 3183,
+      "sha256": "f771cf03bb894416c01d9ba54a1403dee219c8661a8d0b23afca34fcea3835c7",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [
+          54,
+          60,
+          69
+        ],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/utils/combat.js",
+      "bytes": 13423,
+      "sha256": "adbc0ed0ff96e662ffc8f5ecd8a2888a43682875de2a72339a4a9b21d262170c",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [
+          288
+        ],
+        "pathSelection": [
+          103,
+          130,
+          325
+        ],
+        "serialization": [],
+        "sorting": [
+          235,
+          255
+        ]
+      }
+    },
+    {
+      "file": "src/utils/config.js",
+      "bytes": 49014,
+      "sha256": "aacee0bd11a8486db23b634573afda291cbdf24659e5951bac1892bac59ac72e",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [
+          623,
+          686
+        ],
+        "serialization": [],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/utils/console.js",
+      "bytes": 15480,
+      "sha256": "d9a1012578ddcb7ca200fb5ca5e43cf1e088c0cfaa4bf84077bd5e642be2815b",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/utils/cpuAccounting.js",
+      "bytes": 3353,
+      "sha256": "3cf70976a4c808bb293163424e191642c77ea5583ec69af4545e67cdb642a5b6",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/utils/cpuMeter.js",
+      "bytes": 4711,
+      "sha256": "d2826e9f114ad188511aededc0f2e4e14a12b0983474f341b70d480b8149599d",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": [
+          116
+        ]
+      }
+    },
+    {
+      "file": "src/utils/craftChain.js",
+      "bytes": 59821,
+      "sha256": "8543c8084f81f1b2060046c07ab4d689e12819b3837ed6c76bc2dc3ec4d42f2a",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [
+          453
+        ],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": [
+          100,
+          217,
+          269
+        ]
+      }
+    },
+    {
+      "file": "src/utils/craftEnergy.js",
+      "bytes": 9448,
+      "sha256": "f3c2bd314110e81d113d1f73544e8ca93d4a37a881cffa2b8ea5b2046b41e309",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [
+          34
+        ],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": [
+          76
+        ]
+      }
+    },
+    {
+      "file": "src/utils/craftLedger.js",
+      "bytes": 22693,
+      "sha256": "8c60db78707ea924ed871164db5641d3c5aa082cefdcef5509063035e3f9a12e",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [
+          56,
+          154,
+          179
+        ],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": [
+          245,
+          266,
+          285,
+          312,
+          340
+        ]
+      }
+    },
+    {
+      "file": "src/utils/craftPlanner.js",
+      "bytes": 27924,
+      "sha256": "c3cf226cd2e5db82a8910e8f4c2420760c104a1a334a40cb889937de5383af15",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [
+          377
+        ],
+        "pathSelection": [],
+        "serialization": [
+          163,
+          440,
+          478
+        ],
+        "sorting": [
+          48,
+          65,
+          363
+        ]
+      }
+    },
+    {
+      "file": "src/utils/craftPurchaseBook.js",
+      "bytes": 5290,
+      "sha256": "0f426733925aa93021f38c1137fc8f731dcf9ebc16746289733354f63287d523",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [
+          73
+        ],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": [
+          33,
+          61
+        ]
+      }
+    },
+    {
+      "file": "src/utils/damagedStructures.js",
+      "bytes": 3196,
+      "sha256": "48e1db9fc047efb2996aea80f6c2d987e522064d48ef01bd92059cad4b3d0340",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": [
+          59
+        ]
+      }
+    },
+    {
+      "file": "src/utils/energy.js",
+      "bytes": 4463,
+      "sha256": "b527a306cc8f561ea5631324f3afd4cd9938d0347194addbc85f2a0c09dd22ab",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/utils/energyLedger.js",
+      "bytes": 7475,
+      "sha256": "5eaca81d6cdc4b2b07516bbd6c73d60d75a6c7603ec6b6e5ede960eb8bb1b81d",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/utils/excuseMe.js",
+      "bytes": 7943,
+      "sha256": "af21083c40c6d65afe3b5729f052af11b28a6e23d41735ee83d1672d99b03dbc",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [
+          68,
+          160
+        ],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/utils/hostiles.js",
+      "bytes": 7694,
+      "sha256": "081393c75ac9344e50305c5918d8a68c9e4e42947249fc79d98d403076bce773",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [
+          152,
+          161,
+          169,
+          174,
+          181,
+          186
+        ],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/utils/index.js",
+      "bytes": 865,
+      "sha256": "6cd5cabe5dccf1a26e17e3c44add706bbd2d646f9e3216925bed790c40910643",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/utils/keeperTransit.js",
+      "bytes": 4720,
+      "sha256": "874ff749ba6865c24f731a482c05c38d0fdce9cc124361d1b27ef7f873a93b77",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [
+          27
+        ],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/utils/labPlanModel.js",
+      "bytes": 16940,
+      "sha256": "4738437b6d3f2c0911182e838c986822d784560266a4fc66f359aa0e8cc1ebf0",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [
+          6
+        ],
+        "sorting": [
+          38,
+          76,
+          157,
+          166,
+          188,
+          274
+        ]
+      }
+    },
+    {
+      "file": "src/utils/labPolicy.js",
+      "bytes": 10607,
+      "sha256": "53bbb042290679fb72c9f7122476399f137c95bd860a37ccdfec40f23f3b0dfe",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [
+          28,
+          73,
+          136
+        ],
+        "sorting": [
+          25,
+          72,
+          115
+        ]
+      }
+    },
+    {
+      "file": "src/utils/labPolicyData.js",
+      "bytes": 572105,
+      "sha256": "eea4136b31088f618a7f68561e8bb4eb6c12a9cfe781eee04f52c4ab3a8ce08e",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/utils/labPolicyRuntime.js",
+      "bytes": 22928,
+      "sha256": "bc283b14c798ed48128d15a4a6a04ab3a83e6d36569468df2e930e3dd23b58d3",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [
+          20
+        ],
+        "sorting": [
+          184,
+          244
+        ]
+      }
+    },
+    {
+      "file": "src/utils/labReactions.js",
+      "bytes": 5665,
+      "sha256": "e04f639d3ae05c7d4b08b7a661d81572cf8111cc3e3c2f13e95d8168a212925b",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [
+          29
+        ],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/utils/labSlots.js",
+      "bytes": 18907,
+      "sha256": "338b4c30fb6beab50a18493b84314856e022981218f81d57ecb029da635cccee",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [
+          42
+        ],
+        "pathSelection": [],
+        "serialization": [
+          289
+        ],
+        "sorting": [
+          33,
+          50,
+          93,
+          100,
+          127,
+          262,
+          289,
+          330
+        ]
+      }
+    },
+    {
+      "file": "src/utils/market.js",
+      "bytes": 17897,
+      "sha256": "264830ef39368d5dce9ac7c79b489ebf88612bbc38a2d9f2987fe2ae0e06a267",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [
+          401,
+          411
+        ],
+        "sorting": [
+          102,
+          277
+        ]
+      }
+    },
+    {
+      "file": "src/utils/marketAccounting.js",
+      "bytes": 2625,
+      "sha256": "6ba53600e29db1033e889c70f36541fbbfd91c0eaa5bde3ad7055ed036288915",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/utils/marketFlip.js",
+      "bytes": 18342,
+      "sha256": "dd948cfa2b7517fb8bc78a63a25e71b477344b508e91cb27e935cd645067bd45",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [
+          305,
+          311
+        ],
+        "sorting": [
+          78,
+          204
+        ]
+      }
+    },
+    {
+      "file": "src/utils/marketHistoryStore.js",
+      "bytes": 6678,
+      "sha256": "a08546f084112ea94494aeb4d913bc943fa424dc2d4f73c19c746382cc6a5955",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [
+          17,
+          95,
+          97,
+          100,
+          124
+        ],
+        "sorting": [
+          78
+        ]
+      }
+    },
+    {
+      "file": "src/utils/marketPricing.js",
+      "bytes": 18749,
+      "sha256": "498c62fe5e4ee5265bdc613bd9df7f2dfa3f35ec35c4960556831725d65857bf",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [
+          312,
+          313
+        ],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": [
+          15,
+          300
+        ]
+      }
+    },
+    {
+      "file": "src/utils/memory.js",
+      "bytes": 2850,
+      "sha256": "22833851996b167d006fb20005ce683f00d2439ad96ca6a24f1f1c7a053e94dd",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [
+          4,
+          25,
+          77
+        ],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/utils/mincut.js",
+      "bytes": 18205,
+      "sha256": "64c7011f2df68fd0a1ebe0e26fb1e83e1807ae7babd5355f64bd0cac76782b55",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [
+          235,
+          243,
+          255,
+          257
+        ],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/utils/move.js",
+      "bytes": 11503,
+      "sha256": "ec3885f0c7674b104f2488c7cb8466e65594110fdef0b4db5b73dde9299bc41d",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [
+          111,
+          327
+        ],
+        "pathSelection": [
+          116
+        ],
+        "serialization": [
+          36,
+          173
+        ],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/utils/names.js",
+      "bytes": 7037,
+      "sha256": "51294a9e046d42515f64bd5ed6147b87be5b9a3e4f16b665551df63a99622e2d",
+      "hits": {
+        "globalCreepAccess": [
+          139
+        ],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/utils/nativePath.js",
+      "bytes": 1588,
+      "sha256": "c62d9ba1948c4abdbc4a9e31d160e4360b3199ab1c34c6a6c9ea395f7716eee4",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/utils/nonEnergyLogistics.js",
+      "bytes": 5529,
+      "sha256": "0ed040f5647198562ecd001ae6f19044f270a40fd76302d66a476a0ab72ee8f8",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [
+          105
+        ],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/utils/observer.js",
+      "bytes": 1000,
+      "sha256": "d816806786da3f22fbaacf0edd315655edcfbd67c8411c1b39f44b152ed37a60",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/utils/orderBook.js",
+      "bytes": 2352,
+      "sha256": "00552daab7adad3ad0bb755925440f156f5fd67ee0df4d6c558680766522117d",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/utils/plan.js",
+      "bytes": 1801,
+      "sha256": "16703de7ad257b013fbca145cf7008687b837dee2e38d5b34fc229fecca8e25b",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/utils/planStore.js",
+      "bytes": 6103,
+      "sha256": "2869714b5a94f393b7cf12857195ae5420a3c16fffe2037a296cb455a356ff7b",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [
+          85,
+          123
+        ],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/utils/population.js",
+      "bytes": 1655,
+      "sha256": "3e92d25df5062a4e02ab2a09918c7929ac660902995fa5d33eee6cebb3a11801",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/utils/priority.js",
+      "bytes": 1439,
+      "sha256": "0d5ef247bb24d1db21fd6a7d3c73b5c3c4ab043364d60207e6722886fdbc9a6c",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": [
+          22
+        ]
+      }
+    },
+    {
+      "file": "src/utils/profiler.js",
+      "bytes": 17694,
+      "sha256": "c15589275251c67786adf090961acd7dd952a8773437ac5d46031a30c8082f4d",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [
+          93
+        ],
+        "serialization": [
+          472
+        ],
+        "sorting": [
+          353,
+          504
+        ]
+      }
+    },
+    {
+      "file": "src/utils/purchaseCost.js",
+      "bytes": 1246,
+      "sha256": "38ddbdc66c33d019061392e3b448de4982dc15bcc4edc602a9d9bc0b5d2df03a",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/utils/rampartGates.js",
+      "bytes": 6597,
+      "sha256": "6d933c181a46439a924dd997d49bfd61ffe752494cfdc0c189b3b3d385d251ce",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [
+          79
+        ],
+        "serialization": [],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/utils/rampartRepair.js",
+      "bytes": 8632,
+      "sha256": "f77945f4614ffca3e9e0f3ccdc2d10de1fa6d0cd235d514c7211ae505fdbf6b7",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": [
+          113,
+          123
+        ]
+      }
+    },
+    {
+      "file": "src/utils/reservations.js",
+      "bytes": 8415,
+      "sha256": "d2cc81d2d441bc4446f41a0c262c09642f91f28712caa6b6d99caff3189c1191",
+      "hits": {
+        "globalCreepAccess": [
+          31,
+          32,
+          154,
+          155
+        ],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/utils/resourcePolicy.js",
+      "bytes": 11750,
+      "sha256": "25899a148e1d6f143aeb4b8eecb128346f1919a9573e1858616d372886ac11f3",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/utils/resourceTiers.js",
+      "bytes": 8663,
+      "sha256": "e0850be920e0033048bd28e8c4ed3871fa44a5216ad760086da48ae7ee4cfdaf",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/utils/roomCache.js",
+      "bytes": 4689,
+      "sha256": "b34c643fc12af021296fc3ca8c15ad0e0d85b1adc6d5d3b0013777a743cda7dd",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [
+          2,
+          17,
+          23,
+          29,
+          39,
+          45,
+          53,
+          59,
+          67,
+          75,
+          95
+        ],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/utils/routing.js",
+      "bytes": 84656,
+      "sha256": "b6669fab57368ab1ea512a213b8538e9a7f7439cc0cb6aee2453f5fc74f26afe",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [
+          98
+        ],
+        "pathSelection": [
+          568,
+          658,
+          677,
+          1066,
+          1451,
+          1465
+        ],
+        "serialization": [
+          42,
+          150,
+          483
+        ],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/utils/squad.js",
+      "bytes": 14754,
+      "sha256": "95fd88b199fb4e33931397f3492c05da86eb8e5aff1e57aebc6bcaee47004277",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [
+          165
+        ],
+        "serialization": [],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/utils/stats.js",
+      "bytes": 13265,
+      "sha256": "04a90f97bfbca199c9bae8c67ce6db3e051ac60909743dfcea2034b6f0f30061",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/utils/swingTrade.js",
+      "bytes": 14938,
+      "sha256": "33d5ef50ba02365984b2023900c445a3268709a0b48278b3204f3c5248a7644c",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": [
+          97,
+          110
+        ]
+      }
+    },
+    {
+      "file": "src/utils/terminalClaims.js",
+      "bytes": 7337,
+      "sha256": "dfede0199a2c4ca0e25c1e08ba95498b3af29329088de62ebd2b950f8b578293",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/utils/terminalFuel.js",
+      "bytes": 7052,
+      "sha256": "0635d2dda9d42c2bacce3f4d138f0d2aac1b2d57a0a42b25be72c06464462c20",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": [
+          68
+        ]
+      }
+    },
+    {
+      "file": "src/utils/terminalHistory.js",
+      "bytes": 2512,
+      "sha256": "888f6a770937fef19fc995f6e878b47ae9e0d52d8a4569aefd96de366efe0073",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/utils/terminalIndex.js",
+      "bytes": 711,
+      "sha256": "bca71759dccde8a3deec0f70f72771e0b79feb6b4a75432d70937303218fbf79",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/utils/terminalOps.js",
+      "bytes": 118688,
+      "sha256": "4f82db7d0a49a3ced48452392f0e9c362d20e3fdf2914ee7696a5553c0bdcd20",
+      "hits": {
+        "globalCreepAccess": [
+          1078,
+          1174,
+          1296,
+          1389,
+          1390,
+          1409,
+          1410,
+          1548
+        ],
+        "findCall": [
+          239,
+          241,
+          249,
+          286,
+          490,
+          616,
+          811,
+          982,
+          1184,
+          1397
+        ],
+        "pathSelection": [],
+        "serialization": [
+          1654,
+          1660
+        ],
+        "sorting": [
+          387,
+          419,
+          1076,
+          1443
+        ]
+      }
+    },
+    {
+      "file": "src/utils/terminalOrderRetry.js",
+      "bytes": 1799,
+      "sha256": "ea23ba57366a0436bfe16f381f050472281ce13ad4d19f30ca3aaf5f0c7d37c0",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": [
+          22
+        ]
+      }
+    },
+    {
+      "file": "src/utils/terminalRouting.js",
+      "bytes": 5667,
+      "sha256": "58ab26e2add5933196bf42365be552128f88920daf641d7af3b35319e1cd5760",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [
+          10
+        ],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/utils/terrain.js",
+      "bytes": 649,
+      "sha256": "4b22da6b36c55af196993d8a42dea34ef35ffc913d79de1c73d692006cf6b384",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/utils/traffic.js",
+      "bytes": 8113,
+      "sha256": "cef88d26e13b60c1835970111ceaa49874d7c02f22e9d2fe5b1ff9295ca3413d",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [
+          89
+        ],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/utils/transientStock.js",
+      "bytes": 4755,
+      "sha256": "189aa8a7f88f5a56cded07fe4e0f968307cc7dea94a0d0cb9697e1809dee9eb3",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": []
+      }
+    },
+    {
+      "file": "src/utils/transitSafety.js",
+      "bytes": 5947,
+      "sha256": "ac23617e33610f02afcb6ee1b5f1fdc45b2d96bea5fd3c45e5c742d66e35941e",
+      "hits": {
+        "globalCreepAccess": [
+          79
+        ],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [
+          55,
+          61,
+          129
+        ],
+        "sorting": [
+          55,
+          61
+        ]
+      }
+    },
+    {
+      "file": "src/utils/visual-room.js",
+      "bytes": 24077,
+      "sha256": "f8bfd1738bce95a63e477aa712a3004232ecef420c41e1da206ea8fde699218e",
+      "hits": {
+        "globalCreepAccess": [],
+        "findCall": [],
+        "pathSelection": [],
+        "serialization": [],
+        "sorting": []
+      }
+    }
+  ],
+  "matrix": [
+    {
+      "rooms": 3,
+      "consumers": 3,
+      "ordersPerRoom": 0,
+      "finalized": 0,
+      "fuelCold": {
+        "enumerations": 9,
+        "operationReads": 0,
+        "sourceRoomReads": 0
+      },
+      "fuelWarm": {
+        "enumerations": 9,
+        "operationReads": 0,
+        "sourceRoomReads": 0
+      },
+      "fuelNextTick": {
+        "enumerations": 9,
+        "operationReads": 0,
+        "sourceRoomReads": 0
+      },
+      "indexCold": {
+        "enumerations": 1,
+        "operationReads": 0,
+        "sourceRoomReads": 0
+      },
+      "indexWarm": {
+        "enumerations": 0,
+        "operationReads": 0,
+        "sourceRoomReads": 0
+      }
+    },
+    {
+      "rooms": 3,
+      "consumers": 3,
+      "ordersPerRoom": 5,
+      "finalized": 0,
+      "fuelCold": {
+        "enumerations": 9,
+        "operationReads": 135,
+        "sourceRoomReads": 135
+      },
+      "fuelWarm": {
+        "enumerations": 9,
+        "operationReads": 135,
+        "sourceRoomReads": 135
+      },
+      "fuelNextTick": {
+        "enumerations": 9,
+        "operationReads": 135,
+        "sourceRoomReads": 135
+      },
+      "indexCold": {
+        "enumerations": 1,
+        "operationReads": 150,
+        "sourceRoomReads": 135
+      },
+      "indexWarm": {
+        "enumerations": 0,
+        "operationReads": 135,
+        "sourceRoomReads": 135
+      }
+    },
+    {
+      "rooms": 3,
+      "consumers": 3,
+      "ordersPerRoom": 20,
+      "finalized": 0,
+      "fuelCold": {
+        "enumerations": 9,
+        "operationReads": 540,
+        "sourceRoomReads": 540
+      },
+      "fuelWarm": {
+        "enumerations": 9,
+        "operationReads": 540,
+        "sourceRoomReads": 540
+      },
+      "fuelNextTick": {
+        "enumerations": 9,
+        "operationReads": 540,
+        "sourceRoomReads": 540
+      },
+      "indexCold": {
+        "enumerations": 1,
+        "operationReads": 600,
+        "sourceRoomReads": 540
+      },
+      "indexWarm": {
+        "enumerations": 0,
+        "operationReads": 540,
+        "sourceRoomReads": 540
+      }
+    },
+    {
+      "rooms": 3,
+      "consumers": 7,
+      "ordersPerRoom": 0,
+      "finalized": 0,
+      "fuelCold": {
+        "enumerations": 21,
+        "operationReads": 0,
+        "sourceRoomReads": 0
+      },
+      "fuelWarm": {
+        "enumerations": 21,
+        "operationReads": 0,
+        "sourceRoomReads": 0
+      },
+      "fuelNextTick": {
+        "enumerations": 21,
+        "operationReads": 0,
+        "sourceRoomReads": 0
+      },
+      "indexCold": {
+        "enumerations": 1,
+        "operationReads": 0,
+        "sourceRoomReads": 0
+      },
+      "indexWarm": {
+        "enumerations": 0,
+        "operationReads": 0,
+        "sourceRoomReads": 0
+      }
+    },
+    {
+      "rooms": 3,
+      "consumers": 7,
+      "ordersPerRoom": 5,
+      "finalized": 0,
+      "fuelCold": {
+        "enumerations": 21,
+        "operationReads": 315,
+        "sourceRoomReads": 315
+      },
+      "fuelWarm": {
+        "enumerations": 21,
+        "operationReads": 315,
+        "sourceRoomReads": 315
+      },
+      "fuelNextTick": {
+        "enumerations": 21,
+        "operationReads": 315,
+        "sourceRoomReads": 315
+      },
+      "indexCold": {
+        "enumerations": 1,
+        "operationReads": 330,
+        "sourceRoomReads": 315
+      },
+      "indexWarm": {
+        "enumerations": 0,
+        "operationReads": 315,
+        "sourceRoomReads": 315
+      }
+    },
+    {
+      "rooms": 3,
+      "consumers": 7,
+      "ordersPerRoom": 20,
+      "finalized": 0,
+      "fuelCold": {
+        "enumerations": 21,
+        "operationReads": 1260,
+        "sourceRoomReads": 1260
+      },
+      "fuelWarm": {
+        "enumerations": 21,
+        "operationReads": 1260,
+        "sourceRoomReads": 1260
+      },
+      "fuelNextTick": {
+        "enumerations": 21,
+        "operationReads": 1260,
+        "sourceRoomReads": 1260
+      },
+      "indexCold": {
+        "enumerations": 1,
+        "operationReads": 1320,
+        "sourceRoomReads": 1260
+      },
+      "indexWarm": {
+        "enumerations": 0,
+        "operationReads": 1260,
+        "sourceRoomReads": 1260
+      }
+    },
+    {
+      "rooms": 3,
+      "consumers": 10,
+      "ordersPerRoom": 0,
+      "finalized": 0,
+      "fuelCold": {
+        "enumerations": 30,
+        "operationReads": 0,
+        "sourceRoomReads": 0
+      },
+      "fuelWarm": {
+        "enumerations": 30,
+        "operationReads": 0,
+        "sourceRoomReads": 0
+      },
+      "fuelNextTick": {
+        "enumerations": 30,
+        "operationReads": 0,
+        "sourceRoomReads": 0
+      },
+      "indexCold": {
+        "enumerations": 1,
+        "operationReads": 0,
+        "sourceRoomReads": 0
+      },
+      "indexWarm": {
+        "enumerations": 0,
+        "operationReads": 0,
+        "sourceRoomReads": 0
+      }
+    },
+    {
+      "rooms": 3,
+      "consumers": 10,
+      "ordersPerRoom": 5,
+      "finalized": 0,
+      "fuelCold": {
+        "enumerations": 30,
+        "operationReads": 450,
+        "sourceRoomReads": 450
+      },
+      "fuelWarm": {
+        "enumerations": 30,
+        "operationReads": 450,
+        "sourceRoomReads": 450
+      },
+      "fuelNextTick": {
+        "enumerations": 30,
+        "operationReads": 450,
+        "sourceRoomReads": 450
+      },
+      "indexCold": {
+        "enumerations": 1,
+        "operationReads": 465,
+        "sourceRoomReads": 450
+      },
+      "indexWarm": {
+        "enumerations": 0,
+        "operationReads": 450,
+        "sourceRoomReads": 450
+      }
+    },
+    {
+      "rooms": 3,
+      "consumers": 10,
+      "ordersPerRoom": 20,
+      "finalized": 0,
+      "fuelCold": {
+        "enumerations": 30,
+        "operationReads": 1800,
+        "sourceRoomReads": 1800
+      },
+      "fuelWarm": {
+        "enumerations": 30,
+        "operationReads": 1800,
+        "sourceRoomReads": 1800
+      },
+      "fuelNextTick": {
+        "enumerations": 30,
+        "operationReads": 1800,
+        "sourceRoomReads": 1800
+      },
+      "indexCold": {
+        "enumerations": 1,
+        "operationReads": 1860,
+        "sourceRoomReads": 1800
+      },
+      "indexWarm": {
+        "enumerations": 0,
+        "operationReads": 1800,
+        "sourceRoomReads": 1800
+      }
+    },
+    {
+      "rooms": 5,
+      "consumers": 3,
+      "ordersPerRoom": 0,
+      "finalized": 0,
+      "fuelCold": {
+        "enumerations": 15,
+        "operationReads": 0,
+        "sourceRoomReads": 0
+      },
+      "fuelWarm": {
+        "enumerations": 15,
+        "operationReads": 0,
+        "sourceRoomReads": 0
+      },
+      "fuelNextTick": {
+        "enumerations": 15,
+        "operationReads": 0,
+        "sourceRoomReads": 0
+      },
+      "indexCold": {
+        "enumerations": 1,
+        "operationReads": 0,
+        "sourceRoomReads": 0
+      },
+      "indexWarm": {
+        "enumerations": 0,
+        "operationReads": 0,
+        "sourceRoomReads": 0
+      }
+    },
+    {
+      "rooms": 5,
+      "consumers": 3,
+      "ordersPerRoom": 5,
+      "finalized": 0,
+      "fuelCold": {
+        "enumerations": 15,
+        "operationReads": 375,
+        "sourceRoomReads": 375
+      },
+      "fuelWarm": {
+        "enumerations": 15,
+        "operationReads": 375,
+        "sourceRoomReads": 375
+      },
+      "fuelNextTick": {
+        "enumerations": 15,
+        "operationReads": 375,
+        "sourceRoomReads": 375
+      },
+      "indexCold": {
+        "enumerations": 1,
+        "operationReads": 400,
+        "sourceRoomReads": 375
+      },
+      "indexWarm": {
+        "enumerations": 0,
+        "operationReads": 375,
+        "sourceRoomReads": 375
+      }
+    },
+    {
+      "rooms": 5,
+      "consumers": 3,
+      "ordersPerRoom": 20,
+      "finalized": 0,
+      "fuelCold": {
+        "enumerations": 15,
+        "operationReads": 1500,
+        "sourceRoomReads": 1500
+      },
+      "fuelWarm": {
+        "enumerations": 15,
+        "operationReads": 1500,
+        "sourceRoomReads": 1500
+      },
+      "fuelNextTick": {
+        "enumerations": 15,
+        "operationReads": 1500,
+        "sourceRoomReads": 1500
+      },
+      "indexCold": {
+        "enumerations": 1,
+        "operationReads": 1600,
+        "sourceRoomReads": 1500
+      },
+      "indexWarm": {
+        "enumerations": 0,
+        "operationReads": 1500,
+        "sourceRoomReads": 1500
+      }
+    },
+    {
+      "rooms": 5,
+      "consumers": 7,
+      "ordersPerRoom": 0,
+      "finalized": 0,
+      "fuelCold": {
+        "enumerations": 35,
+        "operationReads": 0,
+        "sourceRoomReads": 0
+      },
+      "fuelWarm": {
+        "enumerations": 35,
+        "operationReads": 0,
+        "sourceRoomReads": 0
+      },
+      "fuelNextTick": {
+        "enumerations": 35,
+        "operationReads": 0,
+        "sourceRoomReads": 0
+      },
+      "indexCold": {
+        "enumerations": 1,
+        "operationReads": 0,
+        "sourceRoomReads": 0
+      },
+      "indexWarm": {
+        "enumerations": 0,
+        "operationReads": 0,
+        "sourceRoomReads": 0
+      }
+    },
+    {
+      "rooms": 5,
+      "consumers": 7,
+      "ordersPerRoom": 5,
+      "finalized": 0,
+      "fuelCold": {
+        "enumerations": 35,
+        "operationReads": 875,
+        "sourceRoomReads": 875
+      },
+      "fuelWarm": {
+        "enumerations": 35,
+        "operationReads": 875,
+        "sourceRoomReads": 875
+      },
+      "fuelNextTick": {
+        "enumerations": 35,
+        "operationReads": 875,
+        "sourceRoomReads": 875
+      },
+      "indexCold": {
+        "enumerations": 1,
+        "operationReads": 900,
+        "sourceRoomReads": 875
+      },
+      "indexWarm": {
+        "enumerations": 0,
+        "operationReads": 875,
+        "sourceRoomReads": 875
+      }
+    },
+    {
+      "rooms": 5,
+      "consumers": 7,
+      "ordersPerRoom": 20,
+      "finalized": 0,
+      "fuelCold": {
+        "enumerations": 35,
+        "operationReads": 3500,
+        "sourceRoomReads": 3500
+      },
+      "fuelWarm": {
+        "enumerations": 35,
+        "operationReads": 3500,
+        "sourceRoomReads": 3500
+      },
+      "fuelNextTick": {
+        "enumerations": 35,
+        "operationReads": 3500,
+        "sourceRoomReads": 3500
+      },
+      "indexCold": {
+        "enumerations": 1,
+        "operationReads": 3600,
+        "sourceRoomReads": 3500
+      },
+      "indexWarm": {
+        "enumerations": 0,
+        "operationReads": 3500,
+        "sourceRoomReads": 3500
+      }
+    },
+    {
+      "rooms": 5,
+      "consumers": 10,
+      "ordersPerRoom": 0,
+      "finalized": 0,
+      "fuelCold": {
+        "enumerations": 50,
+        "operationReads": 0,
+        "sourceRoomReads": 0
+      },
+      "fuelWarm": {
+        "enumerations": 50,
+        "operationReads": 0,
+        "sourceRoomReads": 0
+      },
+      "fuelNextTick": {
+        "enumerations": 50,
+        "operationReads": 0,
+        "sourceRoomReads": 0
+      },
+      "indexCold": {
+        "enumerations": 1,
+        "operationReads": 0,
+        "sourceRoomReads": 0
+      },
+      "indexWarm": {
+        "enumerations": 0,
+        "operationReads": 0,
+        "sourceRoomReads": 0
+      }
+    },
+    {
+      "rooms": 5,
+      "consumers": 10,
+      "ordersPerRoom": 5,
+      "finalized": 0,
+      "fuelCold": {
+        "enumerations": 50,
+        "operationReads": 1250,
+        "sourceRoomReads": 1250
+      },
+      "fuelWarm": {
+        "enumerations": 50,
+        "operationReads": 1250,
+        "sourceRoomReads": 1250
+      },
+      "fuelNextTick": {
+        "enumerations": 50,
+        "operationReads": 1250,
+        "sourceRoomReads": 1250
+      },
+      "indexCold": {
+        "enumerations": 1,
+        "operationReads": 1275,
+        "sourceRoomReads": 1250
+      },
+      "indexWarm": {
+        "enumerations": 0,
+        "operationReads": 1250,
+        "sourceRoomReads": 1250
+      }
+    },
+    {
+      "rooms": 5,
+      "consumers": 10,
+      "ordersPerRoom": 20,
+      "finalized": 0,
+      "fuelCold": {
+        "enumerations": 50,
+        "operationReads": 5000,
+        "sourceRoomReads": 5000
+      },
+      "fuelWarm": {
+        "enumerations": 50,
+        "operationReads": 5000,
+        "sourceRoomReads": 5000
+      },
+      "fuelNextTick": {
+        "enumerations": 50,
+        "operationReads": 5000,
+        "sourceRoomReads": 5000
+      },
+      "indexCold": {
+        "enumerations": 1,
+        "operationReads": 5100,
+        "sourceRoomReads": 5000
+      },
+      "indexWarm": {
+        "enumerations": 0,
+        "operationReads": 5000,
+        "sourceRoomReads": 5000
+      }
+    },
+    {
+      "rooms": 10,
+      "consumers": 3,
+      "ordersPerRoom": 0,
+      "finalized": 0,
+      "fuelCold": {
+        "enumerations": 30,
+        "operationReads": 0,
+        "sourceRoomReads": 0
+      },
+      "fuelWarm": {
+        "enumerations": 30,
+        "operationReads": 0,
+        "sourceRoomReads": 0
+      },
+      "fuelNextTick": {
+        "enumerations": 30,
+        "operationReads": 0,
+        "sourceRoomReads": 0
+      },
+      "indexCold": {
+        "enumerations": 1,
+        "operationReads": 0,
+        "sourceRoomReads": 0
+      },
+      "indexWarm": {
+        "enumerations": 0,
+        "operationReads": 0,
+        "sourceRoomReads": 0
+      }
+    },
+    {
+      "rooms": 10,
+      "consumers": 3,
+      "ordersPerRoom": 5,
+      "finalized": 0,
+      "fuelCold": {
+        "enumerations": 30,
+        "operationReads": 1500,
+        "sourceRoomReads": 1500
+      },
+      "fuelWarm": {
+        "enumerations": 30,
+        "operationReads": 1500,
+        "sourceRoomReads": 1500
+      },
+      "fuelNextTick": {
+        "enumerations": 30,
+        "operationReads": 1500,
+        "sourceRoomReads": 1500
+      },
+      "indexCold": {
+        "enumerations": 1,
+        "operationReads": 1550,
+        "sourceRoomReads": 1500
+      },
+      "indexWarm": {
+        "enumerations": 0,
+        "operationReads": 1500,
+        "sourceRoomReads": 1500
+      }
+    },
+    {
+      "rooms": 10,
+      "consumers": 3,
+      "ordersPerRoom": 20,
+      "finalized": 0,
+      "fuelCold": {
+        "enumerations": 30,
+        "operationReads": 6000,
+        "sourceRoomReads": 6000
+      },
+      "fuelWarm": {
+        "enumerations": 30,
+        "operationReads": 6000,
+        "sourceRoomReads": 6000
+      },
+      "fuelNextTick": {
+        "enumerations": 30,
+        "operationReads": 6000,
+        "sourceRoomReads": 6000
+      },
+      "indexCold": {
+        "enumerations": 1,
+        "operationReads": 6200,
+        "sourceRoomReads": 6000
+      },
+      "indexWarm": {
+        "enumerations": 0,
+        "operationReads": 6000,
+        "sourceRoomReads": 6000
+      }
+    },
+    {
+      "rooms": 10,
+      "consumers": 7,
+      "ordersPerRoom": 0,
+      "finalized": 0,
+      "fuelCold": {
+        "enumerations": 70,
+        "operationReads": 0,
+        "sourceRoomReads": 0
+      },
+      "fuelWarm": {
+        "enumerations": 70,
+        "operationReads": 0,
+        "sourceRoomReads": 0
+      },
+      "fuelNextTick": {
+        "enumerations": 70,
+        "operationReads": 0,
+        "sourceRoomReads": 0
+      },
+      "indexCold": {
+        "enumerations": 1,
+        "operationReads": 0,
+        "sourceRoomReads": 0
+      },
+      "indexWarm": {
+        "enumerations": 0,
+        "operationReads": 0,
+        "sourceRoomReads": 0
+      }
+    },
+    {
+      "rooms": 10,
+      "consumers": 7,
+      "ordersPerRoom": 5,
+      "finalized": 0,
+      "fuelCold": {
+        "enumerations": 70,
+        "operationReads": 3500,
+        "sourceRoomReads": 3500
+      },
+      "fuelWarm": {
+        "enumerations": 70,
+        "operationReads": 3500,
+        "sourceRoomReads": 3500
+      },
+      "fuelNextTick": {
+        "enumerations": 70,
+        "operationReads": 3500,
+        "sourceRoomReads": 3500
+      },
+      "indexCold": {
+        "enumerations": 1,
+        "operationReads": 3550,
+        "sourceRoomReads": 3500
+      },
+      "indexWarm": {
+        "enumerations": 0,
+        "operationReads": 3500,
+        "sourceRoomReads": 3500
+      }
+    },
+    {
+      "rooms": 10,
+      "consumers": 7,
+      "ordersPerRoom": 20,
+      "finalized": 0,
+      "fuelCold": {
+        "enumerations": 70,
+        "operationReads": 14000,
+        "sourceRoomReads": 14000
+      },
+      "fuelWarm": {
+        "enumerations": 70,
+        "operationReads": 14000,
+        "sourceRoomReads": 14000
+      },
+      "fuelNextTick": {
+        "enumerations": 70,
+        "operationReads": 14000,
+        "sourceRoomReads": 14000
+      },
+      "indexCold": {
+        "enumerations": 1,
+        "operationReads": 14200,
+        "sourceRoomReads": 14000
+      },
+      "indexWarm": {
+        "enumerations": 0,
+        "operationReads": 14000,
+        "sourceRoomReads": 14000
+      }
+    },
+    {
+      "rooms": 10,
+      "consumers": 10,
+      "ordersPerRoom": 0,
+      "finalized": 0,
+      "fuelCold": {
+        "enumerations": 100,
+        "operationReads": 0,
+        "sourceRoomReads": 0
+      },
+      "fuelWarm": {
+        "enumerations": 100,
+        "operationReads": 0,
+        "sourceRoomReads": 0
+      },
+      "fuelNextTick": {
+        "enumerations": 100,
+        "operationReads": 0,
+        "sourceRoomReads": 0
+      },
+      "indexCold": {
+        "enumerations": 1,
+        "operationReads": 0,
+        "sourceRoomReads": 0
+      },
+      "indexWarm": {
+        "enumerations": 0,
+        "operationReads": 0,
+        "sourceRoomReads": 0
+      }
+    },
+    {
+      "rooms": 10,
+      "consumers": 10,
+      "ordersPerRoom": 5,
+      "finalized": 0,
+      "fuelCold": {
+        "enumerations": 100,
+        "operationReads": 5000,
+        "sourceRoomReads": 5000
+      },
+      "fuelWarm": {
+        "enumerations": 100,
+        "operationReads": 5000,
+        "sourceRoomReads": 5000
+      },
+      "fuelNextTick": {
+        "enumerations": 100,
+        "operationReads": 5000,
+        "sourceRoomReads": 5000
+      },
+      "indexCold": {
+        "enumerations": 1,
+        "operationReads": 5050,
+        "sourceRoomReads": 5000
+      },
+      "indexWarm": {
+        "enumerations": 0,
+        "operationReads": 5000,
+        "sourceRoomReads": 5000
+      }
+    },
+    {
+      "rooms": 10,
+      "consumers": 10,
+      "ordersPerRoom": 20,
+      "finalized": 0,
+      "fuelCold": {
+        "enumerations": 100,
+        "operationReads": 20000,
+        "sourceRoomReads": 20000
+      },
+      "fuelWarm": {
+        "enumerations": 100,
+        "operationReads": 20000,
+        "sourceRoomReads": 20000
+      },
+      "fuelNextTick": {
+        "enumerations": 100,
+        "operationReads": 20000,
+        "sourceRoomReads": 20000
+      },
+      "indexCold": {
+        "enumerations": 1,
+        "operationReads": 20200,
+        "sourceRoomReads": 20000
+      },
+      "indexWarm": {
+        "enumerations": 0,
+        "operationReads": 20000,
+        "sourceRoomReads": 20000
+      }
+    }
+  ],
+  "retained": [
+    {
+      "rooms": 10,
+      "consumers": 10,
+      "ordersPerRoom": 20,
+      "finalized": 0,
+      "fuelCold": {
+        "enumerations": 100,
+        "operationReads": 20000,
+        "sourceRoomReads": 20000
+      },
+      "fuelWarm": {
+        "enumerations": 100,
+        "operationReads": 20000,
+        "sourceRoomReads": 20000
+      },
+      "fuelNextTick": {
+        "enumerations": 100,
+        "operationReads": 20000,
+        "sourceRoomReads": 20000
+      },
+      "indexCold": {
+        "enumerations": 1,
+        "operationReads": 20200,
+        "sourceRoomReads": 20000
+      },
+      "indexWarm": {
+        "enumerations": 0,
+        "operationReads": 20000,
+        "sourceRoomReads": 20000
+      }
+    },
+    {
+      "rooms": 10,
+      "consumers": 10,
+      "ordersPerRoom": 20,
+      "finalized": 500,
+      "fuelCold": {
+        "enumerations": 100,
+        "operationReads": 70000,
+        "sourceRoomReads": 20000
+      },
+      "fuelWarm": {
+        "enumerations": 100,
+        "operationReads": 70000,
+        "sourceRoomReads": 20000
+      },
+      "fuelNextTick": {
+        "enumerations": 100,
+        "operationReads": 70000,
+        "sourceRoomReads": 20000
+      },
+      "indexCold": {
+        "enumerations": 1,
+        "operationReads": 20700,
+        "sourceRoomReads": 20000
+      },
+      "indexWarm": {
+        "enumerations": 0,
+        "operationReads": 20000,
+        "sourceRoomReads": 20000
+      }
+    },
+    {
+      "rooms": 10,
+      "consumers": 10,
+      "ordersPerRoom": 20,
+      "finalized": 5000,
+      "fuelCold": {
+        "enumerations": 100,
+        "operationReads": 520000,
+        "sourceRoomReads": 20000
+      },
+      "fuelWarm": {
+        "enumerations": 100,
+        "operationReads": 520000,
+        "sourceRoomReads": 20000
+      },
+      "fuelNextTick": {
+        "enumerations": 100,
+        "operationReads": 520000,
+        "sourceRoomReads": 20000
+      },
+      "indexCold": {
+        "enumerations": 1,
+        "operationReads": 25200,
+        "sourceRoomReads": 20000
+      },
+      "indexWarm": {
+        "enumerations": 0,
+        "operationReads": 20000,
+        "sourceRoomReads": 20000
+      }
+    }
+  ],
+  "duplicateHarvest": {
+    "successfulCallsInOneStateInvocation": 2,
+    "engineIntentsNotSimulated": true
+  },
+  "duplicateBuilderWork": {
+    "buildCalls": 2,
+    "creditBuildCalls": 2,
+    "sameTarget": "site",
+    "engineIntentsNotSimulated": true
+  },
+  "deferredHistorySerialization": {
+    "rows": 10000,
+    "attempts": [
+      {
+        "saved": false,
+        "serializations": 10103,
+        "reason": "segment-write-budget"
+      },
+      {
+        "saved": false,
+        "serializations": 10103,
+        "reason": "segment-write-budget"
+      },
+      {
+        "saved": false,
+        "serializations": 10103,
+        "reason": "segment-write-budget"
+      }
+    ],
+    "syntheticRepeatedSegmentContention": true
+  },
+  "startupAverage": {
+    "hypotheticalInputNotLiveReconstruction": true,
+    "results": [
+      {
+        "ticks": 1,
+        "validTicks": 1,
+        "pairedTicks": 1,
+        "missingEndTicks": 0,
+        "skippedTicks": 0,
+        "missingTicks": 0,
+        "fromTick": 1,
+        "toTick": 1,
+        "used": 197,
+        "headroom": -177,
+        "pairedUsed": 197,
+        "scriptUsed": 195,
+        "residual": 2
+      },
+      {
+        "ticks": 7,
+        "validTicks": 7,
+        "pairedTicks": 7,
+        "missingEndTicks": 0,
+        "skippedTicks": 0,
+        "missingTicks": 0,
+        "fromTick": 1,
+        "toTick": 7,
+        "used": 42.714,
+        "headroom": -22.714,
+        "pairedUsed": 42.714,
+        "scriptUsed": 40.714,
+        "residual": 2
+      },
+      {
+        "ticks": 14,
+        "validTicks": 14,
+        "pairedTicks": 14,
+        "missingEndTicks": 0,
+        "skippedTicks": 0,
+        "missingTicks": 0,
+        "fromTick": 1,
+        "toTick": 14,
+        "used": 29.857,
+        "headroom": -9.857,
+        "pairedUsed": 29.857,
+        "scriptUsed": 27.857,
+        "residual": 2
+      },
+      {
+        "ticks": 26,
+        "validTicks": 26,
+        "pairedTicks": 26,
+        "missingEndTicks": 0,
+        "skippedTicks": 0,
+        "missingTicks": 0,
+        "fromTick": 1,
+        "toTick": 26,
+        "used": 23.923,
+        "headroom": -3.923,
+        "pairedUsed": 23.923,
+        "scriptUsed": 21.923,
+        "residual": 2
+      }
+    ]
+  }
+}

@@ -1,5 +1,30 @@
 # Transferências recentes no dashboard (ARK-130)
 
+## Follow-up15/10: mercado, T3 e cobertura externa
+
+Compras/vendas devem mostrar soma de eventos confirmados dentro da janela
+configurada (padrão60ticks), com zero ao expirar. Nunca somar snapshots nem
+tratar Gauge como contador. Compartilhar cache de eventos/expiração entre
+mercado e rede; caminho leve atualiza ambos, incluindo labels conhecidos
+após reset, sem novo histórico por transação.
+
+T3 é estoque físico por sala em storage+terminal, como os minerais base;
+publicar os dez produtos de REACTIONS catalisados por RESOURCE_CATALYST,
+com snapshot esparso. Exporter zera séries desaparecidas (mercado/minerais/T3)
+antes de remover; novas salas/recursos, estoque consumido e sala perdida não
+podem conservar saldo antigo. Painéis deixam explícita janela versus estoque.
+
+Publicar endpoints Game.time da janela e tick de coleta; exporter mede delta
+entre coletas válidas, sinaliza gap maior que janela e repetição. Um poll
+repetido substitui a Gauge sem adicionar eventos. A cadência permanece
+configurável e NÃO garante ausência de perda: não existe duração
+fixa do tick nem histórico durável de publicações. Gaps devem aparecer no
+dashboard; verificar live a configuração efetiva antes de afirmar cobertura.
+
+Review: estoque T3 segue escopo do painel original, sem contar ordens/reservas.
+Labels zerados não são eventos; cobertura mede ticks efetivos, não relógio.
+Implementação externa do exporter/dashboard é separada do grunt.
+
 terminalTransferStats já retorna somente eventos na janela recente do bot
 (padrão60ticks), mas o exporter só atualiza labels presentes: ao expirar uma
 rota, o Gauge conserva indefinidamente seu último valor. A legenda também
