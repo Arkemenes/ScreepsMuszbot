@@ -1,7 +1,54 @@
 # Architecture — estado atual
 
+## Storage inicial e transição RCL 4 (0158 / ARK-161)
+
+`utils/bootstrapStorage.prepareRoom` roda sob `guard` antes de intel/economia.
+Até RCL 3, o architect deriva um site de container no tile planejado do terminal,
+sem alterar o plano persistido. O container construído vira `room.storage` no
+objeto vivo da sala; reservas, demanda, estoque e logística usam sua capacidade
+real. `Memory.rooms[name].bootstrapStorageId` guarda somente o ID e permite
+retomar após reset mesmo com o segmento do plano indisponível.
+
+Em RCL 4 o storage definitivo é construído enquanto o container continua em
+uso. Ao concluir, a referência canônica passa ao storage físico. Haulers usam
+`memory.bootstrapDrain` (`fromId`, `toId`, `resourceType`, `loaded`) para mover
+energia e minerais exclusivamente ao storage, com ledger de retiradas no tick.
+Urgência adia novos jobs, salvo energia para iniciar um storage vazio. Destino
+cheio preserva carga; entregas antigas ao container são redirecionadas. Só há
+`destroy` após observar container vazio e nenhuma carga de migração em trânsito;
+o ID permanece até confirmar a remoção no tick seguinte. Erros são retentados.
+O sinal de construção inclui RCL; sites temporários incompletos são cancelados
+em RCL 4+. Validação offline com intents diferidos; publicação ainda pendente.
+
+> **Reparo ARK-145 local:** cpuReport passa a isolar ticks posteriores ao comando; sem novo deploy pelo agente. Usuário publicou o pacote119módulos aproximadamente18:17; ganho L2 não aprovado. [Medição corrigida e validação](../docs/cpu-report-isolado-2026-10-16.md).
+
+> **Execução incremental — 16/10/2026:** [plano vigente](../docs/plano-execucao-incremental-2026-10-16.md); 0156-A concluído offline; etapa 2/T1–T2 da 0154 publicada pelo usuário por volta de17:06. 0153-A1 físico e0156-L2-book preparados localmente, sem novo deploy; [pacote](../docs/pacote-local-listagens-2026-10-16.md). Histórico persistente sofisticado adiado.
+
 Uma foto de como o bot está montado hoje. Atualize sempre que uma feature mudar
 a forma do sistema.
+
+
+## Limites atuais e propostas pendentes — consolidação 2026-10-16
+
+Este documento descreve runtime existente. 0148–0150 e0153–0157 têm desenho consolidado; 0156-A offline, etapa 2/T1–T2 da 0154, 0153-A1 físico e0156-L2-book estão implementados. Demais capacidades permanecem futuras.
+[Contratos/DAG/aceite vigentes](../docs/planejamento-integrado-2026-10-16.md); ARK-141 conclui somente documentação/revisão independente; R1–R6 fechados no desenho. Implementação local incremental autorizada; usuário publicou a etapa2. Novos pacotes0153-A1/L2-book ainda não publicados/ativados.
+
+- Existem cpuReport, probes, shadowBudget, energyLedger e ordersAudit. O oráculo já observa mundos pós-execução, erros e sequências em fixtures declaradas, sem provar observáveis omitidos.
+- EnergyLedger agora resolve slots WORK, prioridades/cancelamento/energia e teto RCL8 por controller/tick; efeito boostado é separado. Continua estimado: energySpentQuality explicita parcialidade/unknown/gaps/falhas, sem confirmação geral. Não existe persistência sofisticada de histórico.
+- Labs assumem lotes de 5 e suspendem política com efeitos ativos; não há operador integrado nem suporte completo a OPERATE_LAB.
+- TransientStock mantém energia de lab em zero por padrão; reserva automática de boost precisará integrar composto, energia, drenagem e claims.
+- PowerSpawn atual processa power disponível; optionalConsumer não implementa por si só prova de excedente, target GPL ou gate econômico.
+- EnergyReport/labReport novos, framework de experimento e boost automático continuam propostas. listingPolicy/listingLifecycle existem para vendas físicas automáticas, off por padrão; pixelPlan é puro e não tem executor conectado.
+- Target GPL3 configurável, readiness por entrega/owner, métricas separadas e coverage48h por regime são desenho futuro.
+- Contratos futuros: labBoostReservations canônica (0149); modelo/runtime/executor com mesma quantidade/quota (0150); eventos0154-A → cálculo/contexto0157 → apresentação0154-B; observação0155 preservada por caches0156. Nenhum desses módulos novos está disponível ainda.
+
+As descrições históricas abaixo de fórmula de energia não devem ser interpretadas como confirmação exata de execução do motor.
+
+## Listagens: política física e livro compartilhado (0153-A1 / 0156-L2-book)
+
+terminalOps continua autoridade de operações, claims, intents, taxas e recuperação. listingPolicy resolve competitividade e custo incremental; listingLifecycle conserva idade UTC/owner/geração/pendência na operação. listingPolicy.enabled=false preserva o comportamento legado até ativação; operações já geridas continuam conciliando no off. Criação física exige lote entregue integralmente; extensão revalida ask, piso e orçamento. Deadline padrão sete dias reais, manual/pixel protegidos, cancelamento só termina após confirmação. Edição externa ou desaparecimento inexplicado fica em quarentena, sem venda/refund fictícios. Descida off, com piso por recurso e cadência quando habilitada. ordersAudit separa idade unknown, taxas históricas/estimadas e refund potencial de expiração.
+
+terminalOps.reuseOrderBook=true compartilha somente o livro no heap por tick/lado/recurso/provedor/market. Frete, saldos, claims, limites e manutenção continuam vivos. Erro não cria cache válido; mudança de provedor/tick/reset invalida. O ramo off conserva consultas diretas. Oráculo3/5/10salas: mesmos observáveis declarados; consultas41/67/132→13/13/13. CPU live ainda não medida. [Escopo, evidências e validação](../docs/pacote-local-listagens-2026-10-16.md).
 
 ## Coordenação econômica e CPU (0138 / ARK-128)
 
@@ -689,7 +736,7 @@ Medição e validação (tudo no heap, nada por tick em Memory):
 
 - `utils/cpuAccounting.js` / `cpuMeter.js`: `bootTick`, tick frio (`coldUsed`), `warmUsed` (média sem o tick frio), `maxUsed`,
   `maxTick`, `includesReset`. `cpuReport(n)` (global; arma sozinho 150 intervalos após cada
-  global reset, `stats.autoReportIntervals`) imprime `warm`, resíduo, spans e a linha `[probe]`.
+  global reset, `stats.autoReportIntervals`) imprime `warm`, resíduo, spans e a linha `[probe]`. ReparoARK-145: solicitação no heap em cpuReport.js, n origens novas a partir do próximo tick, fechamento após finalização da última. cpuAccounting.range percorre o ring uma vez ao fechar; rolling stats não é resetado. Cobertura/flags incompatíveis dão incomplete. Tabelas de módulos/roles/spans têm sua própria janela recente explicitada; não representam atribuição exata de n ticks.
 - (O `abTest` foi **removido** em 2026-10-15: A/B intercalado era lento e frágil. A validação é direta em produção, pelo `cpuReport`
   automático e pelos contadores de span, com cada mudança atrás de flag desligável sem deploy.)
 - `utils/probe.js`: contador de "mesma entrada que a chamada anterior" (`terminalOps.listResidual`, `labPolicy.assignments`).
@@ -707,7 +754,7 @@ Buscas repetidas (0152, defaults ligados): `hauler` ocioso busca ao ficar ocioso
 válido e nada de maior prioridade (spawn/extension com fome, torre crítica, storage abaixo da reserva) apareceu. Contadores nos spans:
 `hauler.idleSkip`, `builder.idleSkip`, `hauler.deliverKept`.
 
-Preço e energia: `energyLedger` segue a fórmula do motor (energia base; boost soma progresso/hits, nunca energia; repair = hits x 0,01).
+Preço e energia: energyLedger resolve slots WORK aceitos e limites compartilhados, com gasto/efeito separados e qualidade explícita; continua estimado, sem confirmação geral do servidor.
 `orderBook.byResource` agrupa o livro por recurso uma vez por tick (o scan do swing deixou de filtrar o livro inteiro por cotação);
 `craftLedger.warehouseMany` calcula o que as estruturas da cadeia guardam uma vez por cadeia (usado por `resourcePolicy.commitments`).
 
@@ -748,7 +795,8 @@ Preço e energia: `energyLedger` segue a fórmula do motor (energia base; boost 
 | `damagedStructures.js` | Lista de estruturas danificadas por sala (scan a cada `repair.scanTicks`=5, todo tick sob ataque; ordenada 1x/tick), compartilhada por tower e builder. |
 | `rampartRepair.js` | Fonte única de classificação e prioridade de reparo usada por tower e builder. `tier()` usa 0,1%/1% para rampart/wall e 10%/50% para estruturas normais; `priority()` ordena tier → tipo → ratio. `builderMayRepair()` e `towerMayRepair()` mantêm crítico sem gate de storage, exigem storage `>10%` para rampart/wall saudáveis e `>=70%` para hardening. A tower ainda exige 50%/70% de energia própria conforme o tier. |
 | `resourceTiers.js` | Políticas econômicas e gates de storage. `reserveFloor()`/`aboveReserve()` mantêm a reserva geral de 1%; `isStorageAbundant()` continua usando `logistics.storageSatisfactoryRatio` de 50% para economia/link; `isStorageAbove()` e `isStorageAtLeast()` fornecem os gates específicos de reparo defensivo de 10% e 70% sem alterar o balanceamento intersalas. |
-| `energyLedger.js` | Contabilidade de "pra onde a energia foi" por sala (ROADMAP 0081 — a constituição já cita "contabilidade de energia" como responsabilidade de `utils/*`, este módulo formaliza isso). 100% heap. `record(roomName, category, amount)` (ignora `amount<=0`), `recordRepair(roomName, structureType, amount)` (mapeia `STRUCTURE_RAMPART`→`repairRampart`, `STRUCTURE_WALL`→`repairWall`, resto→`repairNormal`), `snapshot(roomName)` (as 10 categorias sempre presentes, default 0 — sem esparsidade, pra série temporal do Grafana não ter buraco). `snapshot()` devolve a **soma de uma janela deslizante** de `energyLedger.windowTicks` ticks (default 60 — "últimos 60 segundos", aproximação de 1 tick ≈ 1 segundo, sem sinal de relógio real disponível; ROADMAP 0081 follow-up, usuário pediu — sem isso uma leitura do Grafana a cada poucos ticks perdia gasto inteiro entre leituras), não só o tick corrente: cada tick fechado é arquivado num histórico por sala (`history[roomName]`), podado a cada `ensureTick()`/`snapshot()` pra nunca crescer sem limite; o tick ainda em andamento sempre entra na soma. **Medição por estimativa, não diff** (ROADMAP 0081 bug real, mesmo dia — usuário reportou em produção: "torres reparando, creeps construindo, spawns spawnando, mas os valores estão sempre retornando 0"; a primeira versão comparava `store[RESOURCE_ENERGY]` antes/depois do intent, o que só "funciona" nos mocks do smoke test — no motor real todo intent de creep é só enfileirado durante o script e aplicado pelo servidor depois que **todos** os jogadores terminam a tick, então o `store` lido logo após chamar `build()`/`repair()`/`upgradeController()` ainda reflete o valor de antes, diff sempre 0): `creditBuild(creep, site)`/`creditRepair(creep, target)`/`creditUpgrade(creep, controller)` estimam o gasto via WORK parts vivas (`part.hits>0`) × `BUILD_POWER`/`REPAIR_POWER`/`UPGRADE_CONTROLLER_POWER`, boost lido ao vivo de `BOOSTS[WORK][part.boost]` (nunca hardcoded — mesmo princípio de `utils/combat.js`'s `incomingDps`), limitado pela energia que o creep tinha antes de agir e pelo trabalho restante do alvo (`progressTotal-progress`/`hitsMax-hits`); só creditam quando o intent devolveu `OK`. `creditTower(tower, category)` usa `TOWER_ENERGY_COST` fixo (custo determinístico por ação, não depende de diff). `renewCost(body)` usa a fórmula nativa de `renewCreep` (`bodyCost/2.5/tamanho do corpo`). Instrumentado em `prototypes/creep.js`'s `runBuild` (`creditBuild`/`creditRepair`) e `runUpgrade` (`creditUpgrade`), nos `creep.build`/`creep.repair` diretos de `roles/builder.js`'s `opportunisticWork()` e de `roles/pioneer.js` (fora da state machine), em `structures/tower.js`'s `attack`/`rangedMassAttack` (`towerAttack`)/`heal` (`towerHeal`)/`repair` (`towerRepair`) via `creditTower`, e em `rooms/spawning.js` (`spawn` via `bodyCost(body)` no `spawnCreep` real — não o `dryRun` — porque o custo sai de spawn+extensions juntos, não só do store do spawn; `renew` via `renewCost(candidate.body)`). `utils/stats.js` grava o snapshot em `Memory.stats.rooms[name].energySpent`. Fora de escopo (decisão do usuário): waste/decay (drop/tombstone expirando, `link.transfer` loss) e o build/repair de container do `roles/remoteMiner.js` (sala remota, auto-financiado pelo próprio harvest local, nunca aparece em `Memory.stats.rooms`). |
+| `energyLedger.js` | Integração da contabilidade de energia (0081/0154-A). invoke observa os call sites WORK existentes sem alterar status/erro nativo; hooks auxiliares acompanham fluxos/cancelamentos/bloqueios. finalize roda sob guard após executores e antes de stats/endTick. record/recordRepair mantêm categorias de spawn/renew/tower; creditBuild/Repair/Upgrade permanecem como API compatível de observação parcial. snapshot devolve as mesmas dez categorias, soma móvel de energyLedger.windowTicks (default60 ticks de jogo). snapshotInfo e events separam estimativa/efeito/qualidade; detalhes por intent são gerados só quando pedidos. Heap local, sem novo scan; stats publica energySpent e energySpentQuality. observeWork=false suspende coleta WORK sem alterar ações. Escopo histórico preservado: waste/decay e build/repair autofinanciado do remoteMiner continuam fora da contabilização. |
+| `energyWork.js` | Modelo do tick por entidade/método: último intent aceito, cancelamento, prioridades e energia compartilhada; orçamento RCL8 por controller/tick; efeito boostado separado. Deriva WORK/bonificações numa passagem por corpo/entidade/tick; reutiliza resultado até mudança dos slots. Drop local conhecido; fluxos/alvos disputados e fontes incompletas geram unknown/limites. Não executa ações, consulta Game/Memory nem persiste diário. Regras do motor público pinadas e limites descritos na entrega0154-A; execução externa permanece estimada. |
 
 #### Routing cost model
 
@@ -1199,3 +1247,13 @@ marketHistoryStore.save confere a união de segmentos presentes e páginas
 da geração antes de escrever. Em segment-write-budget adia sem payload
 parcial e prioriza writeSegments na ativação; market.scan retenta com
 historyDirty antes da cadência. Sucesso/reset limpam prioridade temporária.
+
+### Boosts: fundação parcial 0149-A (2026-10-16)
+
+`utils/boostParts` calcula seleção/custos por prefixo, sem Game/Memory. `rooms/refining` expõe `boostPreview` sob demanda; helper manual aceita contagem positiva. `utils/labReservations` normaliza somente leituras do campo canônico existente; sem writer ou migração. Refining, runtime/modelo, executor, transientStock, hauler/nonEnergyLogistics e terminalClaims usam esse adaptador. Jobs antigos revalidam custódia. Cleanup elegível passa por transientStock e withdrawals compartilhados; pending e holds externos impedem retirada. Sem novo hook por tick, varredura de creeps ou histórico. Política econômica, bundle de claims fora do lab, lifecycle, abastecimento e aplicação automática permanecem futuros. Escopo e validação: [0149-A](../docs/entrega-0149-a-2026-10-16.md).
+
+### Boosts: retorno e preparação0149-B (2026-10-16)
+
+`boostPolicy`/`operationalReadiness` são cálculos puros sob demanda, sem coletor implícito. `boostConstants` lê constantes nativas na fronteira da decisão. `boostLogistics` mantém preparação física no registro canônico labBoostReservations (funding por sourceId, shipments por creepId, generation/session e deadlines). `terminalClaims` e `resourcePolicy` descontam as localizações corretas, inclusive com stockPolicy off; hauler executa boostFeed com confirmação deferida e dedup via census. Coleta normal de energia preserva prioridade e pode revogar preparação. Main guarda manutenção por sala antes de craft/creeps somente quando existe o campo de reserva; recuperação roda mesmo off/reset. Cleanup não libera lab incompatível por timeout.
+
+Console: boostEvaluate/boostPrepare/boostCancel, além de boostPreview. Preparação opt-in, uma sala/builder e estoque próprio; nenhum intent automático de boost/compra, nenhum desvio de spawn/role. `boostConfirmation` é núcleo puro testado, ainda fora do bundle de runtime e sem executor consumidor. Readiness de combustível/canais futuros e contexto observado seguem incompletos; não confundir quote com admissão. Detalhes: [pacote0149-B](../docs/pacote-boost-2026-10-16.md).

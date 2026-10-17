@@ -1,47 +1,35 @@
-# 0153 — Revisão da política de listagens — Plan
+# 0153 — Política de listagens — Plan
 
-## Approach
+> **Decisão posterior — 16/10/2026:** implementação local autorizada passo a passo no [plano de execução incremental](../../../docs/plano-execucao-incremental-2026-10-16.md). Histórico persistente sofisticado adiado até necessidade demonstrada; cobertura inicial no heap, com lacunas explícitas. Gates operacionais continuam válidos.
 
-Mudanças pequenas e separáveis no ponto onde a listagem de venda é decidida (`swingTrade.tick`, ramo `eligible-listing`, e
-`terminalOps.listResidual`), todas atrás de flags em `Memory.settings`. Ordem de entrega: (1) listar só se competitiva,
-(2) limpar ordens esgotadas, (3) prazo em tempo real, (4) descida de preço grátis, (5) pixel. A auditoria (`ordersAudit`) já está
-publicada e mede o antes/depois. Nada muda em vendas imediatas por `deal` em bids existentes.
+- **Status:** in-progress — 0153-A1 físico implementado localmente; pixel automático e aceite live pendentes.
+- **Issue:** ARK-138; consolidação ARK-141.
+- **Revisão documental:** 2026-10-16.
+- **Autorização:** implementação local incremental; publicação/ativação e gastos seguem os gates do plano de execução.
+- **Contrato:** [spec.md](spec.md). **DAG/aceite:** [planejamento integrado](../../../docs/planejamento-integrado-2026-10-16.md).
 
-## Modules
+## Entrega local 0153-A1 — 16/10/2026
 
-### New
+[Pacote e validação](../../../docs/pacote-local-listagens-2026-10-16.md): política física e recuperação implementadas; flag listingPolicy.enabled off por padrão. Cálculo puro de pixel testado, sem executor conectado. Não concluir a feature inteira. Metadados na operação canônica de terminalOps; desaparecimento/edição externa põem a geração em quarentena, sem refund/venda inventados.
 
-| Path | Responsibility |
-|------|----------------|
-| `src/utils/listingPolicy.js` | decisões puras: `competitive(order, book, floor, step)`, `descentStep(listing, book, floor, cfg)`, `pixelPlan(stock, bids, order, cfg)` (bids/extend/hold); sem efeitos (quem chama executa) |
-| `src/utils/tickRate.js` | estima segundos por tick no heap (`Date.now`, média móvel, fallback 4,1 s); `daysToTicks(days)` |
-| `test/listingPolicyCases.js` | oráculos de `competitive`, `descentStep`, `pixelPlan`, taxa de aumento x redução, prazo em tempo real |
+## Approach / Modules
 
-### Changed
+listingPolicy contém competitive/descentStep/pixelPlan puros. Quotes incluem preço/volume/validade e procedência; custo desconhecido não vira zero. swingTrade e terminalOps.listResidual verificam antes de staging e de create/extend/reprice. Livro reusado/filtrado; não presumir que byResource evite fetch completo.
+terminalOps permanece dono de intents/taxas/claims/recibos e timestamps. ordersAudit observa os mesmos eventos, sem executar política paralela.
 
-| Path | Change |
-|------|--------|
-| `src/utils/swingTrade.js` | ramo de listagem usa `listingPolicy.competitive`; senão `observe(... "listing-not-competitive")` e mantém o estoque livre; `expire()` usa o prazo em tempo real |
-| `src/utils/terminalOps.js` (`listResidual`) | mesma checagem antes de `createOrder`; descida de preço via `changeOrderPrice` (já grátis para baixo); pixel: `deal` em bids, `extendOrder` na ordem existente, nunca segunda ordem |
-| `src/utils/ordersAudit.js` | `cancelFinished()` por flag; contadores `descended`/`cancelledFinished` |
-| `src/utils/config.js` | `swing.listOnlyCompetitive:true`, `swing.listingLifetimeDays:7`, `swing.descent:{enabled:false, afterTicks, stepRatio:0.02, floor:{}}`, `pixel:{minBid, minPrice, listMargin:0.03}`, `market:{cancelFinished:true, listingFeeDailyBudget:null}` |
+## Data flow e falhas
 
-## Data shapes
+proposed → staging → submitPending → listed → amendPending/cancelPending → settled.
+Persistir owner, geração, IDs e idade original. Extensão não renova createdAt; legado desconhecido inicia observação conservadora. Revalidar livro, piso, quantidade livre e crédito antes da taxa; reserva de staging sem quote não autoriza efeito.
+Cancelamento gerido aos sete dias só alcança ordens automáticas elegíveis. Limpeza usa remainingAmount=0 confirmado, não inactive/amount=0. Manual/pixel/IDs pendentes permanecem protegidos.
+Off bloqueia decisão nova e conserva reconciliação. Reset compara pending com ordens/transações/saldos antes de reenviar. Edição manual revoga geração automática. Ausência inexplicada fica unknown; cancelamento não restaura ID/taxa.
 
-Heap: tick-rate médio. Memory: nenhuma nova (`swing.noRelist` já existe). Config em `Memory.settings`. Preços do pixel vêm do
-`market.snapshot()` e dos bids reais (`orderBook.byResource("pixel")` ou consulta de ordens intershard).
+## Validation / Rollout
 
-## How it satisfies the constitution
-
-- **CPU:** a checagem usa `orderBook.byResource` (índice por tick já existente); sem varredura nova. **Memory:** nada novo.
-- **Fail-soft:** flag desligada = comportamento antigo. **Offline test:** `listingPolicyCases.js` reaproveita o fixture de `stockPolicyCases`.
+Fixtures diretas por custo incremental create/extend/alta/baixa; ask próprio excluído, profundidade/livro ausentes, staging não competitivo, piso/procedência desconhecidos, timestamp/legado/reset, extensão com mesma idade e cleanup protegido.
+Mercado: distinguir cancelamento sem refund de expiração natural com restituição potencial; simular off entre cada submissão e confirmação. Pixel: bids primeiro, saldo livre distinto do listado, extensão única competitiva com margem3%, senão estoque.
+0153-A é independente do oráculo/ledger; ativação futura é por flag autorizada. Medir fees novas efetivas e comportamento de listagens; não alegar recuperar taxa histórica ou receita garantida por ask competitivo.
 
 ## Risks & mitigations
 
-| Risk | Mitigation |
-|------|------------|
-| Estoque fica parado sem listar | reavaliação a cada scan (120 ticks); entra quando o preço fica competitivo; `ordersAudit` mostra o estoque parado |
-| Descida vende abaixo da política | **desligada por padrão**; só com piso por recurso definido pelo dono; nunca abaixo do piso |
-| Pixel: `extendOrder` paga taxa em quantidade grande | só se `0,95 x P >= bid x (1 + listMargin)`; senão `deal` em bid ou estoque; nunca segunda ordem |
-| Prazo em tempo real muda com o tick-rate | média móvel com piso/teto; fallback 4,1 s/tick |
-| Cancelar a listagem de pixel por engano | teste fixa que a política nunca cancela listagem ativa de pixel |
+Desativação perder pendência: manter reconciliador vivo. Cronômetro indevido: timestamps reais persistidos. Cancelar manual: ownership/geração. Dupla exposição pixel: saldo livre e pending descontados. Prazo sete dias renuncia refund futuro potencial, explicitado no audit sem alterar a decisão do dono.

@@ -1,51 +1,32 @@
-# 0150 — Power — Plan
+# 0150 — Power, GPL e operador — Plan
 
-## Approach
+> **Decisão posterior — 16/10/2026:** implementação local autorizada passo a passo no [plano de execução incremental](../../../docs/plano-execucao-incremental-2026-10-16.md). Histórico persistente sofisticado adiado até necessidade demonstrada; cobertura inicial no heap, com lacunas explícitas. Gates operacionais continuam válidos.
 
-Duas peças separáveis: **política** (`powerPolicy`: decisão dinâmica de processar/vender/pausar, pura e O(1)) e **execução**
-(logística do power + power creep). A fase 0 (P1) reaproveita o que existe (`powerSpawn.run`, `powerFeedJob`,
-`terminalOps.transfer`, `terminalOps.cancel`) e só acrescenta a política e a medição. O power creep é uma
-fase posterior, atrás de `power.creep.enabled = false`, e só se o gate econômico (payback com `labReport`) fechar.
+- **Status:** planned — execução local autorizada em etapas; não implementada.
+- **Issue:** ARK-137; consolidação ARK-141.
+- **Revisão documental:** 2026-10-16.
+- **Autorização:** implementação local incremental; publicação/ativação e gastos seguem os gates do plano de execução.
+- **Contrato:** [spec.md](spec.md). **DAG/aceite:** [planejamento integrado](../../../docs/planejamento-integrado-2026-10-16.md).
 
-## Modules
+## Approach / Modules
 
-### New
+powerPolicy.decide é pura: GPL/constantes, target, custo total/restante, payback marginal, preferência e autorização expirada. powerLogistics usa terminalOps e admission/owners persistentes. powerSpawn.run e feedJob consultam autorização viva inclusive para saldo já no spawn.
+reactionAmount e política de cauda são primitivas comuns de labPlanModel/runtime/executor; craftLedger contabiliza quantidade conciliada, não 5 fixo.
+powerOperator gere Game.powerCreeps em passagem própria sob guard; compartilha lifecycle futuro com 0122, sem habilitar factory.
 
-| Path | Responsibility |
-|------|----------------|
-| `src/utils/powerPolicy.js` | `decide()` -> `{action: "process"/"pause"/"sell", paybackDays, prices, reason}`; custo restante, ganho diário, histerese; usa `market.snapshot()` e a confiança do preço; reavalia a cada `power.reviewTicks` |
-| `src/utils/powerLogistics.js` | cancela listagens de power a processar, agenda `terminalOps.transfer` para a sala do power spawn, limita o que segue listado |
-| `src/roles/powerOperator.js` | `run(powerCreep)` (fase 2): spawn, `enableRoom`, renew, `GENERATE_OPS`, `OPERATE_LAB`, reserva de ops |
-| `test/powerCases.js` | oráculos de `decide`, logística sem criar ordem, power creep com stubs |
+## Data flow e falhas
 
-### Changed
+Política: recalcular GPL atual e orçamento líquido → reservar lote → feed/transfer → revalidar → processPower → reconciliar progresso/consumo observado. Não contar estoque/listing/trânsito duas vezes; meta alcançada pausa imediatamente. reviewTicks não é validade de autorização.
+Cancelamento: powerPlan simula poolAfterCancel de compromissos físicos entregáveis, sem efeitos. Prefixo só sob premissas de pool linear/lastreado; demais casos têm busca pura limitada1000nós e unknown sem prova. Sobrecompromisso/identidade incerta não cancela. Livre cobre déficit → zero cancelamentos. allowCancel + gate válido permite uma submissão; reconciliar e refazer orçamento antes da próxima. Manual/pixel protegido nunca é candidato. Ordem desaparecida não inventa refund/estoque.
+Reação: planejar quantidade/cronologia/quotaMode/budget/quotaKey por owner+item+produto+geração → reservar ambos os inputs e capacidade → registrar pending → confirmar e atribuir movimentos → avançar apenas com quota confirmada/pending vazio. Mudança de efeito/owner/capacidade invalida antes do intent. Cauda inexequível vai a replanning/stall guard.
+Operador: unspawned/spawnPending/active/safe/renewPending/respawnWait; ler TTL/cooldown/shard antes do próximo intent. managed mantém manutenção em suspensão econômica; entrega manual encerra intents do bot. Reset concilia antes de repetir. Target alterado replaneja logística revogável; custo consumado permanece.
 
-| Path | Change |
-|------|--------|
-| `src/structures/powerSpawn.js` | respeitar `powerPolicy` (pausa) sem mudar `processPower` quando "process" |
-| `src/roles/hauler.js` (`powerFeedJob`, `optionalConsumer`) | alimentar só quando a política manda processar; energia só do excedente (já é assim) |
-| `src/main.js` | laço `Game.powerCreeps` sob `guard("powerCreep")` (fase 2); `powerStatus()` global |
-| `src/utils/config.js` | `power: { sellOrProcess:"dynamic", maxPaybackDays:30, reviewTicks:1500, hysteresis:0.2, creep:{enabled:false, cpuCap:0.5} }` |
-| `src/utils/console.js` | `powerStatus()`, `createPowerCreep(name)`, `upgradePowerCreep(name, power)` |
+## Validation / Rollout
 
-## Data shapes
-
-- Memory: `Memory.power = { decision, since, lastReview }` (3 escalares); `Memory.settings.power.*`. Preços usados ficam no heap (últimas 20 decisões).
-- Heap: cache do `decide`, fila de transferências do power.
-- Power creep: referência por **nome** (`Game.powerCreeps[name]`), nunca objeto em Memory.
-
-## How it satisfies the constitution
-
-- **CPU:** `decide` O(1) a cada `reviewTicks`; power creep com teto de CPU e auto-desligamento (`shadowBudget`-style).
-- **Memory:** ~3 escalares + config. **Fail-soft:** sem confiança de preço, mantém o estado anterior.
-- **Offline test:** `powerCases.js` com `Game.market`, `Game.gpl`, `PowerCreep` stubados.
+Fase 0: fixtures de GPL/target maior manual, E=20/31.6/70 e power±30%, banda 24–30 dias, quotes/readiness vencidos, stock no spawn com off, livre antes de listados, físico100 com listagens100+100, ordem sem lastro, pools distintos, busca incompleta e cancelamento parcial/concorrente e dry-run sem mutação.
+Suporte operado: testar base e níveis 1–5, último tick, aplicação/renovação bloqueada no mesmo tick, efeitos desconhecidos, capacidade, insumos compartilhados, strict/boundedSurplus, meta10/A7, entrega final e ausência de stall.
+Fase 2: coletar baseline 48h do regime atual; demonstrar gargalo marginal, orçamento de ops/energia/reagentes/logística e demanda executável. Criação/upgrade manuais só após autorização separada. Revalidar novo regime antes de expansão. CPU inclui renew/trânsito/coleta; medir contribuição final/venda, não apenas throughput bruto.
 
 ## Risks & mitigations
 
-| Risk | Mitigation |
-|------|------------|
-| Processar consome energia que as salas precisam | só excedente (`optionalConsumer`) e pausa pelo payback |
-| Cancelar listagem perde a taxa | afundada; a decisão futura ignora; documentar no log |
-| Power creep morre/esquece renovar | renew a `ticksToLive < 300`; respawn automático (cooldown de 8 h reais) |
-| Ganho do `OPERATE_LAB` = 0 | gate: `labReport` (0155) antes de criar o creep |
-| Preço do power muda no meio | `decide` reavalia e pode pausar; nunca cancela o que já está no power spawn |
+Payback depende de atribuição e demanda: unknown bloqueia investimento. Cancelamento/GPL irreversíveis: dry-run, budget e reconciliação. Operador abandonado no off: gestão safe separada. Overshoot invisível: quotaMode explícito e custo propagado. Buscas/step machines limitadas, nextWakeTick e stall guard no spec.

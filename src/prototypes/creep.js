@@ -1,4 +1,5 @@
 const energyLedger = require("../utils/energyLedger");
+energyLedger.installHooks(Creep.prototype);
 
 /** Example state - goto location */
 Creep.prototype.runGoto = function (scope) {
@@ -43,10 +44,14 @@ Creep.prototype.runGetEnergy = function (scope) {
     ) {
         // For structures / ruins / tombstones, withdraw stored energy
         if (target.store && target.store[RESOURCE_ENERGY] > 0) {
+            const trackBoost = Memory.rooms && Memory.rooms[this.room.name] && Memory.rooms[this.room.name].labBoostReservations;
+            const amount = trackBoost ? Math.min(target.store[RESOURCE_ENERGY], this.store.getFreeCapacity(RESOURCE_ENERGY)) : 0;
             if (this.withdraw(target, RESOURCE_ENERGY) != OK) {
                 this.popState();
                 return false;
             }
+            if (trackBoost)
+                require("../utils/boostLogistics").energyWithdrawn(this, target, amount);
         } else if (this.pos.isNearTo(target)) {
             // in range but the store ran dry - stop waiting on it
             this.popState();
@@ -79,7 +84,9 @@ Creep.prototype.runGetEnergy = function (scope) {
 /** Deliver energy to a structure (by id). Pops when empty, or the target is
  *  gone / full / rejects the transfer. */
 Creep.prototype.runDeposit = function (scope) {
-    const target = Game.getObjectById(scope);
+    let target = Game.getObjectById(scope);
+    if (require("../utils/bootstrapStorage").isBuffer(this.room, target) && target !== this.room.storage)
+        target = this.room.storage;
     if (!target || !target.store) {
         this.popState();
         return false;
@@ -110,10 +117,7 @@ Creep.prototype.runDeposit = function (scope) {
 Creep.prototype.runUpgrade = function (scope) {
     let target = Game.getObjectById(scope);
 
-    const status = this.upgradeController(target);
-    if (status === OK) {
-        energyLedger.creditUpgrade(this, target);
-    }
+    const status = energyLedger.invoke(this, "upgradeController", target);
 
     if (status == ERR_NOT_IN_RANGE) {
         const moveStatus = this.moveTo(target);
@@ -134,11 +138,10 @@ Creep.prototype.runBuild = function (scope) {
 
     // Determine the action based on the target's type
     if (target instanceof ConstructionSite) {
-        let status = this.build(target);
+        let status = energyLedger.invoke(this, "build", target);
 
         if (status == OK) {
             this.say("~Pew!~");
-            energyLedger.creditBuild(this, target);
         } else if (status == ERR_NOT_IN_RANGE) {
             this.moveTo(target);
         } else {
@@ -152,11 +155,10 @@ Creep.prototype.runBuild = function (scope) {
 
         return true;
     } else if (target instanceof Structure) {
-        let status = this.repair(target);
+        let status = energyLedger.invoke(this, "repair", target);
 
         if (status == OK) {
             this.say("~Pew!~");
-            energyLedger.creditRepair(this, target);
         } else if (status == ERR_NOT_IN_RANGE) {
             this.moveTo(target);
         } else {

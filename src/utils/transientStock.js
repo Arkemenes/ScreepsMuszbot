@@ -5,6 +5,7 @@
 // Power spawn is deliberately not capped (it needs continuous energy).
 const config = require("./config");
 const labReactions = require("./labReactions");
+const labReservations = require("./labReservations");
 
 function roomNameOf(structure) {
     return (structure.room && structure.room.name) || (structure.pos && structure.pos.roomName);
@@ -29,7 +30,8 @@ function factoryRecipe(structure) {
 // batch, craft chain = pending batches via factoryEnergy). Lab: a reaction
 // burns no energy, so 0 unless craft.labEnergyTarget opts into manual boosts.
 function energyTarget(structure) {
-    if (structure.structureType === STRUCTURE_LAB) return config.get("craft.labEnergyTarget", 0);
+    if (structure.structureType === STRUCTURE_LAB) return labReservations.energyTarget(roomNameOf(structure), structure.id,
+        config.get("craft.labEnergyTarget", 0), structure.store && structure.store[RESOURCE_ENERGY] || 0);
     if (structure.structureType !== STRUCTURE_FACTORY) return null;
     const mem = roomMemory(structure);
     const recipe = factoryRecipe(structure);
@@ -55,6 +57,7 @@ function energyNeed(structure) {
 function allowedMineral(structure, resourceType) {
     const mem = roomMemory(structure);
     if (structure.structureType === STRUCTURE_LAB) {
+        if (labReservations.retains(roomNameOf(structure), structure.id, resourceType)) return true;
         if (mem.labPolicyHold && mem.labPolicyHold[structure.id] === resourceType) return true;
         const labs = mem.labLoad && mem.labLoad[structure.id];
         if (labs && labs.indexOf(resourceType) >= 0) return true;
@@ -80,10 +83,12 @@ function excess(structure) {
     const slack = config.get("craft.energyDrainSlack", 500);
     const target = energyTarget(structure);
     const held = structure.store[RESOURCE_ENERGY] || 0;
-    if (held > 0 && (target === 0 || held > target + slack)) out.push({ resourceType: RESOURCE_ENERGY });
-    if (structure.structureType === STRUCTURE_LAB && !config.get("craft.drainIdleLabs", true)) return out;
+    const reservedEnergy = structure.structureType === STRUCTURE_LAB && labReservations.retains(roomNameOf(structure), structure.id, RESOURCE_ENERGY);
+    if (!reservedEnergy && held > 0 && (target === 0 || held > target + slack)) out.push({ resourceType: RESOURCE_ENERGY });
+    const idleDrain = structure.structureType !== STRUCTURE_LAB || config.get("craft.drainIdleLabs", true);
     Object.keys(structure.store).forEach((resourceType) => {
         if (resourceType === RESOURCE_ENERGY || !(structure.store[resourceType] > 0)) return;
+        if (!idleDrain && !labReservations.cleanup(roomNameOf(structure), structure.id, resourceType)) return;
         if (structure.structureType === STRUCTURE_FACTORY && resourceType === roomMemory(structure).factoryProduct) return;
         if (!allowedMineral(structure, resourceType)) out.push({ resourceType });
     });

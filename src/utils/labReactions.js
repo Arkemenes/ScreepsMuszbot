@@ -1,6 +1,7 @@
 "use strict";
 const config = require("./config");
 const census = require("./census");
+const labReservations = require("./labReservations");
 // ROADMAP 0115: the lab reactions running in a room. A craft chain may run several at
 // once (independent steps of the reaction tree, in labs of their own): those are
 // Memory.rooms[r].labReactions, a list. A manual setLabReaction() (rooms/refining.js) and
@@ -29,11 +30,10 @@ function execute(structure) {
     const reaction = reactions.find((r) => outputsOf(r).includes(structure.id));
     if (!reaction || structure.cooldown > 0) return;
     const roomName = structure.room.name;
-    const reserved = Memory.rooms[roomName].labBoostReservations || {};
     const a = Game.getObjectById(reaction.input1), b = Game.getObjectById(reaction.input2);
     if (!a || !b || a.id === b.id || structure.id === a.id || structure.id === b.id) return;
     // A reaction may predate a boost reservation or an RCL change; check every participant live.
-    if (reserved[structure.id] || reserved[a.id] || reserved[b.id] ||
+    if (labReservations.blocked(roomName, structure.id) || labReservations.blocked(roomName, a.id) || labReservations.blocked(roomName, b.id) ||
         structure.isActive && !structure.isActive() || a.isActive && !a.isActive() || b.isActive && !b.isActive()) return;
     if (!ledgers[roomName]) {
         const available = {}, used = {}, outputs = new Set();
@@ -75,6 +75,7 @@ function execute(structure) {
 }
 let deliveryTick = -1, deliveries = {};
 function deliveryLimit(roomName, lab, resource) {
+    if (labReservations.blocked(roomName, lab.id)) return 0;
     if (deliveryTick !== Game.time) { deliveryTick = Game.time; deliveries = {}; }
     const mem = Memory.rooms && Memory.rooms[roomName], target = mem && mem.labPolicyInputs && mem.labPolicyInputs[lab.id];
     if (!target || target[0] !== resource || lab.mineralType && lab.mineralType !== resource) return 0;

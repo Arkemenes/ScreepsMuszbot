@@ -1,43 +1,46 @@
-# 0156 — CPU: lógica restante — Plan
+# 0156 — Oráculo e otimizações por item — Plan
 
-## Approach
+> **Decisão posterior — 16/10/2026:** implementação local autorizada passo a passo no [plano de execução incremental](../../../docs/plano-execucao-incremental-2026-10-16.md). Histórico persistente sofisticado adiado até necessidade demonstrada; cobertura inicial no heap, com lacunas explícitas. Gates operacionais continuam válidos.
 
-Um item por vez, cada um com **referência intocada** em `test/`, oráculo com fuzz, flag e validação em produção pelo `cpuReport`.
-Ordem de menor para maior risco: L4, L2, L3, depois L6/L7/O3. Todos seguem o padrão já usado em 0147/0152:
-assinatura de entradas (comparação por laço, sem strings) -> reusa a decisão anterior só se **nada** que a
-decisão lê mudou; qualquer divergência recalcula.
+- **Status:** in-progress — 0156-A e L2-book concluídos localmente; ganho live e demais itens pendentes.
+- **Issue:** ARK-139; consolidação ARK-141.
+- **Revisão documental:** 2026-10-16.
+- **Autorização:** implementação local incremental; publicação/ativação e gastos seguem os gates do plano de execução.
+- **Contrato:** [spec.md](spec.md). **DAG/aceite:** [planejamento integrado](../../../docs/planejamento-integrado-2026-10-16.md).
 
-## Modules
+## Approach / Modules
 
-### New
+### API implementada no pacote 0156-A
 
-| Path | Responsibility |
-|------|----------------|
-| `src/utils/decisionCache.js` | `get(name, key, signatureFn)` / `store`: cache por assinatura com tamanho limitado e invalidação por reset; contadores de hit/miss no heap |
-| `test/cpuLogicCases.js` | referência x candidata com fuzz para L2/L3/L4 |
+`compareImplementations(reference, candidate, worlds, project?)` conserva a chamada existente. O default compara retorno e mundo executado; uma projeção customizada recebe `(result, executedWorld, error)` e deve ser pura e completa para os observáveis declarados. Erros incluem tipo/mensagem e não impedem projetar o estado parcial. Falha da projeção ou snapshot é erro do harness, nunca equivalência silenciosa.
 
-### Changed
+`compareSequences(referenceFactory, candidateFactory, scenarios, project?)` recebe cenários `{ createWorld, steps }`. Cada factory síncrona recebe mundo novo, carrega seus módulos/providers e devolve `(step, world)`. Um conjunto de módulos/heap vive durante todos os passos; depois os bindings de globais/console e o require.cache original são restaurados em finally. Fixtures substituem Game/Memory/providers por instâncias próprias; não podem capturar módulos de produção/estado mutável compartilhado fora da factory nem mutar objetos internos dos providers do host. A restauração é de bindings, não uma cópia profunda arbitrária do processo Node.
 
-| Path | Change |
-|------|--------|
-| `src/utils/terminalOps.js` | `listResidual`: caminho ocioso pela assinatura (L2) |
-| `src/utils/labPolicyRuntime.js` | `assignments`/`resolve`/`profile` pela assinatura (L3); `confirm` por tick |
-| `src/rooms/intel.js`, `src/utils/transitSafety.js` | por (sala, tick de visão) e hostilidade (L4) |
-| `src/utils/config.js` | flags `cpu.cache.listings`, `cpu.cache.labPolicy`, `cpu.cache.intel` (padrão off até validar) |
+Snapshots aceitam dados simples, undefined e arrays, preservando aliases de entrada e ordem dos arrays. Funções/métodos são reconstruídos pela factory e excluídos da projeção de dados; protótipos não suportados, ciclos, accessors, símbolos, bigint e números não finitos falham explicitamente. A projeção decide quais intents, taxas, claims, estoques e Memory entram na fixture; o helper não emula o motor nem descobre observáveis omitidos.
 
-## Data shapes
+0156-A repara test/equivalence/compare e adaptadores de fixtures, com snapshots pós-execução e sequências. Não toca produção.
+0156-B/L2 separa política pura e manutenção de terminalOps; referência usa 0153 revisada.
+L3 separa geometria/seleção de desired/refilling/switching, logística, confirmação e observação final 0155; reserva canônica 0149 participa da assinatura.
+L4 mede intel/transitSafety preservando dedupe existente; L7 lazy/segmentos e O3 limpeza têm pacotes próprios. L6 exige spec de latência adicional antes de mudança.
 
-Heap: entradas `{signature, decision}` por sala/op, no máximo `cpu.cache.entries`. Sem Memory nova.
+## Data flow e falhas
 
-## How it satisfies the constitution
+Criar fixture/módulos/globais de cada variante → executar sequência inteira com caches preservados → projetar retorno, Memory, estado e trace por passo → comparar também depois de exceção → restaurar globais em finally.
+Divergência deliberada deve falhar; par equivalente não pode falhar. Métodos são reconstruídos; dados não serializáveis são rejeitados, não perdidos pelo clone JSON.
+Para cada cache: inventariar entradas lidas/provedores/versões/prazos → separar pureza → comparar assinatura completa → executar efeitos/manutenção/observação viva em todo tick. Claim/readiness/preço/estoque não são congelados entre decisões. Flag off descarta cache, não pending/owner.
+Reset hidrata operação pendente antes de decisão otimizada. Colisão de hash exige comparação de entradas reais. Fatiamento não é equivalência temporal por resultado final parecido.
 
-- **CPU:** a assinatura custa menos que a decisão (medido pelos probes). **Memory:** nada. **Fail-soft:** divergência = recalcula.
-- **Offline test:** fuzz de mutação por entrada + oráculo de equivalência.
+## Validation / Rollout
+
+Autoteste do oráculo conforme AC1/7, incluindo mesmo erro com estado distinto e cache no segundo passo.
+Por item: cenários com mudança intratick de claims/config/reserva/provider, limites de cooldown/prazo, off/reset entre intent e confirmação. Escala3/5/10 salas e labs3/6/10 serve à contagem de scans/limites onde pertinente; não substitui fixtures de semântica.
+Live futuro: custo total assinatura+invalidação+efeitos, carga/regime comparáveis, warm/cold e custo amortizado de resets. Probe/Node não comprova CPU Screeps. Rollout por flag/item autorizado, comparando produção/ordens/contabilidade.
+L2 bloqueado por política0153; L3 por observação0155 e contrato/adaptador0149. Oráculo isolado independe desses pilotos.
 
 ## Risks & mitigations
 
-| Risk | Mitigation |
-|------|------------|
-| Esquecer uma entrada na assinatura | fuzz: cada entrada é mutada isoladamente e o resultado deve invalidar |
-| Cache congela decisão por TTL escondido | proibido; só assinatura; teste de relógio avançando sem mudança de entrada |
-| Estado de ordens/ledger divergir | oráculo compara a decisão **e** os efeitos (intents, campos gravados em `op`) |
+Projeção incompleta: declarar observáveis por adapter. Cache custar mais: medir custo completo. Off interromper recuperação: reconciliador independente. Fronteira de assinatura: testar instante exato. Remover migração necessária: inventário de owners pendentes antes de O3. Não retirar rollback legado antes de encerramento seguro.
+
+## Entrega L2-book — 16/10/2026
+
+[Pacote local](../../../docs/pacote-local-listagens-2026-10-16.md): reutilização por tick/lado/recurso no orderBook existente, sem cache de decisões ou saldos. Ramo de consultas diretas versus ramo compartilhado iguais no oráculo em 3/5/10 salas, com manutenção/off/reidratação/recarga do módulo/provedor/manual/estoques vivos. Consultas nativas41/67/132→13/13/13, sem inferir CPU Screeps. Flag terminalOps.reuseOrderBook default true, desligável para comparação. L2 geral/T3/T7 permanecem parciais; pixel automático e demais caches não entram neste aceite.

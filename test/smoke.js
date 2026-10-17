@@ -13,7 +13,7 @@ const PROJECT = process.argv[2] || path.resolve(__dirname, "..");
 global._ = require(path.join(PROJECT, "node_modules/lodash"));
 
 const constants = {
-    OK: 0, ERR_NOT_IN_RANGE: -9, ERR_NOT_ENOUGH_ENERGY: -6, ERR_BUSY: -4,
+    OK: 0, ERR_NOT_IN_RANGE: -9, ERR_NOT_ENOUGH_ENERGY: -6, ERR_BUSY: -4, ERR_NOT_FOUND: -5,
     ERR_NO_PATH: -2, ERR_INVALID_TARGET: -7, ERR_TIRED: -11,
     ERR_NOT_ENOUGH_RESOURCES: -6, ERR_FULL: -8, ERR_INVALID_ARGS: -10,
     FIND_SOURCES: 105, FIND_SOURCES_ACTIVE: 104, FIND_MINERALS: 116,
@@ -16085,6 +16085,8 @@ require("./routingBudgetCases")(PROJECT, assert);
 require("./movementCpuCases")(PROJECT, assert);
 require("./economyCpuCases")(PROJECT, assert);
 require("./terminalLotCases")(PROJECT, assert);
+require("./listingPolicyCases")(PROJECT, assert);
+require("./listingReuseCases")(PROJECT, assert);
 require("./craftPurchaseCases")(PROJECT, assert);
 require("./craftRecoveryCases")(PROJECT, assert);
 require("./terminalIntentCases")(PROJECT, assert);
@@ -16101,3 +16103,9 @@ require("./cpuAccountingCases")(PROJECT, assert);
 require("./terminalHistoryCases")(PROJECT, assert);
 require("./terminalTelemetryCases")(PROJECT, assert);
 require("./assetStatsCases")(PROJECT, assert);
+require("./cpuReportCases")(PROJECT, assert);
+require("./boostFoundationCases")(PROJECT, assert);
+require("./boostPolicyCases")(PROJECT, assert);
+require("./boostLogisticsCases")(PROJECT, assert);
+require("./boostConfirmationCases")(PROJECT, assert);
+require("./bootstrapStorageCases")(PROJECT, assert);

@@ -59,20 +59,45 @@ function currentMax() {
     return maxUsed;
 }
 function boot() { return bootTick; }
+function describe(total, ticks, first, last, max) {
+    return { ticks, validTicks: total.valid, pairedTicks: total.paired,
+        missingEndTicks: total.valid - total.paired, skippedTicks: ticks - total.valid,
+        missingTicks: total.missingTicks, fromTick: first ? first.tick : null, toTick: last ? last.tick : null,
+        bootTick, includesReset: !!(first && last && bootTick !== null && first.tick <= bootTick && bootTick <= last.tick),
+        coldUsed: total.coldValid ? round(total.coldUsed / total.coldValid) : null,
+        warmUsed: total.valid - total.coldValid > 0 ? round((total.used - total.coldUsed) / (total.valid - total.coldValid)) : null,
+        maxUsed: total.valid ? round(max) : null,
+        used: total.valid ? round(total.used / total.valid) : null,
+        headroom: total.valid ? round((total.limit - total.used) / total.valid) : null,
+        pairedUsed: total.paired ? round(total.pairedUsed / total.paired) : null,
+        scriptUsed: total.paired ? round(total.script / total.paired) : null,
+        residual: total.paired ? round((total.pairedUsed - total.script) / total.paired) : null };
+}
 function snapshot() {
     const first = samples.length ? samples[samples.length === capacity ? cursor : 0] : null;
     const last = samples.length ? samples[(cursor + capacity - 1) % capacity] : null;
-    return { ticks: samples.length, validTicks: sums.valid, pairedTicks: sums.paired,
-        missingEndTicks: sums.valid - sums.paired, skippedTicks: samples.length - sums.valid,
-        missingTicks: sums.missingTicks, fromTick: first ? first.tick : null, toTick: last ? last.tick : null,
-        bootTick, includesReset: !!(first && bootTick !== null && first.tick <= bootTick),
-        coldUsed: sums.coldValid ? round(sums.coldUsed / sums.coldValid) : null,
-        warmUsed: sums.valid - sums.coldValid > 0 ? round((sums.used - sums.coldUsed) / (sums.valid - sums.coldValid)) : null,
-        maxUsed: sums.valid ? round(currentMax()) : null,
-        used: sums.valid ? round(sums.used / sums.valid) : null,
-        headroom: sums.valid ? round((sums.limit - sums.used) / sums.valid) : null,
-        pairedUsed: sums.paired ? round(sums.pairedUsed / sums.paired) : null,
-        scriptUsed: sums.paired ? round(sums.script / sums.paired) : null,
-        residual: sums.paired ? round((sums.pairedUsed - sums.script) / sums.paired) : null };
+    return describe(sums, samples.length, first, last, currentMax());
 }
-module.exports = { begin, end, snapshot, reset, boot };
+// Scan the existing bounded ring only when an explicitly requested report closes.
+function range(fromTick, toTick) {
+    if (!Number.isInteger(fromTick) || !Number.isInteger(toTick) || toTick < fromTick) throw new TypeError("Invalid CPU report range");
+    const total = { valid: 0, used: 0, limit: 0, paired: 0, pairedUsed: 0, script: 0, missingTicks: 0, coldValid: 0, coldUsed: 0 };
+    let ticks = 0, first = null, last = null, max = 0;
+    for (const s of samples) {
+        if (s.tick < fromTick || s.tick > toTick) continue;
+        ticks++;
+        if (!first || s.tick < first.tick) first = s;
+        if (!last || s.tick > last.tick) last = s;
+        if (s.used === null) continue;
+        total.valid++; total.used += s.used; total.limit += s.limit; max = Math.max(max, s.used);
+        if (s.cold) { total.coldValid++; total.coldUsed += s.used; }
+        if (s.script !== null) { total.paired++; total.pairedUsed += s.used; total.script += s.script; }
+    }
+    const requestedTicks = toTick - fromTick + 1;
+    total.missingTicks = Math.max(0, requestedTicks - ticks);
+    const result = describe(total, ticks, first, last, max);
+    result.requestedFromTick = fromTick; result.requestedToTick = toTick; result.requestedTicks = requestedTicks;
+    result.complete = ticks === requestedTicks && total.valid === ticks && total.paired === ticks && !result.includesReset;
+    return result;
+}
+module.exports = { begin, end, snapshot, range, reset, boot };

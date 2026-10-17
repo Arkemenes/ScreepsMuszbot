@@ -1,5 +1,15 @@
 # 0145 — Régua de CPU e harness de equivalência — Tasks
 
+## Reparo ARK-145 — 2026-10-16
+
+- [x] Reproduzir arm83690790 → fechamento83690867 com trecho real anterior do main.
+- [x] Implementar janela relativa, recorte do ring existente, cobertura e flags sem nova coleta/Memory.
+- [x] Integrar hook guardado, auto-report warm e ajuda do console; manter cpuTop/tabelas recentes identificados.
+- [x] Vinte regressões no smoke para janela nova150, rearm, rollover, auto/off/reload, flags, gap, bucket, endTick, relógio, limite, cold/ausência, máximo/resíduo e custo de espera.
+- [ ] Aceite live de duas janelas150 estáveis no bundle corrigido; objetivo CPU global e L2 permanecem abertos.
+
+Entrega local e roteiro em [cpu-report-isolado-2026-10-16.md](../../../docs/cpu-report-isolado-2026-10-16.md). Resultados antigos abaixo são históricos e podem ter janela desde boot.
+
 - [x] 1. `profiler.js`: contador efetivo de ticks e `output()` (AC1)
   - verify: `node --check src/utils/profiler.js` · smoke `"0145: profile output counts 100 ticks for a 100-tick session"`
 - [x] 2. `cpuMeter.js`: `bootTick`, `includesReset`, `maxTick`, só heap (AC2, AC3)

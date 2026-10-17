@@ -43,6 +43,16 @@ em qualquer divergência observável. Nenhum comportamento do jogo muda.
 
 ## Acceptance criteria
 
+### Reparo de isolamento cpuReport — ARK-145, 2026-10-16
+
+cpuReport(n) inicia uma janela nova no tick seguinte ao comando, encerrando n ticks de origem completos depois disso. Não reseta a telemetria existente. n é limitado à capacidade válida do ring de cpuAccounting. O balanço do último tick é conhecido no tick seguinte; somente então imprimir. Repetir o comando substitui a solicitação anterior; reload global cancela a solicitação manual e permite o auto-report identificado como tal.
+
+O balanço impresso é recortado aos endpoints solicitados, sem amostras anteriores ou posteriores. Falta de cobertura (gap, saturação de bucket, falta de endTick ou ring descartado) aparece como incomplete, nunca se completa com dados anteriores. A configuração reuseOrderBook/listingPolicy é registrada na abertura e comparada ao fechamento; diferenças invalidam comparação. Alterações intermediárias revertidas não são detectadas, portanto manter configuração fixa durante a janela.
+
+O auto-report usa a janela warm após o boot. cpuTop manual e publicação de stats conservam seus acumuladores/janelas. A tabela de módulos/roles/spans continua sendo a janela recente própria, explicitamente identificada; não alegar atribuição exata dos n ticks. O recorte percorre o ring somente ao fechar; espera é O(1), sem novo scan Game/Memory ou ring por tick.
+
+AC adicionais: comando após 74 ticks de histórico não imprime 77 ticks depois; 150 amostras novas substituem baseline antigo; rearm, rollover, auto/off/reload, capacidade inválida, bucket cheio, gap, falta de endTick, máximo/resíduo/pareamento e troca de flag preservam a separação. Comparar duas janelas150 estáveis em jogo somente depois do reparo.
+
 1. The smoke test asserts `profiler.output` reports 100 for a 100-tick session.
 2. The smoke test asserts a window containing a global reset is flagged `includesReset`.
 3. The smoke test asserts the aggregate per-tick max is kept in heap and absent from Memory.

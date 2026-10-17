@@ -2,6 +2,7 @@ const census = require("./census");
 const config = require("./config");
 const roomCache = require("./roomCache");
 const labReactions = require("./labReactions");
+const labReservations = require("./labReservations");
 
 let cacheTick = -1;
 let pressureCache = {};
@@ -56,6 +57,7 @@ function labOutput(room) {
     labReactions.list(room.name).forEach((reaction) => {
         const resourceType = reaction.product;
         labReactions.outputsOf(reaction).forEach((id) => {
+            if (labReservations.blocked(room.name, id)) return;
             const lab = Game.getObjectById(id);
             const amount = (lab && lab.store && resourceType && lab.store[resourceType]) || 0;
             const cap = lab ? capacity(lab.store, resourceType) : 0;

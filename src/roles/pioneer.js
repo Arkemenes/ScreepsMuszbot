@@ -109,7 +109,11 @@ const pioneer = {
             if (pile) {
                 reservations.claim(creep, pile.id);
                 if (creep.pos.isNearTo(pile)) {
-                    creep.withdraw(pile, RESOURCE_ENERGY);
+                    const trackBoost = Memory.rooms && Memory.rooms[creep.room.name] && Memory.rooms[creep.room.name].labBoostReservations;
+                    const amount = trackBoost ? Math.min(pile.store && pile.store[RESOURCE_ENERGY] || 0, creep.store.getFreeCapacity(RESOURCE_ENERGY)) : 0;
+                    const status = creep.withdraw(pile, RESOURCE_ENERGY);
+                    if (status === OK && trackBoost)
+                        require("../utils/boostLogistics").energyWithdrawn(creep, pile, amount);
                 } else {
                     creep.moveTo(pile, { reusePath: 5 });
                 }
@@ -198,10 +202,7 @@ const pioneer = {
             return;
         }
         if (creep.pos.inRangeTo(site, 3)) {
-            const status = creep.build(site);
-            if (status === OK) {
-                energyLedger.creditBuild(creep, site);
-            }
+            energyLedger.invoke(creep, "build", site);
         } else {
             creep.moveTo(site, { range: 3, reusePath: 5 });
         }

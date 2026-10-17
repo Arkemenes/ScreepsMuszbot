@@ -11,17 +11,23 @@
 let tick = -1;
 let orders = null;
 let source = null; // the getAllOrders function the copy came from
+let sourceMarket = null;
 const filtered = new Map();
+const rawQueries = new Map();
+let allCovered = false;
 const cpuMeter = require("./cpuMeter");
 
 function currentMarket() {
     const market = typeof Game !== "undefined" && Game.market;
     const fetch = market && typeof market.getAllOrders === "function" ? market.getAllOrders : null;
-    if (tick !== Game.time || source !== fetch) {
+    if (tick !== Game.time || source !== fetch || sourceMarket !== market) {
         tick = Game.time;
         orders = null;
         source = fetch;
+        sourceMarket = market;
         filtered.clear();
+        rawQueries.clear(); allCovered = false;
+        byResourceFor = null; byResourceIndex = null;
     }
     return market;
 }
@@ -31,27 +37,46 @@ function all() {
     if (!orders) {
         let book = [];
         if (source) {
-            try { book = cpuMeter.span("market.bookAll", () => market.getAllOrders() || []); } catch (error) { book = []; }
+            try {
+                const value = cpuMeter.span("market.bookAll", () => market.getAllOrders());
+                allCovered = Array.isArray(value); book = allCovered ? value : [];
+            } catch (error) { book = []; }
         }
         orders = book;
     }
     return orders;
 }
 
-function matching(type, resourceType) {
+function query(type, resourceType) {
     const market = currentMarket();
     const key = type + ":" + resourceType;
-    if (filtered.has(key)) return filtered.get(key);
-    let subset = orders;
+    if (rawQueries.has(key)) return rawQueries.get(key);
+    let subset = allCovered && orders ? orders.filter((order) => order && order.type === type && order.resourceType === resourceType) : null;
+    let covered = allCovered;
     if (!subset) {
         try {
-            subset = source ? cpuMeter.span("market.bookFiltered", () =>
-                market.getAllOrders({ type, resourceType }) || []) : [];
+            const value = source ? cpuMeter.span("market.bookFiltered", () =>
+                market.getAllOrders({ type, resourceType })) : null;
+            covered = Array.isArray(value); subset = covered ? value : [];
         } catch (error) { subset = []; }
     }
-    subset = subset.filter((order) => order && order.type === type && order.resourceType === resourceType);
-    filtered.set(key, subset);
-    return subset;
+    const value = { orders: subset, covered };
+    // A failed fetch is not an immutable book: a later call may recover this tick.
+    if (covered) rawQueries.set(key, value);
+    return value;
+}
+function filteredOrders(key, raw) {
+    const saved = filtered.get(key);
+    if (saved && saved.source === raw) return saved.orders;
+    const split = key.indexOf(":");
+    const type = key.slice(0, split), resourceType = key.slice(split + 1);
+    const orders = raw.orders.filter((order) => order && order.type === type && order.resourceType === resourceType);
+    filtered.set(key, { source: raw, orders });
+    return orders;
+}
+function matching(type, resourceType) {
+    const key = type + ":" + resourceType;
+    return filteredOrders(key, query(type, resourceType));
 }
 
 // ROADMAP 0147: the full book grouped by resource, built once per tick from all(). A scan that
@@ -80,9 +105,15 @@ function reset() {
     tick = -1;
     orders = null;
     source = null;
+    sourceMarket = null;
     filtered.clear();
+    rawQueries.clear(); allCovered = false;
     byResourceIndex = null;
     byResourceFor = null;
 }
 
-module.exports = { all, matching, byResource, reset };
+function quote(type, resourceType) {
+    const raw = query(type, resourceType);
+    return { orders: filteredOrders(type + ":" + resourceType, raw), covered: raw.covered };
+}
+module.exports = { all, matching, byResource, query, quote, reset };

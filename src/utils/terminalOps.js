@@ -11,6 +11,8 @@ const cpuMeter = require("./cpuMeter");
 const claims = require("./terminalClaims");
 const purchaseCost = require("./purchaseCost");
 const orderRetry = require("./terminalOrderRetry");
+const listingPolicy = require("./listingPolicy");
+const listingLifecycle = require("./listingLifecycle");
 
 const FINAL_STATES = ["completed", "failed", "cancelled"];
 
@@ -180,6 +182,12 @@ function trade(kind, roomName, resourceType, value, limit, createListing, skipFe
     if (!validResource(resourceType) || !amount(value) || !(typeof limit === "number" && limit > 0)) return result(false, "recurso, quantidade ou limite inválido");
     options = Object.assign({}, options);
     if (!options.owner) options.owner = options.policy === "swing" ? { kind: "swing", id: roomName + ":" + resourceType } : { kind: "manual", id: "terminal-" + memory().nextId };
+    const managed = createListing && config.get("listingPolicy.enabled", false) && listingLifecycle.automatic(Object.assign({ kind }, options));
+    if (managed && createListing && options.fixedListing) {
+        const quote = automaticSellQuote(resourceType, limit);
+        if (!quote.ok) return result(false, "listing: " + quote.reason);
+    }
+    if (managed) options.listingPolicyManaged = true;
     if (lockConflict(kind, roomName, null, resourceType, false, options)) return conflictResult(kind, roomName, resourceType, options);
     const prices = priceData(resourceType, !marketOnly);
     if (!prices) return result(false, "aguardando cotação temporal e fairPrice de energia");
@@ -305,11 +313,20 @@ function assign(op, home, direction, from, to, value, resourceType) {
 function orderAmount(order) { return order && (order.remainingAmount === undefined ? order.amount || 0 : order.remainingAmount) || 0; }
 // Diagnostics score the full book; selection rejects known-ineligible
 // orders before computing delivery cost. Effective limits still need freight.
+function marketOrders(type, resourceType) {
+    // ROADMAP 0156/L2: share only the tick's book, never an economic decision.
+    if (config.get("terminalOps.reuseOrderBook", true)) {
+        const quote = require("./orderBook").query(type, resourceType);
+        if (!quote.covered) throw new Error("market book unavailable");
+        return quote.orders;
+    }
+    return Game.market.getAllOrders({ type, resourceType }) || [];
+}
 function scoredOrders(op, candidatesOnly = false) {
     if (!Game.market || typeof Game.market.getAllOrders !== "function") return [];
     const wanted = op.kind === "buy" ? ORDER_SELL : ORDER_BUY;
     let orders = [];
-    try { orders = cpuMeter.span("terminalOps.orderBook", () => Game.market.getAllOrders({ type: wanted, resourceType: op.resourceType }) || []); } catch (error) { return []; }
+    try { orders = cpuMeter.span("terminalOps.orderBook", () => marketOrders(wanted, op.resourceType)); } catch (error) { return []; }
     // roomName is null for account-wide resources (pixel, accessKey,
     // cpuUnlock): they aren't shipped anywhere, so the API never attaches a
     // room to their orders. Requiring a truthy roomName unconditionally
@@ -677,7 +694,7 @@ function settleDeal(op, source) {
 function competitivePrice(op) {
     const step = config.get("terminalOps.marketPriceStep", 0.001);
     let orders = [];
-    try { orders = Game.market.getAllOrders({ type: op.kind === "buy" ? ORDER_BUY : ORDER_SELL, resourceType: op.resourceType }) || []; } catch (error) { orders = []; }
+    try { orders = marketOrders(op.kind === "buy" ? ORDER_BUY : ORDER_SELL, op.resourceType); } catch (error) { orders = []; }
     // Same marketOnly exception as scoredOrders() above: pixel/accessKey/
     // cpuUnlock orders never carry a roomName.
     const prices = orders.filter((order) => order && order.price > 0 && (op.marketOnly || order.roomName)).map((order) => {
@@ -785,11 +802,22 @@ function buyListingCeiling(op, order) {
     // Price decreases keep sunk fees; increases add 5% of the positive price delta.
     return allowance <= order.price ? allowance : (allowance + order.price * 0.05) / 1.05;
 }
+function automaticSellQuote(resource, limit) {
+    const book = require("./orderBook").quote(ORDER_SELL, resource);
+    return listingPolicy.sellQuote({ orders: book.orders, covered: book.covered, own: Game.market.orders || {},
+        resource, limit, basis: limit > 0 ? "existing-policy-limit" : null, step: config.get("terminalOps.marketPriceStep", 0.001) });
+}
 function listResidual(op, target) {
     if (!Game.market || typeof Game.market.createOrder !== "function") { op.error = "mercado indisponível"; touch(op, "waiting"); return; }
     // Cheap interval check first: competitivePrice() scans the order book, and
     // a live order inside its reprice window needs nothing from it.
     const liveOrder = op.marketOrderId && Game.market.orders && Game.market.orders[op.marketOrderId];
+    if (op.listingPolicyManaged) {
+        const state = listingLifecycle.enroll(op, liveOrder, Date.now());
+        if (!config.get("listingPolicy.enabled", false) || state.halted || state.pending) return;
+        // Pixel automation is a separate opt-in delivery; never create a second order here.
+        if (op.resourceType === "pixel") { op.error = "automação de listing de pixel ainda não habilitada"; return; }
+    }
     {
         // ROADMAP 0147 probe (read-only): how often a listing sees the same inputs as last time
         const probe = require("./probe");
@@ -840,8 +868,11 @@ function listResidual(op, target) {
         }
     }
     if (liveOrder && extended > 0 && (op.kind !== "sell" || liveOrder.price >= op.limit / 0.95)) {
+        if (op.listingPolicyManaged && !listingPolicy.extension(automaticSellQuote(op.resourceType, op.limit), liveOrder.price)) {
+            op.error = "listing não competitiva para extensão"; touch(op, "listed"); return;
+        }
         if (op.kind === "sell" && claims.physicalFree(target, target.terminal, op.resourceType, op.id) < op.remaining) { op.error = "aguardando lastro integral da listing"; touch(op, "listed"); return; }
-        const fee = liveOrder.price * extended * 0.05;
+        const fee = op.listingPolicyManaged ? listingPolicy.incrementalFee("extend", liveOrder.price, extended) : liveOrder.price * extended * 0.05;
         if (Game.market.credits < fee || fee > marketAccounting.available(op.id)) { op.error = "orçamento insuficiente para estender listing"; touch(op, "listed"); return; }
         if (op.kind === "buy" && liveOrder.price + ((op.orderFeesRemaining || 0) + (op.cancelledListingFees || 0) + fee) /
             Math.max(1, orderAmount(liveOrder) + extended) > op.limit) { op.error = "extensão excede limite efetivo"; touch(op, "listed"); return; }
@@ -849,6 +880,7 @@ function listResidual(op, target) {
         const status = typeof Game.market.extendOrder === "function" ? Game.market.extendOrder(op.marketOrderId, extended) : ERR_INVALID_ARGS;
         if (status === OK) {
             op.pendingExtension = { amount: extended, tick: Game.time, totalBefore, remainingBefore };
+            if (op.listingPolicyManaged) op.listingLifecycle.pending = { kind: "extend", tick: Game.time, total: totalBefore, amount: extended };
             chargeMarketFee(op, fee, beforeCredits);
         } else op.error = "extendOrder retornou " + status;
         touch(op, "listed"); return;
@@ -856,7 +888,16 @@ function listResidual(op, target) {
     if (liveOrder && Game.time - (op.repriceTick || op.listedTick || 0) < config.get("terminalOps.repriceInterval", 1000)) { touch(op, "listed"); return; }
     const ceiling = op.kind === "buy" ? buyListingCeiling(op, liveOrder) : Infinity;
     const floor = op.kind === "sell" ? op.limit / 0.95 : 0;
-    const price = op.fixedListing && op.kind === "sell" ? require("./swingTrade").listingPrice(target, op.resourceType, op.limit, require("./orderBook").byResource(op.resourceType)) : op.kind === "buy" ? Math.min(competitivePrice(op), ceiling) : Math.max(competitivePrice(op), floor);
+    const quote = op.listingPolicyManaged ? automaticSellQuote(op.resourceType, op.limit) : null;
+    if (quote && !quote.ok) { op.error = "listing: " + quote.reason; touch(op, liveOrder ? "listed" : "waiting"); return; }
+    let price = quote ? quote.price : op.fixedListing && op.kind === "sell" ? require("./swingTrade").listingPrice(target, op.resourceType, op.limit, require("./orderBook").byResource(op.resourceType)) : op.kind === "buy" ? Math.min(competitivePrice(op), ceiling) : Math.max(competitivePrice(op), floor);
+    if (op.listingPolicyManaged && liveOrder) {
+        const descentFloor = config.get("listingPolicy.floors." + op.resourceType, null);
+        if (!config.get("listingPolicy.descent", false) || op.resourceType === "pixel" ||
+            Game.time - (op.repriceTick || op.listedTick || 0) < config.get("listingPolicy.descentInterval", 1200)) return;
+        price = listingPolicy.descent(quote, liveOrder.price, descentFloor);
+        if (price === null) return;
+    }
     if (!(price > 0) || (op.kind === "buy" && price > ceiling) || (op.kind === "sell" && price < floor)) { op.error = "não há preço competitivo dentro do limite líquido"; touch(op, "waiting"); return; }
     const old = op.marketOrderId && Game.market.orders && Game.market.orders[op.marketOrderId];
     const interval = config.get("terminalOps.repriceInterval", 1000);
@@ -872,7 +913,7 @@ function listResidual(op, target) {
     let changed = null;
     if (old) {
         if (price === op.listedPrice) { op.repriceTick = Game.time; touch(op, "listed"); return; }
-        const delta = Math.max(0, price - old.price) * orderAmount(old) * 0.05;
+        const delta = op.listingPolicyManaged ? listingPolicy.incrementalFee("reprice", price, orderAmount(old), old.price) : Math.max(0, price - old.price) * orderAmount(old) * 0.05;
         if (Game.market.credits < delta) {
             op.error = "créditos insuficientes para reprecificar: disponível " +
                 Game.market.credits + ", necessário " + delta + ", preço " + old.price + " -> " + price;
@@ -881,11 +922,15 @@ function listResidual(op, target) {
         }
         const before = Game.market.credits;
         changed = typeof Game.market.changeOrderPrice === "function" ? Game.market.changeOrderPrice(op.marketOrderId, price) : null;
-        if (changed === OK) { chargeMarketFee(op, delta, before); op.listedPrice = price; op.repriceTick = Game.time; touch(op, "listed"); return; }
+        if (changed === OK) {
+            if (op.listingPolicyManaged) op.listingLifecycle.pending = { kind: "reprice", tick: Game.time, price };
+            chargeMarketFee(op, delta, before); op.listedPrice = price; op.repriceTick = Game.time; touch(op, "listed"); return;
+        }
         op.error = "changeOrderPrice retornou " + changed;
         touch(op, "listed"); return;
     }
-    const fee = price * op.remaining * 0.05;
+    const fee = op.listingPolicyManaged ? listingPolicy.incrementalFee("create", price, op.remaining) : price * op.remaining * 0.05;
+    if (op.listingPolicyManaged && fee > marketAccounting.available(op.id)) { op.error = "orçamento insuficiente para listing"; return; }
     if (op.policy === "swing" && fee > marketAccounting.available()) { op.error = "piso global de créditos para taxa"; touch(op, "waiting"); return; }
     // Checked before cancelOrder on purpose: the old order used to be cancelled
     // first, so an operation short on credits lost the listing it had already
@@ -897,7 +942,7 @@ function listResidual(op, target) {
         touch(op, old ? "listed" : "failed");
         return;
     }
-    if (op.kind === "sell" && !op.marketOnly && activeForRoom(op.sourceRoom).some((other) => other.id !== op.id && claims.outgoing(other, target, op.resourceType)) &&
+    if (op.kind === "sell" && !op.marketOnly && (op.listingPolicyManaged || activeForRoom(op.sourceRoom).some((other) => other.id !== op.id && claims.outgoing(other, target, op.resourceType))) &&
         claims.physicalFree(target, target.terminal, op.resourceType, op.id) < op.remaining) { op.error = "aguardando lastro integral da listing"; touch(op, "waiting"); return; }
     if (activeForRoom(op.sourceRoom).some((other) => other.id !== op.id && other.resourceType === op.resourceType && other.kind === op.kind && other.listedTick === Game.time && !other.marketOrderId)) {
         op.error = "listing do mesmo recurso sendo confirmada"; touch(op, "waiting"); return;
@@ -908,6 +953,10 @@ function listResidual(op, target) {
     if (status !== OK) { op.error = "createOrder retornou " + status; touch(op, "waiting"); return; }
     op.marketOrderId = null; op.listedPrice = price; op.listedAmount = op.remaining; op.listedTick = Game.time; op.repriceTick = Game.time; touch(op, "listing");
     op.createdListing = true;
+    if (op.listingPolicyManaged) {
+        const state = listingLifecycle.enroll(op, null, Date.now());
+        state.createdAt = Date.now(); state.ageSource = "submission";
+    }
 }
 function bindCreatedOrders() {
     if (!Game.market || !Game.market.orders) return;
@@ -928,19 +977,48 @@ function bindCreatedOrders() {
         // (bug real, usuário reportou em produção, 2026-09-24: terminalSell
         // de 1000 pixel virou "completed" com listedFilled:1000 vinculado a
         // uma ordem antiga de 200 já zerada, sem nenhuma venda real).
-        if (!op || op.state !== "listing" || !op.listedTick) return;
+        if (!op || op.state !== "listing" || op.listedTick === undefined) return;
         Object.keys(Game.market.orders).some((orderId) => {
             const order = Game.market.orders[orderId];
             if (bound.has(orderId)) return false;
             if (!order || order.roomName !== op.sourceRoom || order.resourceType !== op.resourceType || order.type !== (op.kind === "buy" ? ORDER_BUY : ORDER_SELL) || order.created < op.listedTick) return false;
             if (op.createdListing && (order.price !== op.listedPrice || order.totalAmount !== undefined && order.totalAmount !== op.listedAmount)) return false;
-            bound.add(orderId); op.marketOrderId = orderId; touch(op, "listed"); return true;
+            bound.add(orderId); op.marketOrderId = orderId;
+            if (op.listingPolicyManaged) listingLifecycle.enroll(op, order, Date.now());
+            touch(op, "listed"); return true;
         });
     });
 }
+let listingRecoveryOps = null;
+let listingRecoveryIds = new Set();
 function syncManagedOrders() {
     if (!Game.market || !Game.market.orders) return;
-    activeIds().map(operation).forEach((op) => {
+    const operations = memory().operations;
+    if (listingRecoveryOps !== operations) {
+        listingRecoveryOps = operations;
+        listingRecoveryIds = new Set(Object.keys(operations).filter((id) => operations[id].listingPolicyManaged));
+    }
+    const ids = new Set(activeIds());
+    for (const id of listingRecoveryIds) {
+        if (operations[id]) ids.add(id); else listingRecoveryIds.delete(id);
+    }
+    ids.forEach((id) => {
+        const op = operations[id];
+        if (config.get("listingPolicy.enabled", false) && active(op) && op.kind === "sell" && op.createListing) {
+            claims.owner(op);
+            if (listingLifecycle.automatic(op)) listingLifecycle.enroll(op, Game.market.orders[op.marketOrderId], Date.now());
+        }
+        if (op.listingPolicyManaged) {
+            listingRecoveryIds.add(id);
+            listingLifecycle.observe(op, Game.market.orders[op.marketOrderId], Game.time, Date.now(), config.get("terminalOps.orderConfirmationTicks", 10));
+            const state = op.listingLifecycle;
+            if (state.cancelConfirmed && state.cancelReason === "finished") {
+                delete op.marketOrderId; state.cleanupConfirmed = true; return;
+            }
+            if (state.cancelConfirmed && op.cancelRequested) { cancel(op.id); return; }
+            if (state.halted || state.pending && state.pending.kind === "cancel") return;
+        }
+        if (!active(op)) { maintainListing(op); return; }
         require("./craftLedger").economic(op);
         // op.listedAmount is only set by listResidual() right after it
         // actually creates the order being tracked here - it is the real
@@ -962,7 +1040,7 @@ function syncManagedOrders() {
             op.listedAmount += op.pendingExtension.amount; delete op.pendingExtension;
         }
         const filled = Math.max(0, op.listedAmount - remainingOnMarket - (op.listedFilled || 0));
-        if (filled <= 0) return;
+        if (filled <= 0) { maintainListing(op); return; }
         op.listedFilled = (op.listedFilled || 0) + filled;
         op.remaining = Math.max(0, op.remaining - filled);
         const fees = (op.orderFeesRemaining || 0) * Math.min(1, filled / Math.max(1, filled + remainingOnMarket));
@@ -976,7 +1054,26 @@ function syncManagedOrders() {
             if (op.kind === "buy") touch(op, "awaitingReceipt");
             else touch(op, "completed");
         }
+        maintainListing(op);
     });
+}
+function maintainListing(op) {
+    if (!op.listingPolicyManaged || !config.get("listingPolicy.enabled", false)) return;
+    const state = op.listingLifecycle, order = Game.market.orders[op.marketOrderId];
+    if (!state || state.halted || state.pending || !order || op.pendingDeal || op.pendingExtension || op.pendingListingCancel ||
+        op.resourceType === "pixel" || !listingLifecycle.automatic(op)) return;
+    const finished = order.remainingAmount === 0 && op.remaining === 0 && !active(op) &&
+        !Object.values(memory().operations).some((other) => other.parentId === op.id && active(other));
+    if (finished && config.get("listingPolicy.cancelFinished", true)) {
+        const code = typeof Game.market.cancelOrder === "function" ? Game.market.cancelOrder(op.marketOrderId) : ERR_INVALID_ARGS;
+        if (code === OK) state.pending = { kind: "cancel", tick: Game.time, reason: "finished" };
+        return;
+    }
+    const lifetime = config.get("listingPolicy.lifetimeMs", 604800000);
+    if (!(lifetime > 0) || Date.now() - state.createdAt < lifetime || !active(op)) return;
+    op.listingCancelReason = "managed-deadline";
+    const response = cancel(op.id);
+    if (response.ok && op.policy === "swing") require("./swingTrade").protectExpired(op);
 }
 
 function incomingReceipt(roomName, resourceType, value, parentId) {
@@ -1388,6 +1485,15 @@ function runOperation(id) {
         const op = operation(id); if (!active(op)) return;
         claims.owner(op);
         hydrateMarketFees(op);
+        if (op.listingPolicyManaged) {
+            const state = op.listingLifecycle;
+            // Accepted intents reconcile in syncManagedOrders even while decisions are off.
+            if (state && (state.halted || state.pending) || !config.get("listingPolicy.enabled", false)) {
+                if (op.state === "settling") settleDeal(op, op.sourceRoom && room(op.sourceRoom));
+                if (op.state === "recovering") recover(op, op.sourceRoom && owned(op.sourceRoom));
+                return;
+            }
+        }
         const marketOnly = op.marketOnly || marketOnlyResource(op.resourceType);
         const source = op.sourceRoom && (marketOnly ? room(op.sourceRoom) : owned(op.sourceRoom)), target = op.targetRoom && owned(op.targetRoom);
         if (op.policy === "swing" && op.kind === "sell" && source && op.state !== "settling" && !fundedListing(op, source) &&
@@ -1553,6 +1659,18 @@ function cancel(id) {
     const op = operation(id); if (!op) return result(false, "operação desconhecida");
     hydrateMarketFees(op);
     if (op.pendingDeal || op.pendingExtension) { op.cancelRequested = true; op.error = "aguardando confirmação do intent antes de cancelar"; return result(true, id); }
+    if (op.listingPolicyManaged && op.marketOrderId) {
+        const state = listingLifecycle.enroll(op, Game.market.orders && Game.market.orders[op.marketOrderId], Date.now());
+        if (state.cancelConfirmed) { delete op.marketOrderId; delete op.cancelRequested; }
+        else {
+            if (state.pending || state.halted) return result(false, "listing com pendência ou alteração externa; cancelamento suspenso");
+            const status = typeof Game.market.cancelOrder === "function" ? Game.market.cancelOrder(op.marketOrderId) : ERR_INVALID_ARGS;
+            if (status !== OK) return result(false, "cancelOrder retornou " + status);
+            state.pending = { kind: "cancel", tick: Game.time, reason: op.listingCancelReason || "requested" };
+            op.cancelRequested = true;
+            return result(true, id);
+        }
+    }
     if (op.haulerName && Game.creeps && Game.creeps[op.haulerName] && storeValue(Game.creeps[op.haulerName].store, op.resourceType) > 0) { op.cancelRequested = true; op.error = "carga já retirada; aguardando recuperação"; touch(op, "recovering"); return result(true, id); }
     if (op.marketOrderId && Game.market && typeof Game.market.cancelOrder === "function") {
         const status = Game.market.cancelOrder(op.marketOrderId);

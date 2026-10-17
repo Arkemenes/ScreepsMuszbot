@@ -128,4 +128,4 @@ function setFns(rows, ticks) {
 }
 
 module.exports = { record, span, endTick, snapshot, live, reset, drop, setFns, GROUPS,
-    beginTick: accounting.begin, accounting: accounting.snapshot };
+    beginTick: accounting.begin, accounting: accounting.snapshot, accountingRange: accounting.range };

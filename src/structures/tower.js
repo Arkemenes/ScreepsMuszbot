@@ -230,7 +230,7 @@ var tower = {
         const repairTarget = findRepairTarget(tower);
         if (repairTarget) {
             tower.repair(repairTarget);
-            energyLedger.creditTower(tower, "towerRepair");
+            energyLedger.creditTower(tower, "towerRepair", repairTarget);
         }
     },
 };

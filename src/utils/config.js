@@ -8,6 +8,17 @@
 // any level just falls through (constitution §3).
 
 const defaults = {
+    boost: {
+        enabled: false,
+        room: null,
+        compound: "XLH2O",
+        deadlineTicks: 100,
+        drainTimeoutTicks: 300,
+        quarantineWakeTicks: 25,
+        energyReserve: 100000,
+        minReturnRatio: 0.20,
+        continueReturnRatio: 0.10,
+    },
     market: {
         // base 60 (Grafana's sampling): the same grid as marketFlip.scanInterval, so both read
         // the order book on the same tick (utils/orderBook shares the fetch)
@@ -413,6 +424,14 @@ const defaults = {
         terminalFreeRatio: 0.15,
         creditReserve: 100000,
     },
+    listingPolicy: {
+        enabled: false,
+        cancelFinished: true,
+        lifetimeMs: 7 * 24 * 60 * 60 * 1000,
+        descent: false,
+        descentInterval: 1200,
+        floors: {},
+    },
     swing: {
         enabled: true,
         test: true,
@@ -423,6 +442,7 @@ const defaults = {
         listingLifetime: 1209600,
     },
     terminalOps: {
+        reuseOrderBook: true,
         // operations' state machines run every N ticks (a terminal cooldown is 10)
         tickInterval: 5,
         // ROADMAP 0098: a SELL stages its goods in the terminal in batches of
@@ -849,6 +869,10 @@ const defaults = {
         enabled: false,
         minBucket: 9000,
         maxCpuPerTick: 0.5,
+    },
+    energyLedger: {
+        windowTicks: 60,
+        observeWork: true,
     },
     stats: {
         // main.js cpuReport: warm intervals after which the bot prints its own CPU report once

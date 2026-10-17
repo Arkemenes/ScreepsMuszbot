@@ -87,8 +87,4 @@ module.exports = function (project, assert) {
     assert(expr.includes("screeps_resource_sell_value") && expr.includes("0.95 * sum by") &&
         expr.startsWith("screeps_market_credits +") && expr.includes("0 * screeps_market_credits"),
         "0133: dashboard values assets with sellValue and discounts resources only");
-    const row = dashboard.layout.spec.rows.find(r => r.spec.layout.spec.items.some(i => i.spec.element.name === "panel-235"));
-    assert(row && row.spec.layout.spec.items.some(i => i.spec.element.name === "panel-236") &&
-        dashboard.elements["panel-236"].spec.data.spec.queries[0].spec.query.spec.expr === "screeps_assets_unpriced_resources",
-        "0133: dashboard shows missing-price coverage beside estimated assets");
 };

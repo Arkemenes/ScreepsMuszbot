@@ -124,25 +124,36 @@ function internalSource(room, r, needed, rooms) {
     return null;
 }
 function listingPrice(room, r, limit, orders) {
+    if (config.get("listingPolicy.enabled", false)) {
+        const quote = book.quote(ORDER_SELL, r);
+        const decision = require("./listingPolicy").sellQuote({ orders: quote.orders, covered: quote.covered,
+            own: Game.market.orders || {}, resource: r, limit, basis: "swing-reference", step: config.get("terminalOps.marketPriceStep", 0.001) });
+        return decision.ok ? decision.price : null;
+    }
     const asks = orders.filter((o) => o && o.type === ORDER_SELL && o.resourceType === r && o.price > 0 &&
         (o.remainingAmount === undefined ? o.amount : o.remainingAmount) > 0 && !(Game.market.orders || {})[o.id]).map((o) => o.price);
     const step = config.get("terminalOps.marketPriceStep", 0.001);
     return Math.max(limit / 0.95 + step, asks.length ? Math.min.apply(null, asks) - step : limit / 0.95 + step);
 }
 function expire() {
-    const ops = require("./terminalOps"), mem = memory();
+    const ops = require("./terminalOps");
     const all = Memory.terminalOps && Memory.terminalOps.operations || {};
     Object.keys(all).forEach((id) => {
         const op = all[id];
         if (!accounting.active(op) || op.policy !== "swing" || !op.fixedListing || !op.listedTick) return;
+        // The new policy owns wall-clock expiry; never fall back to legacy tick age.
+        if (op.listingPolicyManaged || config.get("listingPolicy.enabled", false)) return;
         if (Game.time - op.listedTick < config.get("swing.listingLifetime", 1209600)) return;
-        const key = op.sourceRoom + ":" + op.resourceType;
-        if (!op.expirationProtected) {
-            mem.noRelist[key] = (mem.noRelist[key] || 0) + Math.max(0, op.remaining || 0);
-            op.expirationProtected = true;
-        }
+        protectExpired(op);
         ops.cancel(id);
     });
+}
+function protectExpired(op) {
+    const mem = memory(), key = op.sourceRoom + ":" + op.resourceType;
+    if (!op.expirationProtected) {
+        mem.noRelist[key] = (mem.noRelist[key] || 0) + Math.max(0, op.remaining || 0);
+        op.expirationProtected = true;
+    }
 }
 let lastScan = null;
 const impl = { quote, observe, internalSource };
@@ -213,6 +224,7 @@ function tick() {
             const qty = Math.floor(Math.min(free - blocked, policy.value(room.terminal, r) + policy.terminalFree(room)));
             if (!qty) { observe(room, r, "sell", { reason: blocked ? "expired-lot" : "no-staging-space" }); return; }
             const price = listingPrice(room, r, q.limit, ordersFor(r));
+            if (!(price > 0)) { observe(room, r, "sell", { reason: "no-competitive-listing" }); return; }
             if (price * qty * 0.05 > accounting.available()) { observe(room, r, "sell", { reason: "listing-fee-budget" }); return; }
             observe(room, r, "sell", { reason: "eligible-listing", quantity: qty, effective: price * 0.95, price, reference: q.reference, limit: q.limit });
             if (!test) ops.sellLot(room.name, r, sold + qty, q.limit, true, true, Object.assign({}, saleOptions, { fixedListing: true }));
@@ -234,4 +246,4 @@ function sold(roomName, r, quantity) {
 global.swingStatus = status;
 // Read current references without scanning orders or waiting for the swing cadence.
 global.swingReference = (resourceType, kind = "buy") => reference(resourceType, kind);
-module.exports = { tick, quote, effective, reference, status, internalSource, listingPrice, expire, sold, resetScan() { lastScan = null; } };
+module.exports = { tick, quote, effective, reference, status, internalSource, listingPrice, expire, protectExpired, sold, resetScan() { lastScan = null; } };

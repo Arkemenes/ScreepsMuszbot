@@ -92,13 +92,14 @@ module.exports = function (project, assert) {
             "0145: divergent candidate fails compareImplementations");
         const errors = compareImplementations(reference, () => { throw new Error("x"); }, worlds);
         assert(errors.equal === false, "0145: a candidate that throws where the reference does not is a divergence");
+        require("./equivalenceOracleCases")(project, assert);
 
         // --- ordersAudit: fee estimate, age and distance to the best competitor
         {
             const audit = fresh("ordersAudit");
             useGame(100000);
             Game.market = { orders: {
-                a: { id: "a", type: "sell", resourceType: "X", roomName: "R1", price: 120, remainingAmount: 1000, totalAmount: 1000, active: true, created: 100000 - 21000 * 10 },
+                a: { id: "a", type: "sell", resourceType: "X", roomName: "R1", price: 120, remainingAmount: 1000, totalAmount: 1000, active: true, created: 100000 - 21000 * 10, createdTimestamp: Date.now() - 10 * 86400000 },
                 b: { id: "b", type: "sell", resourceType: "X", roomName: "R1", price: 100, remainingAmount: 500, totalAmount: 500, active: true, created: 100000 - 100 },
                 c: { id: "c", type: "sell", resourceType: "H", roomName: "R1", price: 9, remainingAmount: 0, totalAmount: 400, active: false, created: 100000 - 5000 },
             }, getAllOrders: () => [
@@ -123,7 +124,7 @@ module.exports = function (project, assert) {
             const hadRaw = typeof global.RawMemory === "object" && typeof global.RawMemory.get === "function";
             if (hadRaw) global.cpuAuditMemory();
             console.log = saved.log;
-            assert(/\[cpuReport\] armed: prints after 599 warm intervals/.test(lines[0]),
+            assert(/\[cpuReport\] armed: prints after 600 new ticks/.test(lines[0]),
                 "0145: cpuReport arms and caps at the balance window");
             assert(/\[cpuAuditRoomFields\].*"lastVisit"/.test(lines[1]), "0145: cpuAuditRoomFields is a real console function");
             if (hadRaw) assert(/\[cpuAuditMemory\].*"rawChars"/.test(lines[2]), "0145: cpuAuditMemory is a real console function");

@@ -94,7 +94,7 @@ global.listWanted = function (roomName) {
 function sourceContainers(room) {
     return _.filter(
         roomCache.structuresByType(room, STRUCTURE_CONTAINER),
-        (c) => nearSource(room, c)
+        (c) => c !== room.storage && !require("../utils/bootstrapStorage").isBuffer(room, c) && nearSource(room, c)
     );
 }
 
@@ -123,7 +123,7 @@ function pickableEnergy(room) {
     }
     for (const s of roomCache.structures(room)) {
         if (
-            s.structureType === STRUCTURE_CONTAINER ||
+            (s !== room.storage && s.structureType === STRUCTURE_CONTAINER) ||
             (s.structureType === STRUCTURE_LINK && !s.isCollector())
         ) {
             e += (s.store && s.store[RESOURCE_ENERGY]) || 0;

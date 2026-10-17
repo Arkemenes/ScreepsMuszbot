@@ -1,51 +1,59 @@
-# 0155 — Utilização dos labs (`labReport`)
+# 0155 — Utilização e produção confirmada dos labs
 
-- **Status:** spec
-- **Owner:** ARK-128
-- **Created:** 2026-10-15
-- **Habilita:** 0150 (decide se `OPERATE_LAB` tem retorno)
+> **Decisão posterior — 16/10/2026:** implementação local autorizada passo a passo no [plano de execução incremental](../../../docs/plano-execucao-incremental-2026-10-16.md). Histórico persistente sofisticado adiado até necessidade demonstrada; cobertura inicial no heap, com lacunas explícitas. Gates operacionais continuam válidos.
+
+- **Status:** planned — execução local autorizada em etapas; não implementada.
+- **Issue:** ARK-134 (filha de ARK-128).
+- **Created / revisão documental:** 2026-10-15.
+- **Contrato integrado e aceite:** [planejamento vigente](../../../docs/planejamento-integrado-2026-10-16.md); análises anteriores são históricas.
+- **Autorização:** implementação local incremental; publicação/ativação e gastos seguem os gates do plano de execução.
 
 ## Problem
 
-`OPERATE_LAB` só aumenta a produção se os labs de saída estiverem **limitados pela taxa de reação**,
-não por falta de reagente ou de transporte. O `labPolicyRuntime` já classifica cada lab por tick em
-`state.wait` (`cooldown`, `input`, `ready`, `capacity`, `switch`, `unavailable`), mas nada agrega isso: sem
-essa medição, o ganho de ~1.400 XLH2O/dia do power creep (0150) é uma suposição.
+state.wait é resultado parcial: ready precede execução e pode virar reservation/intent error. Early returns e consultas repetidas
+não formam amostragem uniforme. Cooldown elevado de um lab não demonstra ganho marginal da cadeia ou venda adicional.
 
-## Desired outcome
+## Desired outcome / In scope
 
-`labReport` imprime sozinho, por sala industrial, a fração de ticks de cada lab de saída em cada estado,
-a utilização produtiva e uma conclusão objetiva: **limitada pela taxa de reação** ou **limitada por
-reagente/transporte**.
+- Uma observação final por lab/tick, incluindo períodos sem assignments. Classificar saída/entrada/lab não alocado e produto/fase; labs existentes sem atividade não desaparecem do denominador de disponibilidade.
+- Estados distinguem cooldown, ready, intent aceito, confirmação, input, transporte quando comprovado, switch, capacity, reservation, intent erro, planning, powers, manual/boost, sem demanda, unavailable e unknown.
+- Capturar decisão em assignments, resultado em execute e confirmação posterior; contabilizar cada uma no tick de origem e sem somar consultas repetidas.
+- Separar disponibilidade física, utilização da saída elegível e produção final da cadeia; registrar denominador de cada métrica. Ready/cooldown são proxies, não confirmação nem receita.
+- Contar quantidade efetiva confirmada, efeitos e produto; estimativa LAB_REACTION_AMOUNT/REACTION_TIME rotulada, sem dupla contagem de intermediários.
+- reactionLimited threshold proposto 0.85 é indicador descritivo; inputLimited inclui causas observadas de espera, sem presumir transporte apenas porque falta reagente.
+- Conclusão para investimento exige pelo menos 2 dias reais válidos e gargalo da cadeia completa, abastecimento de energia/reagentes, hauler e capacidade de venda; janela curta pode imprimir sem aprovar.
+- Heap limitado por entidades/janelas; reset/gaps preservam agregados confirmados e descontam lacunas conforme 0157. Não declarar dois dias por multiplicar ticks por 4.1 ou juntar globais sem dados persistidos.
+- `labReport(n=1200)`/auto-report exibem top 3 motivos, unknown/cobertura, quantidades estimadas/confirmadas e sugestão proporcional à evidência; quando inputLimited não provar retorno zero absoluto, informar hipótese em vez de encerrar definitivamente o poder.
 
-## In scope
+### Observação final e cobertura por regime
 
-- Contadores heap por sala e por lab de saída, incrementados onde `state.wait` é gravado
-  (`labPolicyRuntime.assignments`); nada novo por tick fora disso.
-- Utilização produtiva = `(cooldown + ready) / ticks` do lab de saída (estar em cooldown = reação em andamento;
-  `ready` = reação emitida neste tick).
-- Indicador **`reactionLimited`** = utilização produtiva >= `labs.reactionLimitedThreshold` (padrão 0,85) na
-  janela, e **`inputLimited`** = parcela de `input` + `switch` + `unavailable` >= 0,15.
-- Unidades produzidas por dia estimadas = `lab-ticks produtivos x LAB_REACTION_AMOUNT / REACTION_TIME[produto]`
-  (conferir `REACTION_TIME` real) e comparação com a produção confirmada da cadeia.
-- `labReport(n=1200)` manual e auto-relatório pós-boot (`stats.autoLabReportTicks`).
+Coletar uma observação final por lab/tick em hook próprio depois de todos os executores, antes de cpuMeter.endTick, inclusive em cache hit/off de planejamento e sem assignments. Se coleta estiver off, manutenção de pendências continua, mas o período não tem cobertura.
 
-## Out of scope
+Registro efêmero: {originTick,labId,room,product,phase,physicalAvailable,eligibleOutput,state,intentStatus,expectedAmount,confirmedAmount,quality,owner,regimeId}. Uma classificação principal por lab/tick; confirmação é resultado vinculado à origem. Fonte fecha em até5ticks como confirmado/unknown para coverage; após fechamento, tardio é só diagnóstico. Estatísticas por população/qualidade são as do metricSet da0157, incluindo saídas elegíveis distintas do físico.
+Precedência da classificação: unavailable/manualBoost/powersUnsupported; planning/switch; erro/claim/reservation/capacity/input; intentAccepted; cooldown/ready/noDemand; unknown. O observador não inventa falta de transporte apenas de input ausente.
+Disponibilidade usa todos os labs físicos observados; utilização usa saídas elegíveis por tick. Produção final por cadeia/produto conta somente quantidade final atribuível confirmada e entregue; intermediários não somam. Confirmar quantidade variável sem alterar decisões do executor.
 
-- Mudar política de labs; otimizar `labPolicy` (isso é 0156/L3).
+Persistência e gate são exclusivamente os da [0157](../0157-operational-readiness/spec.md): 48h efetivamente observadas no mesmo regime, duração/qualidade/denominadores explícitos e limites serializados. Reset conserva agregado confirmado e perde cauda não persistida. Flag off abre gap. Regime novo não herda aprovação anterior.
+ReactionLimited=0.85 é descritivo; investimento também exige reagentes, energia, transporte, ops e demanda executável da cadeia completa. Baseline habilita avaliação do piloto; regime operado exige nova evidência antes de expansão.
 
 ## Acceptance criteria
 
-1. The smoke test asserts the counters reproduce the `state.wait` states of a scripted lab sequence, per lab.
-2. The smoke test asserts `reactionLimited` is true for a fixture with ~95% productive ticks and false (with `inputLimited` true) for one with ~50%.
-3. The smoke test asserts the report prints by itself after the window and does not alter any lab decision.
-4. The smoke test asserts the report prints the **top 3 idle reasons** (`input`, `switch`, `unavailable`, `capacity`) per room with their share of ticks and a one-line suggestion (e.g. "limited by reagent/transport: improve hauler supply before considering OPERATE_LAB").
-5. O custo de CPU do contador é O(labs) por chamada de `assignments` (medir pelos spans do `cpuReport`).
+1. Sequência roteirizada reproduz estados por tick/lab/produto; múltiplas chamadas no mesmo tick contam uma observação e early returns não somem do relatório.
+2. Ready com intent rejeitado não vira produção; reservas/erros/capacidade/input e confirmação tardia são distintos e ligados ao tick de origem.
+3. Fixtures 95% e 50% de utilização indicam gargalo descritivo com denominador explícito; cobertura curta/lacunosa, mudança de regime ou qualidade insuficiente impede gate econômico; reset sozinho não apaga evidência válida.
+4. Produção confirmada por produto/fase usa quantidade real e não soma intermediários à produção final; estimativa por cooldown permanece rotulada.
+5. Auto-relatório mostra top 3 causas e cobertura sem alterar decisão/intents; overhead da observação final medido antes de endTick.
+6. Labs ativos com falta de reagentes, energia logística, transporte ou venda não aprovam ganho marginal de OPERATE_LAB somente pela utilização; exige 2 dias reais válidos e verificação da cadeia.
+
+7. `0155 representative coverage`: gate exige 172800000ms observados no mesmo regime e qualidade da 0157; dias parciais/reset/off/alteração de população/topologia não fabricam 48h; preservar agregados e respeitar tetos.
 
 ## Constitution check
 
-Heap só; relatório sob `guard()`; nenhuma Memory nova.
+Reusar census/roomCache; configuração em Memory.settings; dados derivados no heap limitado;
+somente ownership/recuperação persistente necessária, nunca objetos de jogo; guard e stall guard.
+Observações e relatórios novos antes de cpuMeter.endTick. Preservar cascata crítico → saudável → ótimo e fallback.
+Smoke e invariantes verificam comportamento, não só ausência de exceção.
 
-## Open questions
+## Review gate
 
-- Janela mínima para confiar (sugestão: 1 dia real, ~21.000 ticks, por causa dos ciclos de 60 ticks e das trocas de fase).
+[Revisão independente e reavaliação favorável](../../../docs/revisao-final-planejamento-2026-10-16.md): R1–R6 fechados no desenho. [Resposta e precisões](../../../docs/resposta-revisao-final-planejamento-2026-10-16.md). ARK-141 conclui somente planejamento/documentação; AC de runtime/live permanecem abertos. Implementação local segue o plano incremental autorizado; ativação/investimentos preservam os gates operacionais.

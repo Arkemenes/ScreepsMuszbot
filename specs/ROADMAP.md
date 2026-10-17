@@ -1,5 +1,18 @@
 # Roadmap
 
+Reparo localARK-145: [cpuReport isolado](../docs/cpu-report-isolado-2026-10-16.md) para comparar150ticks novos por flag. Pacote119 foi publicado pelo usuário aproximadamente18:17; evidência anterior mistura estados e não aprova ganhoL2. Reparo preparado sem novo deploy do agente; ARK-128/139 e aceite live continuam abertos.
+
+## Execução incremental autorizada — 2026-10-16
+
+[Etapas, dependências e aceite](../docs/plano-execucao-incremental-2026-10-16.md): 0156-A/ARK-142 concluído offline; etapa2/T1–T2 da0154 (ARK-143) publicada pelo usuário; 0153-A1 físico e0156-L2-book implementados localmente, sem novo deploy. [Pacote](../docs/pacote-local-listagens-2026-10-16.md); demais etapas separadas. Histórico persistente sofisticado da 0157 adiado até necessidade demonstrada; core/relatórios iniciais no heap. O gate de 48h de operator permanece. Esta decisão posterior substitui as restrições gerais de implementação da consolidação anterior. Sem publicação/ativação nesta entrega.
+
+## Consolidação documental de 2026-10-16 — ARK-141 (histórico anterior à autorização)
+
+0148–0150 e0153–0157: specs/plans/tasks planejados e revisados independentemente; R1–R6 corrigidos e reavaliados favoravelmente. Registro histórico da consolidação documental; a autorização posterior de execução consta no plano incremental.
+[Planejamento integrado/DAG/aceite](../docs/planejamento-integrado-2026-10-16.md), [handoff](../docs/handoff-agente-2026-10-15.md) e [revisão final](../docs/revisao-final-planejamento-2026-10-16.md).
+Fundamentos isoláveis0156-A/0154-A/0153-A →0157 →relatórios/experimentos; L2/L3 e pilotos seguem pré-requisitos por pacote. Fase0 não depende de reações operadas; operador exige compatibilidade e48h observadas do regime atual.
+Nenhuma implementação/ativação/publicação autorizada. ARK-128 permanece aberta; issues de features em Backlog. Ganhos antigos não são aditivos nem medições atuais.
+
 0079 / ARK-132 (2026-10-15): Resource Prices corrigido localmente. A variável
 `resource` aceita preços atuais sem `fairPrice` e usa `DS_PROMETHEUS` do painel;
 consultas numéricas com interpolação regex explícita. Regressão falhou antes
@@ -10,7 +23,7 @@ e confirmação no Grafana externo pendentes (sem acesso nesta sessão).
 # 0105 concluído: paridade de entrega do miner com a cascata e os thresholds de torre do hauler.
 
 
-O backlog canônico. Uma linha por feature. `specs/features/NNNN-*/` tem o
+O índice local das features; o Linear é a fonte de verdade das tarefas. Uma linha por feature. `specs/features/NNNN-*/` tem o
 detalhe.
 
 **Status:** `spec` (rascunho) · `ready` (revisada) · `planned` · `in-progress`
@@ -18,15 +31,17 @@ detalhe.
 
 | #    | Feature | Status | Notas |
 |------|---------|--------|-------|
-| 0156 | [CPU: lógica restante](features/0156-cpu-logic-remaining/spec.md) | spec | ARK-139 (filha de ARK-128): listagens ociosas (probe 96–99%), labPolicy (92%), intel, picos, partida a frio, limpeza O3. Caches só por assinatura, com oráculo/fuzz e validação em produção. ~0,7–1,0 CPU. |
-| 0155 | [Utilização dos labs](features/0155-lab-utilization/spec.md) | spec | ARK-134 (filha de ARK-128): `labReport` (fração de ticks por estado, `reactionLimited`/`inputLimited`); decide se `OPERATE_LAB` (0150) tem retorno. |
-| 0154 | [`energyReport` e experimentos funcionais](features/0154-energy-report-experiments/spec.md) | spec | ARK-133 (filha de ARK-128): energia por categoria/duty/RCL por sala e framework de experimento com rollback automático; habilita 0148 e 0149. |
-| 0153 | [Revisão da política de listagens de venda](features/0153-listing-policy-review/spec.md) | spec | ARK-138 (filha de ARK-128): spec completa e aprovada pelo dono — listar só se competitiva (P1), limpar esgotadas (P2), prazo em tempo real (P3), descida grátis de preço (P4, desligada), pixel (P5: `deal` em bids, `extendOrder` na ordem existente, nunca segunda ordem, não cancelar a listagem). Taxa afundada não se perde sem necessidade. Auditoria: 19/30 listagens acima do mercado (3,88 M de taxa). |
+| 0158 | [Storage provisório até RCL 4](features/0158-bootstrap-storage/spec.md) | done (local) | ARK-161: container no tile do terminal como storage canônico; energia/minerais drenados ao definitivo, remoção só após entrega confirmada. Smoke11915/check/build verdes; sem commit/publicação. |
+| 0157 | [Operational readiness](features/0157-operational-readiness/spec.md) | in-progress | ARK-140: checker puro de envelope/prefixos local como dependência do boost. Coleta de renda/entrega, admissão compartilhada, métricas e evidência operacional pendentes; persistência sofisticada adiada. Sem ativação. |
+| 0156 | [CPU: lógica restante](features/0156-cpu-logic-remaining/spec.md) | in-progress | ARK-139/ARK-142: L2-book local com equivalência3/5/10salas e ganho CPU live pendente; oráculo pós-execução/sequencial concluído localmente (smoke11616 verde; build isolado; dashboard preservado); redundâncias/caches posteriores; segurança/observação por tick; latência de scans fatiados exige revisão própria. Execução local autorizada em etapas; ativação pendente. |
+| 0155 | [Utilização dos labs](features/0155-lab-utilization/spec.md) | planned | ARK-134: observação final por lab/tick, execução/confirmação, produto/fase e cobertura; 48h efetivamente observadas no regime e cadeia completa antes de investimento no operador. Execução local autorizada em etapas; ativação pendente. |
+| 0154 | [`energyReport` e experimentos funcionais](features/0154-energy-report-experiments/spec.md) | in-progress | ARK-133/ARK-143: etapa 2/T1–T2 local (slots/prioridades/RCL8 e qualidade, sem confirmação geral); WORK integrado/abastecimento/relatórios pendentes; experimentos serializáveis com ownership/rollback e edição manual preservada. Execução local autorizada em etapas; ativação pendente. |
+| 0153 | [Revisão da política de listagens de venda](features/0153-listing-policy-review/spec.md) | in-progress | ARK-138: 0153-A1 físico local, off por padrão; pixel automático/live pendentes; competitividade na criação/extensão, limpeza reconciliada, timestamps reais e pixel protegido; taxas históricas/incrementais e refund potencial de expiração separados do cancelamento gerido. Execução local autorizada em etapas; ativação pendente. |
 | 0152 | [Hauler ocioso olha a cada 5 ticks](features/0152-hauler-idle-backoff/spec.md) | done | ARK-128: ideia do dono; hauler vazio sem job busca ao ficar ocioso e depois a cada 5 ticks (spawn com fome mantém busca por tick). Alvo 0,5–1,0 CPU (`pickLoad` 0,96 + `pickMineralJob` 0,95). Publicado; a medir. Publicado; defaults ligados, validado pelo dono (teste direto em produção; A/B removido). |
-| 0151 | [Plano de otimização e capacidades](../docs/roadmap-otimizacao-e-capacidades-2026-10-15.md) | spec | ARK-128: avaliação com números e roadmap em 14 passos (CPU lógica L1–L7, unidades U1–U4, boosts B1–B4, power P1/PC1, observabilidade O1–O3). Teto acumulado ~11,3–13,3 CPU/tick; <10 inalcançável sem perder funcionalidade. Executor: outro agente; specs 0148–0150 e 0153–0156 completas (spec/plan/tasks); passagem em docs/handoff-agente-2026-10-15.md. |
-| 0150 | [Power creeps e GPL](features/0150-power-creeps/spec.md) | spec | ARK-137 (filha de ARK-128): decisão vender power x processar para GPL (~11,2 mil de power à venda = ~GPL 3); power creeps dão economia, não CPU. Análise em docs/units-boosts-power-analysis-2026-10-15.md. |
-| 0149 | [Boosts de lab automáticos](features/0149-lab-boosts/spec.md) | spec | ARK-136 (filha de ARK-128): XLH2O (já produzido e vendido) nos builders, GH nos upgraders, KH nos haulers se medir. Economia/velocidade, não CPU. |
-| 0148 | [População sob demanda](features/0148-on-demand-population/spec.md) | spec | ARK-135 (filha de ARK-128): builders (~0,35 CPU cada, sempre 1 por sala) e upgraders só com demanda; é a alavanca de unidades que reduz CPU. Estimativa 1–2,5 CPU, precisa de revisão de política. |
+| 0151 | [Planejamento integrado de otimização e capacidades](../docs/planejamento-integrado-2026-10-16.md) | planned | ARK-141: contratos/DAG/aceite finais e revisão independente favorável; histórico preservado, sem implementação/ganho live concluídos. |
+| 0150 | [Power creeps e GPL](features/0150-power-creeps/spec.md) | planned | ARK-137: target GPL inicial 3 configurável/evolutivo, excedente e payback realizáveis; cancelamento mínimo necessário; compatibilidade de reações operadas antes do operador. Execução local autorizada em etapas; ativação pendente. |
+| 0149 | [Boosts de lab automáticos](features/0149-lab-boosts/spec.md) | in-progress | ARK-136: 0149-A/B locais: seleção/prévia, política de retorno, bundle físico/preparação/transporte/cleanup. Núcleo puro de confirmação testado. Contexto/admissão de combustível futuro, executor automático e piloto XLH2O próprio em builders pendentes; desligado, sem deploy. |
+| 0148 | [População sob demanda](features/0148-on-demand-population/spec.md) | planned | ARK-135: preservar trabalho útil de obra/repair/RCL/GCL, antecipar reposição e observar ausência efetiva; população só reduz quando capacidade restante e abastecimento bastarem. Execução local autorizada em etapas; ativação pendente. |
 | 0147 | [Estado estacionário do planejamento](features/0147-steady-state-planning/spec.md) | in-progress | ARK-128: assinatura de labs sem alocação (resolve/activeLabs), probes de hit-rate em assignments/listResidual, cache de decisão só com dado. Alvo ~0,3–0,5 CPU. |
 | 0146 | [Limpeza de Memory e migrações](features/0146-memory-cleanup/spec.md) | done | ARK-128: remove walkMatrix/terrainMatrix órfãos (28,5 KB), exits derivável, defaults de intel, migrações extintas; stubs e stats.market ficam. Teto realista 0,4–0,6 CPU; segmentos de intel avaliados depois (0147). Entregue e medido: Memory 288->204 KB, resíduo 2,33->~1,7; `memoryCleanup` a remover após deploy com `removed = 0` (0156/O3). |
 | 0145 | [Régua de CPU e harness de equivalência](features/0145-cpu-ruler-equivalence/spec.md) | done | ARK-128: contador do profile, reset/versão nas janelas, oráculo de equivalência offline, sombra opcional com orçamento. Sem ganho de CPU. Entregue e medido (2026-10-15): `cpuReport` automático, oráculo, `warmUsed` (o `abTest` foi removido). |

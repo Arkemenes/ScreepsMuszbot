@@ -1,6 +1,10 @@
 const { scaledBody } = require("../utils/population");
 const cpuMeter = require("../utils/cpuMeter");
 const labReactions = require("../utils/labReactions");
+const labReservations = require("../utils/labReservations");
+const terminalClaims = require("../utils/terminalClaims");
+const boostLogistics = require("../utils/boostLogistics");
+const bootstrapStorage = require("../utils/bootstrapStorage");
 const { receivingLink } = require("../utils/energy");
 const { planEntriesAt } = require("../utils/plan");
 const census = require("../utils/census");
@@ -38,7 +42,7 @@ function sourceContainers(room) {
         d.sourceContainers = excludeDangerZone(
             _.filter(
                 roomCache.structuresByType(room, STRUCTURE_CONTAINER),
-                (c) =>
+                (c) => !bootstrapStorage.isBuffer(room, c) &&
                     roomCache.sources(room).some(
                         (src) => Math.abs(src.pos.x - c.pos.x) <= 1 && Math.abs(src.pos.y - c.pos.y) <= 1
                     )
@@ -173,7 +177,7 @@ function labFactoryPowerSpawnNeedingEnergy(room) {
             _.filter(
                 roomCache.myStructures(room),
                 (s) =>
-                    (s.structureType === STRUCTURE_LAB ||
+                    (s.structureType === STRUCTURE_LAB && !((labReservations.entry(room.name, s.id) || {}).managedBy && labReservations.blocked(room.name, s.id)) ||
                         s.structureType === STRUCTURE_FACTORY ||
                         s.structureType === STRUCTURE_POWER_SPAWN) &&
                     // ROADMAP 0111: lab/factory are transitory - only what an
@@ -195,7 +199,7 @@ function controllerContainerCandidates(room) {
             ? excludeDangerZone(
                   _.filter(
                       roomCache.structuresNear(room, room.controller.pos, STRUCTURE_CONTAINER, 3),
-                      (s) => s.store.getFreeCapacity(RESOURCE_ENERGY) > 0
+                      (s) => !bootstrapStorage.isBuffer(room, s) && s.store.getFreeCapacity(RESOURCE_ENERGY) > 0
                   ),
                   room
               )
@@ -709,6 +713,7 @@ function deliverPickValid(creep, last) {
     if (critical.length) return false;
     const storage = creep.room.storage;
     if (!storage) return false;
+    if (target.id !== storage.id) return false;
     return last.rank === 2 ? !resourceTiers.aboveReserve(creep.room) : resourceTiers.aboveReserve(creep.room);
 }
 function pickDeliver(creep) {
@@ -938,7 +943,9 @@ function craftOwner(room, kind) {
     return c ? "craft:" + (c.ownerId || c.id) : null;
 }
 function mineralWithdrawSource(room, resourceType, owner) {
-    const available = (source) => config.get("stockPolicy.enabled", true) ? stockPolicy.consumerAvailable(room, source, resourceType, owner) : source.store[resourceType] || 0;
+    const honorClaims = config.get("stockPolicy.enabled", true) || labReservations.warehouseClaim(room.name, resourceType) > 0;
+    const available = (source) => honorClaims ?
+        stockPolicy.consumerAvailable(room, source, resourceType, owner) : source.store[resourceType] || 0;
     if (room.storage && available(room.storage) > 0) {
         return room.storage;
     }
@@ -984,6 +991,7 @@ function labOutputJob(room) {
         // draining it would just force a round trip
         if (reaction.keep) return;
         labReactions.outputsOf(reaction).forEach((id) => {
+            if (labReservations.blocked(room.name, id)) return;
             const candidate = Game.getObjectById(id);
             if (!candidate || !candidate.mineralType || !candidate.store[candidate.mineralType]) return;
             if (candidate.store[candidate.mineralType] < labDrainFloor(room, candidate)) return;
@@ -1005,6 +1013,7 @@ function labOutputJob(room) {
 function labPolicyDrainJob(room) {
     const desired = Memory.rooms && Memory.rooms[room.name] && Memory.rooms[room.name].labPolicyDesired;
     for (const id of Object.keys(desired || {})) {
+        if (labReservations.blocked(room.name, id)) continue;
         const lab = Game.getObjectById(id);
         if (!lab || !lab.mineralType || lab.mineralType === desired[id] || !lab.store[lab.mineralType]) continue;
         const to = mineralDeliveryTarget(room, lab.mineralType);
@@ -1022,6 +1031,7 @@ function labReagentJob(room) {
             [reaction.b, reaction.input2],
         ];
         for (const [resourceType, labId] of pairs) {
+            if (labReservations.blocked(room.name, labId)) continue;
             const lab = Game.getObjectById(labId);
             if (!lab) continue;
             if (lab.mineralType && lab.mineralType !== resourceType) continue;
@@ -1301,6 +1311,7 @@ function pickMineralJobNow(room) {
     // earlier cached absence whose stock or assignments could have changed.
     const pick = (picker) => checked.has(picker) ? null : safeMineralJob(picker(room), room);
     return (
+        safeMineralJob(boostLogistics.feedJob(room), room) ||
         safeMineralJob(cpuMeter.span("hauler.stockPolicy", () => stockPolicyJob(room)), room) ||
         pick(mineralContainerJob) ||
         pick(labOutputJob) ||
@@ -1365,6 +1376,8 @@ function assignMineralJob(creep, job) {
         chain: !!job.chain,
         amount: job.amount,
         policy: !!job.policy,
+        boostReservationId: job.boostReservationId,
+        boostGeneration: job.boostGeneration,
     };
     return true;
 }
@@ -1405,7 +1418,13 @@ function runMineralJobNow(creep) {
     if (creep.store[resourceType] > 0) {
         job.loaded = true;
         let to = Game.getObjectById(job.toId);
+        if (bootstrapStorage.isBuffer(creep.room, to) && to !== creep.room.storage) to = creep.room.storage;
         let policyLimit = Infinity;
+        if (job.kind === "boostFeed") {
+            policyLimit = to && to.structureType === STRUCTURE_LAB ? boostLogistics.deliveryLimit(creep, job, to) : 0;
+            if (!(policyLimit > 0)) to = mineralDeliveryTarget(creep.room, resourceType);
+        } else if (to && to.structureType === STRUCTURE_LAB && labReservations.blocked(creep.room.name, to.id))
+            to = mineralDeliveryTarget(creep.room, resourceType);
         if (job.policy && to && to.structureType === STRUCTURE_LAB) {
             policyLimit = labReactions.deliveryLimit(creep.room.name, to, resourceType);
             if (!(policyLimit > 0)) to = mineralDeliveryTarget(creep.room, resourceType);
@@ -1431,6 +1450,8 @@ function runMineralJobNow(creep) {
             to.structureType === STRUCTURE_LAB ? policyLimit : Infinity);
         const status = creep.transfer(to, resourceType, amount);
         if (status === OK && job.policy && to.structureType === STRUCTURE_LAB) labReactions.recordDelivery(to.id, amount);
+        if (status === OK && job.kind === "boostFeed" && to.structureType === STRUCTURE_LAB)
+            boostLogistics.delivered(creep, job, to, amount);
         if (status === ERR_NOT_IN_RANGE) {
             creep.moveTo(to, { range: 1, reusePath: 10 });
         }
@@ -1447,18 +1468,27 @@ function runMineralJobNow(creep) {
         clearMineralJob(creep);
         return;
     }
+    // A queued job may predate the reservation. Cleanup still honors manual holds.
+    const reservedLab = from.structureType === STRUCTURE_LAB && labReservations.blocked(creep.room.name, from.id);
+    if (reservedLab && !(job.kind === "transientDrain" && transientStock.excess(from).some((e) => e.resourceType === resourceType))) {
+        clearMineralJob(creep);
+        return;
+    }
     const fuel = require("../utils/terminalFuel");
     const fuelLimit = job.kind === "stockPolicy" && resourceType === RESOURCE_ENERGY ?
         Math.max(0, from === creep.room.terminal ? fuel.releasable(creep.room) - fuel.transit(creep.room, false, creep.name) :
             fuel.keep(creep.room) - stockPolicy.value(creep.room.terminal, RESOURCE_ENERGY) - fuel.transit(creep.room, true, creep.name)) : Infinity;
-    const stockLimit = config.get("stockPolicy.enabled", true) && resourceType !== RESOURCE_ENERGY ?
+    const honorClaims = config.get("stockPolicy.enabled", true) || labReservations.warehouseClaim(creep.room.name, resourceType) > 0;
+    const stockLimit = job.kind === "boostFeed" ? boostLogistics.withdrawalLimit(creep, job, from) : reservedLab ? Math.max(0, from.store[resourceType] - terminalClaims.withdrawn(from, resourceType)) :
+        honorClaims && resourceType !== RESOURCE_ENERGY ?
         stockPolicy.consumerAvailable(creep.room, from, resourceType, craftOwner(creep.room, job.kind === "factoryComponent" ? "factory" : job.kind === "labReagent" ? "lab" : "none")) : Infinity;
     const request = Math.min(fuelLimit, stockLimit, from.store[resourceType], creep.store.getFreeCapacity(resourceType), job.amount === undefined ? Infinity : job.amount,
         config.get("stockPolicy.enabled", true) && job.toId === (creep.room.terminal && creep.room.terminal.id) && resourceType !== RESOURCE_ENERGY ? stockPolicy.terminalFree(creep.room) : Infinity);
     if (!(request > 0)) { clearMineralJob(creep); return; }
     const status = creep.withdraw(from, resourceType, request);
-    if (status === OK && config.get("stockPolicy.enabled", true) && resourceType !== RESOURCE_ENERGY)
+    if (status === OK && (job.kind === "boostFeed" || reservedLab || honorClaims && resourceType !== RESOURCE_ENERGY))
         stockPolicy.recordConsumerWithdraw(from, resourceType, request);
+    if (status === OK && job.kind === "boostFeed") boostLogistics.withdrawn(creep, job, from, request);
     if (status === ERR_NOT_IN_RANGE) {
         creep.moveTo(from, { range: 1, reusePath: 10 });
         return;
@@ -1484,6 +1514,9 @@ function loadEnergy(creep, src) {
     reservations.claim(creep, src.id);
     if (src.dest) creep.memory.forcedDeliver = src.dest;
     if (src.craftOwner) { creep.memory.fundedCraft = src.craftOwner; reservations.claimDeliver(creep, src.dest); }
+    const trackBoost = Memory.rooms && Memory.rooms[creep.room.name] && Memory.rooms[creep.room.name].labBoostReservations;
+    const boostEnergyAmount = trackBoost && src.act === "withdraw" ? Math.min(target.store[RESOURCE_ENERGY] || 0,
+        creep.store.getFreeCapacity(RESOURCE_ENERGY), src.amount === undefined ? Infinity : src.amount) : 0;
     const status =
         src.act === "pickup"
             ? creep.pickup(target)
@@ -1493,6 +1526,8 @@ function loadEnergy(creep, src) {
         require("../utils/craftLedger").preempt(creep.room, target, RESOURCE_ENERGY, borrowed);
         stockPolicy.recordConsumerWithdraw(target, RESOURCE_ENERGY, src.amount);
     }
+    if (status === OK && boostEnergyAmount)
+        boostLogistics.energyWithdrawn(creep, target, boostEnergyAmount, !!src.craftOwner || borrowed > 0);
     if (status === ERR_NOT_IN_RANGE) creep.moveTo(target, { range: 1 });
     return true;
 }
@@ -1517,6 +1552,8 @@ var hauler = {
             runLootJob(creep);
             return;
         }
+
+        if (bootstrapStorage.runHauler(creep, () => !!essentialConsumer(creep))) return;
 
         // ROADMAP 0051: finish an in-progress non-energy job before
         // touching energy logic again - see the block's own comment above.
@@ -1721,6 +1758,7 @@ var hauler = {
     },
 
     // exposed for the offline smoke test only
+    runMineralJobNow,
     stockPolicyJob,
     pickMineralJob,
     pickLoad,

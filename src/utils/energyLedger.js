@@ -1,9 +1,7 @@
 // Per-room energy spend accounting (ROADMAP 0081) - where the economy's
 // energy goes (spawn/build/repair/upgrade/tower), not just how much is in
 // stock. snapshot() reports the trailing SUM over the last
-// energyLedger.windowTicks ticks (default 60 - "last 60 seconds", the usual
-// 1-tick-~1-second approximation used elsewhere in this codebase, there's
-// no real wall-clock signal available), not just the current tick, so a
+// energyLedger.windowTicks game ticks (default 60), not wall-clock seconds, so a
 // single Grafana sample stays meaningful even if it's read once every few
 // ticks. Heap-resident, same pattern as utils/traffic.js/census - never
 // persisted to Memory itself, only its snapshot is (utils/stats.js).
@@ -26,10 +24,20 @@
 // dependem de observar o store depois.
 
 const config = require("./config");
+const workModel = require("./energyWork");
 
 let tick = -1;
 let byRoom = {}; // current (still accumulating) tick, per room
 const history = {}; // roomName -> [{tick, categories}], oldest first
+let work = null, finalized = false, observeWork = true, observerErrors = 0;
+let startedTick = -1;
+let resolutionFailed = false;
+const emptyWork = { rooms: {}, events: [] };
+const qualityHistory = []; // Only faults/off/gaps within the same existing heap window.
+const hooked = Symbol("energyLedgerHook");
+const auxiliaryActions = ["drop", "transfer", "withdraw", "pickup", "cancelOrder",
+    "heal", "rangedHeal", "dismantle", "attackController", "harvest", "suicide"];
+const coverageActions = ["drop", "transfer", "withdraw", "pickup", "cancelOrder"];
 
 const CATEGORIES = [
     "spawn",
@@ -45,7 +53,8 @@ const CATEGORIES = [
 ];
 
 function windowTicks() {
-    return config.get("energyLedger.windowTicks", 60);
+    const value = config.get("energyLedger.windowTicks", 60);
+    return Number.isFinite(value) && value > 0 ? Math.max(1, Math.floor(value)) : 60;
 }
 
 // drop entries fallen out of the trailing window - called both when a tick
@@ -60,19 +69,34 @@ function trim(roomName, cutoffTick) {
 function ensureTick() {
     if (tick === Game.time) return;
 
-    if (tick !== -1) {
+    if (Game.time < tick) {
+        for (const name of Object.keys(history)) delete history[name];
+        qualityHistory.length = 0;
+        startedTick = Game.time;
+    } else if (tick !== -1) {
         // archive the tick that just finished accumulating
-        for (const roomName of Object.keys(byRoom)) {
+        const current = currentRooms();
+        const observations = resolvedWork().rooms;
+        for (const roomName of Object.keys(current)) {
             const entries = history[roomName] || (history[roomName] = []);
-            entries.push({ tick, categories: byRoom[roomName] });
+            entries.push({ tick, categories: current[roomName], observation: observations[roomName] });
         }
+        if (observerErrors || !observeWork) qualityHistory.push({ tick, through: tick, errors: observerErrors, disabled: !observeWork });
+        if (Game.time > tick + 1) qualityHistory.push({ tick: tick + 1, through: Game.time - 1, gap: true });
     }
 
     tick = Game.time;
+    if (startedTick === -1) startedTick = tick;
     byRoom = {};
+    work = workModel.create(tick);
+    finalized = false;
+    observerErrors = 0;
+    resolutionFailed = false;
+    observeWork = config.get("energyLedger.observeWork", true) !== false;
 
     const cutoff = tick - windowTicks() + 1;
     for (const roomName of Object.keys(history)) trim(roomName, cutoff);
+    while (qualityHistory.length && qualityHistory[0].through < cutoff) qualityHistory.shift();
 }
 
 function record(roomName, category, amount) {
@@ -94,53 +118,127 @@ function recordRepair(roomName, structureType, amount) {
     record(roomName, categoryForRepair(structureType), amount);
 }
 
-// Energy spent by a WORK action, as the engine computes it (screeps/engine
-// processor/intents/creeps/{build,repair,upgrade-controller}.js, read 2026-10-15):
-//   build      energy = min(WORK x BUILD_POWER, what is left to build, energy carried)
-//   repair     effect = min(WORK x REPAIR_POWER, energy / REPAIR_COST, hits missing)
-//              energy = min(energy carried, ceil(effect x REPAIR_COST))     -> 1 per WORK part
-//   upgrade    energy = min(WORK x UPGRADE_CONTROLLER_POWER, energy carried)
-// A boosted WORK part only adds PROGRESS / HITS on top ("without extra energy cost" in the
-// docs): the energy removed from the store is always the unboosted amount. The first version of
-// this ledger multiplied the energy by the boost and, for repair, counted the 100 hits per WORK
-// part as if they were energy (real cost: 1 energy per WORK part), so Grafana's repair categories
-// were far above what the engine really charged.
-function workParts(creep) {
-    let total = 0;
-    for (const part of creep.body) if (part.type === WORK && part.hits > 0) total++;
-    return total;
+// Keep observer failures from changing an action's return or aborting a worker.
+function observeCall(creep, method, args, original) {
+    let state, capturedTarget;
+    try {
+        ensureTick();
+        if (observeWork) {
+            state = work.stateFor(creep);
+            if (state && (method === "build" || method === "repair" || method === "upgradeController")) {
+                capturedTarget = workModel.targetData(method === "upgradeController" ? "upgrade" : method, args[0], tick);
+                for (const name of coverageActions) {
+                    if (!creep[name] || !creep[name][hooked]) { work.uncovered(state); break; }
+                }
+            }
+        }
+    } catch (_) { observerErrors++; }
+    const status = original.apply(creep, args);
+    if (status === OK && observeWork) {
+        try {
+            if (method === "cancelOrder") work.cancel(state, args[0]);
+            else if (method === "transfer" && args[0] && args[0].structureType === STRUCTURE_CONTROLLER && args[1] === RESOURCE_ENERGY) {
+                work.accept(state, "upgradeController", [args[0]]);
+            } else work.accept(state, method, args, capturedTarget);
+            if (method === "transfer" && args[1] === RESOURCE_ENERGY && args[0]) work.incoming(args[0]);
+            finalized = false;
+        } catch (_) { observerErrors++; }
+    }
+    return status;
 }
 
-// call these right after a build()/repair()/upgradeController() call that
-// returned OK - amount is an estimate (WORK power, capped by the energy the
-// creep had going in and by the target's remaining need), not a store diff,
-// since the store hasn't actually changed yet from this script's point of
-// view (see the module comment above)
-function creditBuild(creep, site) {
-    const amount = Math.min(
-        workParts(creep) * BUILD_POWER,
-        creep.store[RESOURCE_ENERGY],
-        site.progressTotal - site.progress
-    );
-    record(creep.room.name, "build", amount);
+// Audited WORK call sites use invoke so even a stub/provider observes pre-intent data.
+function invoke(creep, method, target) { return observeCall(creep, method, [target], creep[method]); }
+
+function installHooks(prototype) {
+    for (const method of auxiliaryActions) {
+        const original = prototype[method];
+        if (typeof original !== "function" || original[hooked]) continue;
+        const wrapped = function (...args) { return observeCall(this, method, args, original); };
+        wrapped[hooked] = true;
+        prototype[method] = wrapped;
+    }
 }
 
-function creditRepair(creep, target) {
-    const energy = creep.store[RESOURCE_ENERGY];
-    const effect = Math.min(workParts(creep) * REPAIR_POWER, energy / REPAIR_COST, target.hitsMax - target.hits);
-    const amount = Math.min(energy, Math.ceil(effect * REPAIR_COST));
-    recordRepair(creep.room.name, target.structureType, amount);
+// Compatibility API: post-call data cannot certify complete pre-intent coverage.
+function credit(creep, method, target) {
+    ensureTick();
+    if (!observeWork) return;
+    const state = work.stateFor(creep);
+    work.uncovered(state);
+    work.accept(state, method, [target]);
+    finalized = false;
+}
+function creditBuild(creep, target) { credit(creep, "build", target); }
+function creditRepair(creep, target) { credit(creep, "repair", target); }
+function creditUpgrade(creep, target) { credit(creep, "upgradeController", target); }
+
+function currentRooms() {
+    const result = {};
+    const names = new Set([...Object.keys(byRoom), ...Object.keys(resolvedWork().rooms)]);
+    for (const name of names) result[name] = currentRoom(name);
+    return result;
 }
 
-function creditUpgrade(creep, controller) {
-    const amount = Math.min(workParts(creep) * UPGRADE_CONTROLLER_POWER, creep.store[RESOURCE_ENERGY]);
-    record(creep.room.name, "upgrade", amount);
+function currentRoom(name) {
+    const entry = Object.assign({}, byRoom[name]);
+    const observation = resolvedWork().rooms[name];
+    if (observation) for (const [category, amount] of Object.entries(observation.categories)) entry[category] = (entry[category] || 0) + amount;
+    return entry;
+}
+
+function resolvedWork(includeEvents = false) {
+    if (resolutionFailed) return emptyWork;
+    try { return work.resolve(includeEvents); } catch (_) {
+        observerErrors++;
+        resolutionFailed = true;
+        return emptyWork;
+    }
+}
+
+function finalize() { ensureTick(); resolvedWork(); finalized = true; }
+
+function events() { ensureTick(); return resolvedWork(true).events.map(event => Object.assign({}, event)); }
+
+function snapshotInfo(roomName) {
+    ensureTick();
+    trim(roomName, tick - windowTicks() + 1);
+    const observation = resolvedWork().rooms[roomName];
+    const result = { version: 1, throughTick: tick, windowTicks: windowTicks(),
+        kind: "estimated", confirmed: null, partial: !finalized, workEnabled: observeWork,
+        complete: observeWork && observerErrors === 0,
+        observerErrors, disabledTicks: observeWork ? 0 : 1, gapTicks: 0,
+        coverageStartTick: Math.max(startedTick, tick - windowTicks() + 1),
+        actions: 0, unknownActions: 0, effects: { build: 0, repair: 0, upgrade: 0 } };
+    const add = observation => {
+        if (!observation) return;
+        result.actions += observation.actions;
+        result.unknownActions += observation.unknown;
+        for (const action of ["build", "repair", "upgrade"]) result.effects[action] += observation.effects[action];
+    };
+    for (const entry of history[roomName] || []) add(entry.observation);
+    add(observation);
+    const cutoff = tick - windowTicks() + 1;
+    for (const entry of qualityHistory) {
+        const duration = Math.max(0, Math.min(entry.through, tick) - Math.max(entry.tick, cutoff) + 1);
+        if (!duration) continue;
+        result.observerErrors += entry.errors || 0;
+        if (entry.disabled) result.disabledTicks += duration;
+        if (entry.gap) result.gapTicks += duration;
+    }
+    result.complete = result.complete && result.coverageStartTick <= cutoff && !result.observerErrors &&
+        !result.disabledTicks && !result.gapTicks && !result.unknownActions;
+    return result;
 }
 
 // a tower always spends exactly TOWER_ENERGY_COST per action (or whatever's
 // left, if less) - no diff needed, this is a fixed engine cost
-function creditTower(tower, category) {
-    record(tower.room.name, category, Math.min(tower.store[RESOURCE_ENERGY], TOWER_ENERGY_COST));
+function creditTower(tower, category, target) {
+    const amount = Math.min(tower.store[RESOURCE_ENERGY], TOWER_ENERGY_COST);
+    record(tower.room.name, category, amount);
+    if (amount > 0 && category === "towerRepair" && target && observeWork) {
+        try { work.externalTarget(target); finalized = false; } catch (_) { observerErrors++; }
+    }
 }
 
 // spawn.renewCreep()'s energy cost is a fixed formula (native engine rule),
@@ -171,7 +269,7 @@ function snapshot(roomName) {
 
     // the current tick is still accumulating (hasn't been archived yet) but
     // is inside the window too - it must count
-    const current = byRoom[roomName];
+    const current = currentRoom(roomName);
     if (current) {
         for (const category of CATEGORIES) result[category] += current[category] || 0;
     }
@@ -188,4 +286,9 @@ module.exports = {
     creditTower,
     renewCost,
     snapshot,
+    snapshotInfo,
+    invoke,
+    installHooks,
+    finalize,
+    events,
 };

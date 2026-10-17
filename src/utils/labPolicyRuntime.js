@@ -7,6 +7,7 @@ const labSlots = require("./labSlots");
 const labReactions = require("./labReactions");
 const census = require("./census");
 const cpuMeter = require("./cpuMeter");
+const labReservations = require("./labReservations");
 const layoutCache = new Map();
 const activeCache = new Map();
 
@@ -76,12 +77,11 @@ function resolve(room) {
     const all = labSlots.resolve(room);
     if (!all) return null;
     const mem = Memory.rooms && Memory.rooms[room.name] || {};
-    const reserved = mem.labBoostReservations || {};
     const labs = all.built.map((slot) => Game.getObjectById(all.ids[slot]));
     const active = activeLabs(room, labs);
     const built = all.built.filter((slot, i) => {
         const lab = labs[i];
-        return lab && active[i] && !reserved[lab.id] &&
+        return lab && active[i] && !labReservations.blocked(room.name, lab.id) &&
             !(mem.labLoad && !mem.labLoadAuto && mem.labLoad[lab.id]);
     });
     return built.length < 3 ? null : { built, ids: all.ids };

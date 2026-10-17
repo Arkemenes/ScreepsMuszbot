@@ -52,6 +52,7 @@ _.merge(layoutKey, _.invert(layoutKey));
 let planScanState = {};
 function planScanDue(key, room, forceInterval) {
     const fingerprint =
+        (room.controller ? room.controller.level : 0) + ":" +
         roomCache.structures(room).length +
         ":" +
         roomCache.constructionSites(room).length;
@@ -558,6 +559,8 @@ function createConstructionSites(room) {
     if (!room.controller || !plan) return;
 
     const rcl = room.controller.level;
+    const bootstrapStorage = require("../utils/bootstrapStorage");
+    bootstrapStorage.cancelObsoleteSite(room);
     const current = roomCache.constructionSites(room);
     // How many construction sites we keep queued in a room at once.
     let budget = config.get("planner.maxSitesPerRoom", 8) - current.length;
@@ -585,10 +588,11 @@ function createConstructionSites(room) {
     const priority = (type) =>
         BUILD_PRIORITY[type] === undefined ? 15 : BUILD_PRIORITY[type];
 
-    const queue = plan.buildings
+    const queue = bootstrapStorage.constructionBuildings(room, plan.buildings)
         .filter(
             (b) =>
                 rcl >= (b.minimalRCL || 1) &&
+                (b.structureType !== STRUCTURE_STORAGE || rcl >= 4) &&
                 !have.has(b.x + ":" + b.y + ":" + b.structureType)
         )
         .sort((a, b) => {

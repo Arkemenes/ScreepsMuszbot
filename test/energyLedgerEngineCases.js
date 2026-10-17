@@ -30,4 +30,5 @@ module.exports = function (project, assert) {
     const dry = spend("LedgerEngineG", "repairNormal", () => ledger.creditRepair(creep(body(5), 2, "LedgerEngineG"),
         { structureType: STRUCTURE_ROAD, hits: 0, hitsMax: 5000 }));
     assert(tiny === 1 && dry === 2, "energy ledger: repair is capped by the damage left and by the energy carried (" + tiny + " / " + dry + ")");
+    require("./energyIntentCases")(project, assert);
 };

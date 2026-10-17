@@ -3,6 +3,7 @@ const config = require("./config");
 const census = require("./census");
 const accounting = require("./marketAccounting");
 const terminalClaims = require("./terminalClaims");
+const labReservations = require("./labReservations");
 let withdrawalTick = -1;
 let withdrawals = {};
 function withdrawalKey(source, resource) {
@@ -191,8 +192,18 @@ function commitments(room, excludeId) {
     // Cargo already assigned to a consumer is never available for liquidation.
     census.creepsByRole(room.name, "hauler").forEach((c) => {
         const job = c.memory.mineralJob;
-        if (job) add(job.resourceType, value(c, job.resourceType));
+        if (job && job.kind !== "boostFeed") add(job.resourceType, value(c, job.resourceType));
     });
+    const boostRecords = Memory.rooms && Memory.rooms[room.name] && Memory.rooms[room.name].labBoostReservations;
+    if (boostRecords) {
+        const resources = new Set();
+        for (const id in boostRecords) {
+            const r = boostRecords[id];
+            if (!labReservations.structured(r)) continue;
+            resources.add(r.compound); resources.add(RESOURCE_ENERGY);
+        }
+        for (const resource of resources) add(resource, labReservations.warehouseClaim(room.name, resource, excludedOwner));
+    }
     return sums;
 }
 function available(room, r, excludeId) {

@@ -134,10 +134,7 @@ function opportunisticWorkNow(creep) {
         (s) => -(s.hits / s.hitsMax)
     )[0];
     if (hurt) {
-        const status = creep.repair(hurt);
-        if (status === OK) {
-            energyLedger.creditRepair(creep, hurt);
-        }
+        energyLedger.invoke(creep, "repair", hurt);
         return;
     }
 
@@ -147,10 +144,7 @@ function opportunisticWorkNow(creep) {
             (s) => -(s.progress / s.progressTotal)
         )[0];
         if (site) {
-            const status = creep.build(site);
-            if (status === OK) {
-                energyLedger.creditBuild(creep, site);
-            }
+            energyLedger.invoke(creep, "build", site);
         }
     }
 }

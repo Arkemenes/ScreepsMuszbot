@@ -8,6 +8,53 @@
 
 const roomCache = require("../utils/roomCache");
 const config = require("../utils/config");
+const labReservations = require("../utils/labReservations");
+const boostParts = require("../utils/boostParts");
+const boostConstants = require("../utils/boostConstants");
+const boostPolicy = require("../utils/boostPolicy");
+
+// On-demand forecast only: no intent, movement, economic approval or reservation.
+global.boostPreview = function (creepName, compoundType, count) {
+    const creep = Game.creeps[creepName];
+    if (!creep) return { status: "unknown", reason: "missing-creep" };
+    const constants = boostConstants.current();
+    return {
+        kind: "forecast", creepName, compound: compoundType,
+        requested: boostParts.select(creep.body, compoundType, count, null, constants),
+        labs: roomCache.structuresByType(creep.room, STRUCTURE_LAB).map((lab) => ({
+            id: lab.id, range: creep.pos.getRangeTo(lab), active: !lab.isActive || lab.isActive(),
+            reserved: labReservations.blocked(creep.room.name, lab.id),
+            compatibleMineral: !lab.mineralType || lab.mineralType === compoundType,
+            available: boostParts.select(creep.body, compoundType, count, {
+                mineral: lab.store[compoundType] || 0, energy: lab.store[RESOURCE_ENERGY] || 0,
+            }, constants),
+        })),
+    };
+};
+
+global.boostEvaluate = function (creepName, compound, context) {
+    const creep = Game.creeps[creepName];
+    if (!creep) return { status: "unknown", reason: "missing-creep", worth: false };
+    return boostPolicy.worth(creep.memory.role, compound, { ...context,
+        constants: boostConstants.current(), body: creep.body, ttl: creep.ticksToLive, nowTick: Game.time,
+        minReturnRatio: config.get("boost.minReturnRatio", 0.20), continueReturnRatio: config.get("boost.continueReturnRatio", 0.10) });
+};
+
+global.boostPrepare = function (creepName, labId, context) {
+    const creep = Game.creeps[creepName];
+    if (!creep) return { status: "unknown", reason: "missing-creep" };
+    return require("../utils/boostLogistics").reserve(creep, Game.getObjectById(labId), "XLH2O", context);
+};
+
+global.boostCancel = function (roomName, labId) {
+    const room = Game.rooms[roomName];
+    return !!room && require("../utils/boostLogistics").cancel(room, labId, "manual-cancel");
+};
+
+global.boostStatus = function (roomName) {
+    const rooms = roomName ? [Game.rooms[roomName]].filter(Boolean) : Game.myRooms || [];
+    return rooms.map((room) => ({ room: room.name, reservations: require("../utils/boostLogistics").status(room) }));
+};
 
 // --- console: setLabReaction / cancelLabReaction ------------------------
 //   setLabReaction("W1N1", "H", "O")   -> produce OH, picks 3 labs itself
@@ -36,8 +83,7 @@ global.setLabReaction = function (roomName, mineral1, mineral2) {
     // Any lab within range 2 of two others - runReaction()'s real
     // requirement (the output lab must be within range 2 of both inputs).
     let picked = null;
-    const reserved = Memory.rooms[roomName] && Memory.rooms[roomName].labBoostReservations || {};
-    const usable = labs.filter((l) => !reserved[l.id] && (!l.isActive || l.isActive()));
+    const usable = labs.filter((l) => !labReservations.blocked(roomName, l.id) && (!l.isActive || l.isActive()));
     for (const input1 of usable) for (const input2 of usable) {
         if (input1.id === input2.id) continue;
         const outputs = usable.filter((l) => l.id !== input1.id && l.id !== input2.id &&
@@ -86,7 +132,11 @@ global.cancelLabReaction = function (roomName) {
 // Always manual - deciding which creep is worth the compound is a
 // strategic call, same philosophy as contestRoom() (ROADMAP 0046).
 //   boostCreep("Wren the Excavator...", "UH")
-global.boostCreep = function (creepName, compoundType) {
+global.boostCreep = function (creepName, compoundType, count) {
+    if (count !== undefined && (!Number.isInteger(count) || count <= 0)) {
+        console.log("[refining] bodyPartsCount precisa ser inteiro positivo");
+        return;
+    }
     const creep = Game.creeps[creepName];
     if (!creep) {
         console.log(`[refining] creep ${creepName} não existe`);
@@ -96,13 +146,14 @@ global.boostCreep = function (creepName, compoundType) {
     const lab = labs.find(
         (l) =>
             l.mineralType === compoundType &&
+            !(typeof labReservations.entry(creep.room.name, l.id) === "object" && labReservations.blocked(creep.room.name, l.id)) &&
             creep.pos.getRangeTo(l) <= 1
     );
     if (!lab) {
         console.log(`[refining] nenhuma lab com ${compoundType} a alcance de ${creepName}`);
         return;
     }
-    const result = lab.boostCreep(creep);
+    const result = count === undefined ? lab.boostCreep(creep) : lab.boostCreep(creep, count);
     console.log(`[refining] boostCreep(${creepName}, ${compoundType}) -> ${result}`);
 };
 

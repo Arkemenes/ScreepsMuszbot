@@ -1,64 +1,68 @@
-# 0156 — CPU: lógica restante (listagens ociosas, labPolicy, intel, picos, partida a frio)
+# 0156 — CPU: redundância comprovada, caches e orçamento
 
-- **Status:** spec
-- **Owner:** ARK-128
-- **Created:** 2026-10-15
-- **Depende de:** 0145 (régua, oráculo), 0147 (probes)
+> **Decisão posterior — 16/10/2026:** implementação local autorizada passo a passo no [plano de execução incremental](../../../docs/plano-execucao-incremental-2026-10-16.md). Histórico persistente sofisticado adiado até necessidade demonstrada; cobertura inicial no heap, com lacunas explícitas. Gates operacionais continuam válidos.
+
+- **Status:** in-progress — 0156-A e L2-book concluídos localmente; ganho live e demais itens pendentes.
+- **Issue:** ARK-139 (filha de ARK-128).
+- **Created / revisão documental:** 2026-10-15.
+- **Contrato integrado e aceite:** [planejamento vigente](../../../docs/planejamento-integrado-2026-10-16.md); análises anteriores são históricas.
+- **Autorização:** implementação local incremental; publicação/ativação e gastos seguem os gates do plano de execução.
 
 ## Problem
 
-Medição `cpuTop` de 2026-10-15 (warm 15,97–17,0): o que sobra de lógica reaproveitável, com evidência.
+Probes de 92–99% omitem entradas e são limites superiores. O oráculo original podia ignorar efeitos; o reparo 0156-A está implementado localmente, com aceite global registrado no plano de execução.
+Uma assinatura pode custar tanto quanto recalcular; callbacks de segurança e observações por tick não são decisões puras cacheáveis.
 
-| Item | Evidência [M] | Ganho CPU/tick [E] | Risco |
-|---|---|---:|---|
-| **L2** listagens `sell:listed` sem evento | `op sell:listed` 0,37–0,51 (2,6–3,3 chamadas/tick); probe: **96,5–99,1%** das chamadas repetem as entradas | 0,3–0,4 | médio-alto (estado de ordens) |
-| **L3** `labPolicy` (`assignments` 0,32–0,39, `confirm` 0,07–0,15, `resolve` 0,11) | probe `assignments` **92%** | 0,2–0,3 | médio (estado complexo) |
-| **L4** `intel` (0,8–0,9; `transitSafety` 0,21–0,27, pico 1,76) | 6,1 chamadas/tick | 0,2–0,3 | baixo-médio |
-| **L6** picos | `miner.distribute` max 5,59; `intel` max 1,9; `craft.chains` max 4,6; `swing` scan 18 | segurança de bucket | baixo |
-| **L7** partida a frio | 167–197 CPU por deploy | 0 na média | médio |
-| **O3** limpeza | spans temporários `claims.*`, `fuel.plan.*`, `swing.scan.*`; módulo `memoryCleanup` | ~0,05 | baixo |
+## Desired outcome / In scope
 
-Já feito (0147/0152): `resolve` sem alocação, índice do livro por recurso, `commitments` em um scan,
-buscas do hauler/builder ociosos e entrega em trânsito.
+- Pré-requisito: reparar oráculo/isolamento e comparar retorno, estado, intents, erros e efeitos em sequências com caches aquecidos.
+- Priorizar dados estruturais e redundâncias dentro da decisão. Medir assinatura+invalidação+efeitos reproduzidos; não criar decisionCache genérico antes de justificar.
+- L2: separar cálculo puro de manutenção viva; preservar confirmação, extensão, deals, fees, créditos, claims, estoque e transições temporais. Aplicar política 0153 revisada antes de congelar referência.
+- L3: separar geometria/seleção de mutações em desired/refilling/switching, observações, logística, fase e confirmação. Coleta 0155 continua uma vez por tick mesmo em cache hit.
+- Assinaturas incluem entradas efetivamente lidas, identidade/provedor onde relevante, mudanças intratick, efeitos/pins/reservas e fronteiras de prazo/cooldown. Não usar só hash parcial como prova de igualdade.
+- L4: dedupe por sala/tick já existe em transitSafety; preservar eventos, snapshots de vítimas do tick anterior, hostis, controller e expiração sem atraso. Só otimizar trabalho comprovadamente redundante.
+- Histórico de preço e cache de candidatos não congelam autorização de gasto/readiness; revalidar no ponto do intent.
+- L6: fatiar scan muda momento da decisão; somente após contrato específico de latência máxima, frescor, orçamento, urgência e justiça, revisado separadamente. Não afirmar equivalência exata por resultado final parecido.
+- L7: hidratação lazy com recuperação de estado e orçamento de segmentos, sem atrasar defesa/essenciais; reportar cold e custo amortizado pela frequência real de resets.
+- O3: retirar spans/migrações apenas após comprovar ausência de dependências e recuperação pendente; manter restauração legada de abTest até encerramento seguro.
+- Flags opt-in por item, caches limitados no heap, sem TTL novo de saldo/preço/estoque e sem indexar ordens próprias entre chamadas; capacidade de reverter sem deploy.
 
-## Desired outcome
+### Oráculo isolado e dependências por item
 
-Mesmas decisões, menos CPU quando nada mudou, **provado por oráculo de equivalência e validado em produção pelo `cpuReport`**.
+Pacote 0156-A (oráculo) é isolável depois de autorização futura. O pedido atual autoriza apenas documentação.
+Factory cria mundos/stubs independentes; um mundo e um conjunto de módulos por variante durante toda a sequência. Purga e restauração de globais/providers entre variantes/cenários em finally; não purgar caches entre passos.
+Projetar clone executado em cada passo; capturar retorno, Memory/claims, trace ordenado de intents/taxas e estado parcial pós-exceção. Comparar tipo/mensagem de erro e mundo pós-erro. Arrays conservam ordem. Snapshot não serializável deve falhar explicitamente, sem sumir da projeção.
 
-## In scope
+Autotestes: claims 10/999, intent distinto, ordem distinta, só estado, só erro, mesmo erro com estado parcial distinto, par equivalente, cache entre passos e isolamento de globais. Fixture define completude de observáveis; o oráculo não prova entrada que não recebeu.
 
-- **L2:** cache de decisão de `listResidual` por **assinatura das entradas** (estado da op, `remaining`, preço e
-  restante da ordem viva, estoque do terminal, versão do mercado, config, `repriceTick`/janela de reprice,
-  `pendingExtension`); nunca por tempo; invalidação por qualquer mudança; a janela de reprice e a verificação de
-  confirmação (`orderConfirmationTicks`) continuam disparando no tick certo.
-- **L3:** cache de `assignments` por assinatura (estado dos labs: tipo, quantidade, `cooldown` booleano; `desired`,
-  `roles`, `refilling`, fase, `phaseRemaining`, estoque do mineral, `incoming` dos haulers, limiares); `resolve` e
-  `profile` por assinatura estrutural; `confirm` continua por tick (lê os labs). Oráculo com **fuzz** de mutação de
-  cada entrada.
-- **L4:** `transitSafety`/`getIntel` por (sala, tick de visão) e por mudança de hostilidade; **segurança e defesa
-  nunca ganham atraso**: invalidação por evento (hostil visto) e teste de equivalência.
-- **L6:** espalhar picos (scan do swing por sala/recurso em ticks; `miner.distribute` com orçamento) sem mudar o resultado.
-- **L7:** hidratação preguiçosa de segmentos/caches e distribuição do custo frio em ticks com orçamento global.
-- **O3:** remover spans temporários e, após um deploy com `removed = 0`, o `memoryCleanup`.
+0156-B/L2 depende do oráculo e política 0153 revisada para congelar referência.
+0156-B/L3 depende do oráculo, contrato de observação 0155 e adaptador canônico de reservas 0149; não exige piloto de boost concluído.
+L4/L7/O3 seguem seus contratos locais. L6 continua condicionado a revisão específica de latência. Não afirmar que só o oráculo bloqueia toda a feature.
 
-## Out of scope
-
-- Qualquer cache por TTL de saldo, preço ou estoque; mudar cadências de jogo (reprice, `tickInterval`, cooldowns).
-- Indexar `Game.market.orders` entre chamadas (testes mutam a lista no mesmo tick).
+Cache puro nunca contém saldo/readiness entre decisões. Guardas, reconciliação, limpeza de owners e observação final continuam em cache hit e com flags off. Testar off entre intent e confirmação, reset, provider/config/pin/reserva intratick e colisão de assinatura. Descartar cache não descarta operação pendente.
 
 ## Acceptance criteria
 
-1. The oracle (`test/equivalence/compare.js`) asserts, with random mutation of every input between ticks, that the cached and the reference decisions are identical (reactions, holds, desired, reasons for L3; price, amount, fee and intents for L2).
-2. The smoke test asserts each cache invalidates on a mutation of each of its inputs (one assertion per input) and on reset.
-3. O `cpuReport` automático mostra queda dos spans-alvo e `warmUsed` sem regressão (flag por item, desligável sem deploy); resultado nas Notes.
-4. Produção de XLH2O por cadeia, ordens abertas e preços, créditos e claims inalterados (invariantes pós-deploy).
-5. Nenhuma Memory nova por tick.
+1. Oráculo detecta claims 10 vs 999 com retorno igual; compara mundos pós-execução, intents/erros e sequências; stubs/globais não vazam entre variantes.
+2. Cada entrada lida invalida no tick e intratick; fronteiras de prazo disparam no instante correto; reset/flag off/provedor alterado e colisões de hash não congelam resultado.
+3. L2 preserva decisão, preço, quantidade, fees, extensão, confirmação, deals e claims; L3 preserva reactions/holds/desired/reasons e efeitos/observação por tick.
+4. L4 preserva detecção imediata de hostis/eventos, vítima morta no tick anterior, propriedade e vencimentos; não alega ganho por adicionar dedupe já existente.
+5. Assinatura e cache completos reduzem spans em carga comparável sem mudança de produção útil/ordens/contabilidade; probe ou benchmark Node não demonstra ganho de CPU Screeps.
+6. Scans fatiados não são ativados sem contrato de latência aprovado; cold/lazy preserva recuperação/segmentos/defesa e limpeza não remove rollback legado ainda necessário.
+
+7. Autoteste do oráculo: todos os pares divergentes declarados são detectados, inclusive mesmo erro com estado parcial diferente; um par equivalente não gera falso positivo; a reprodução do relatório (`claims 10×999`, retorno igual) deixa de reportar `equal: true`.
 
 ## Constitution check
 
-Heap para assinaturas e caches com tamanho limitado; invalidação por mudança de entrada; cada item atrás de flag
-desligável sem deploy; `guard()` mantido.
+Reusar census/roomCache; configuração em Memory.settings; dados derivados no heap limitado;
+somente ownership/recuperação persistente necessária, nunca objetos de jogo; guard e stall guard.
+Observações e relatórios novos antes de cpuMeter.endTick. Preservar cascata crítico → saudável → ótimo e fallback.
+Smoke e invariantes verificam comportamento, não só ausência de exceção.
 
-## Open questions
+## Review gate
 
-- Hit-rate real do `assignments` com 10 labs em produção contínua (probe diz 92%, é um limite superior).
+[Revisão independente e reavaliação favorável](../../../docs/revisao-final-planejamento-2026-10-16.md): R1–R6 fechados no desenho. [Resposta e precisões](../../../docs/resposta-revisao-final-planejamento-2026-10-16.md). ARK-141 conclui somente planejamento/documentação; AC de runtime/live permanecem abertos. Implementação local segue o plano incremental autorizado; ativação/investimentos preservam os gates operacionais.
+
+## Entrega L2-book — 16/10/2026
+
+[Pacote local](../../../docs/pacote-local-listagens-2026-10-16.md): reutilização por tick/lado/recurso no orderBook existente, sem cache de decisões ou saldos. Ramo de consultas diretas versus ramo compartilhado iguais no oráculo em 3/5/10 salas, com manutenção/off/reidratação/recarga do módulo/provedor/manual/estoques vivos. Consultas nativas41/67/132→13/13/13, sem inferir CPU Screeps. Flag terminalOps.reuseOrderBook default true, desligável para comparação. L2 geral/T3/T7 permanecem parciais; pixel automático e demais caches não entram neste aceite.

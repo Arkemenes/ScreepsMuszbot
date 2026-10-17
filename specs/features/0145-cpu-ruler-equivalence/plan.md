@@ -1,5 +1,9 @@
 # 0145 — Régua de CPU e harness de equivalência — Plan
 
+## Reparo ARK-145 — 2026-10-16
+
+cpuReport.js mantém somente a solicitação no heap, com endpoints posteriores ao comando e flags de abertura. due() evita polling pesado; o main chama o fechamento em guard após endTick. cpuAccounting.range recorta o ring existente ao fechar, usando o mesmo formatter da janela rolling; nenhum dado novo por tick/Memory. printCpuTop recebe balanço opcional da solicitação, preservando seu comportamento manual e identificando a janela recente própria das tabelas. Cobertura/flags incompatíveis geram incomplete. Teste reproduz histórico74 + arm150 e impede impressão77ticks depois; rearm/gaps/bucket/rollover/reload e limites completam a validação. Sem deploy automático.
+
 ## Approach
 
 Três peças pequenas, todas no heap ou em arquivos de teste, sem mudar nenhuma

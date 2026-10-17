@@ -1,5 +1,15 @@
 # Avaliação e roadmap: CPU, população, boosts e power creeps (2026-10-15)
 
+> **Histórico superado pela consolidação documental de 16/10.** Contratos, DAG, limites de autorização e aceite vigentes: [planejamento integrado](planejamento-integrado-2026-10-16.md). O corpo abaixo preserva hipóteses e medições antigas, não instruções atuais.
+> A sequência e as decisões atuais estão no [relatório da revisão](revisao-planos-2026-10-15.md) e no [handoff revisado](handoff-agente-2026-10-15.md).
+> Specs 0148–0150 e 0153–0156 aguardam revisão independente e revisão do usuário; não implementar/deployar a partir deste documento.
+> GPL 3 é somente target inicial configurável. Rentabilidade exige demanda, vida produtiva e abastecimento real; storage 0 não é veto isolado.
+> Tabelas de E*, duty, payback, taxas e ganhos abaixo não incorporam todos os ajustes: ver R01–R12. Taxa passada não é recuperada;
+> bid de deal não paga nova taxa de 5%; optionalConsumer não prova excedente; OPERATE_LAB ainda não é compatível com o runtime.
+> Os limites de CPU abaixo são estimativas históricas sobrepostas, não teto demonstrado ou prova de impossibilidade de <10.
+> Cancelamentos de power passam a seguir liberação mínima necessária e reconciliação; não executar as antigas ordens de cancelamento em bloco.
+
+
 **Escrito para:** o dono do projeto (decisões) e o agente que vai implementar
 (execução). Nada aqui foi implementado além do que a seção 1 lista como feito.
 Números marcados **[M]** são medidos (cpuTop/cpuBalance/console), **[D]** derivados

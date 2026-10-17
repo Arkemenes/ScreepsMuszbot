@@ -1,6 +1,7 @@
 // Quantitative physical claims shared by terminal operations and consumers.
 const census = require("./census");
 const operationIndex = require("./terminalIndex");
+const labReservations = require("./labReservations");
 const FINAL = ["completed", "failed", "cancelled"];
 let intentTick = -1, intents = {};
 function key(owner) { return owner && typeof owner === "object" ? owner.kind + ":" + owner.id : owner || null; }
@@ -95,13 +96,18 @@ function physicalReservations(room, resource, excludeId, excludeOwner) {
         unstaged += Math.max(0, require("./craftLedger").warehouse(c, room, resource) - backed);
     });
     if (spansOn) lap("claims.reserve.craft");
-    const storage = Math.min(unstaged, value(room.storage, resource));
+    const boost = labReservations.sourceClaims(room.name, resource, key(excludeOwner));
+    const boostStorage = room.storage && boost[room.storage.id] || 0;
+    const boostTerminal = room.terminal && boost[room.terminal.id] || 0;
+    const storage = Math.min(unstaged, Math.max(0, value(room.storage, resource) - boostStorage));
     terminal += unstaged - storage;
-    return { storage, terminal };
+    return { storage: storage + boostStorage, terminal: terminal + boostTerminal };
 }
 function physicalFree(room, source, resource, excludeId, excludeOwner) {
     const pending = withdrawn(source, resource);
     if (value(source, resource) <= pending) return 0;
+    if (source.structureType === STRUCTURE_LAB && labReservations.blocked(room.name, source.id) &&
+        !labReservations.ownedBy(room.name, source.id, excludeOwner)) return 0;
     if (source !== room.storage && source !== room.terminal) return Math.max(0, value(source, resource) - pending);
     const reserved = physicalReservations(room, resource, excludeId, excludeOwner);
     return Math.max(0, value(source, resource) - reserved[source === room.terminal ? "terminal" : "storage"] - pending);

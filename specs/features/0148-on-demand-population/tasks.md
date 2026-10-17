@@ -1,19 +1,31 @@
 # 0148 — População sob demanda — Tasks
 
-Pré-requisito: 0154 entregue. Ler a seção 2.2 do roadmap (números de CPU por role).
+> **Decisão posterior — 16/10/2026:** implementação local autorizada passo a passo no [plano de execução incremental](../../../docs/plano-execucao-incremental-2026-10-16.md). Histórico persistente sofisticado adiado até necessidade demonstrada; cobertura inicial no heap, com lacunas explícitas. Gates operacionais continuam válidos.
 
-- [ ] 1. `repairDemand.demand(room)` com cache por tick (AC1)
-  - verify: smoke `"0148: repair demand appears for a critical-tier structure the tower does not cover"`
-- [ ] 2. `needs.compute`: builder sob demanda atrás de `population.builderOnDemand.rooms` (AC1, AC5)
-  - verify: smoke `"0148: no sites and no repair demand -> builder 0; demand appears -> builder returns"`
-- [ ] 3. Experimento do builder (framework 0154): métricas e guardas da spec (AC2)
-  - verify: smoke `"0148: the experiment rolls back by itself when a structure crosses the safety mark"`
-- [ ] 4. Ligar em UMA sala de baixo risco, deixar o experimento rodar uma vida de creep e anotar o relatório nas Notes; medir `warmUsed` pelo `cpuReport` (AC4)
-- [ ] 5. Com o `energyReport` (0154): política de upgrader por excedente atrás de flag por sala; piso de downgrade (AC3)
-  - verify: smoke `"0148: no controller reaches the downgrade safety mark"`
-- [ ] 6. Avaliar fusão builder+upgrader com os mesmos experimentos (opcional)
-- [ ] 7. DoD: `node --check`, smoke, `graphify update .`, `npx grunt`; ampliar para outras salas só se o relatório for limpo
+- **Status:** planned — execução local autorizada em etapas; não implementada.
+- **Issue:** ARK-135; consolidação ARK-141.
+- **Revisão documental:** 2026-10-16.
+- **Autorização:** implementação local incremental; publicação/ativação e gastos seguem os gates do plano de execução.
+- **Contrato:** [spec.md](spec.md). **DAG/aceite:** [planejamento integrado](../../../docs/planejamento-integrado-2026-10-16.md).
 
-## Notes
+## Gate de implementação futura
 
-- Não reciclar creeps vivos na primeira versão; o ganho vem de não repor o builder ao morrer.
+- [x] Implementação local incremental autorizada pelo usuário em 16/10/2026; gates operacionais preservados.
+- [ ] Pré-requisitos do pacote no DAG e revisão das fontes/fixtures verificados.
+
+## Implementação futura — não executada
+
+- [ ] **T1 — Modelar demanda, capacidade de torre e previsão de reposição.** AC1–4. Verificação futura: `0148 demand preservation; 0148 precedence`.
+- [ ] **T2 — Compor target após autoscale e deduplicar vivos/spawning/fila.** AC1,4,7. Verificação futura: `0148 emergency after death`.
+- [ ] **T3 — Integrar overlay/guardas e recuperação off/reset/manual, invalidando needs.** AC5,7. Verificação futura: `0148 recovery ownership`.
+- [ ] **T4 — Preservar fallback de todo WORK e explicar nenhuma sala elegível.** AC8–9. Verificação futura: `0148 fallback; 0148 no eligible room`.
+- [ ] **T5 — Preparar métricas/seleção da sala e executar piloto só após autorização própria.** AC3,6. Verificação futura: `LIVE-0148: ausência real, vida completa, manutenção e recuperação`.
+
+## Definition of done futura
+
+- [ ] Assertions offline acima integradas ao smoke, com stubs deferidos e origem/qualidade explícitas.
+- [ ] `node --check` nos JS tocados, smoke com caminho absoluto e diff check verdes.
+- [ ] Build local sem copiar/publicar ao cliente; graphify atualizado após código; docs refletem somente o implementado.
+- [ ] Evidências LIVE exigidas registradas em aceite separado; nenhum checkbox live concluído só por fixture.
+
+Todos os checkboxes são de execução futura e continuam abertos. A revisão documental não conclui AC de runtime.

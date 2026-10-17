@@ -22,6 +22,7 @@ function prune(mem) {
         const age = Game.time - (op.updatedTick === undefined ? op.createdTick === undefined ? Game.time : op.createdTick : op.updatedTick);
         if (!final(op) || age < retention || owners.has(claims.key(op.owner)) ||
             op.pendingDeal || op.pendingExtension || op.pendingListingCancel ||
+            op.listingLifecycle && (op.listingLifecycle.pending || op.listingLifecycle.halted) ||
             listing && (listing.remainingAmount === undefined ? listing.amount : listing.remainingAmount) > 0) protect(id);
     });
     // Each ID is queued at most once, including malformed cyclic parent links.

@@ -271,8 +271,9 @@ function exportStats() {
             roomStats.economyState = economy.state;
             roomStats.economyReason = economy.reason;
             roomStats.criticalConsumers = economy.criticalConsumers;
-            // ROADMAP 0081: where the room's energy went this tick
+            // Trailing modeled spend; quality and boosted effects are separate.
             roomStats.energySpent = energyLedger.snapshot(roomName);
+            roomStats.energySpentQuality = energyLedger.snapshotInfo(roomName);
             roomStats.terminalOperations = terminalOps.stats(roomName);
             roomStats.energyBalancing = energyBalancing.stats(roomName);
         }
