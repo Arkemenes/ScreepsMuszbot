@@ -5209,19 +5209,6 @@
               "layout": {
                 "kind": "GridLayout",
                 "spec": {
-                  "items": []
-                }
-              },
-              "title": "CPU ao longo do tempo"
-            }
-          },
-          {
-            "kind": "RowsLayoutRow",
-            "spec": {
-              "collapse": false,
-              "layout": {
-                "kind": "GridLayout",
-                "spec": {
                   "items": [
                     {
                       "kind": "GridLayoutItem",
@@ -5759,7 +5746,7 @@
         "1d"
       ],
       "fiscalYearStartMonth": 0,
-      "from": "now-1h",
+      "from": "now-6h",
       "hideTimepicker": false,
       "timezone": "browser",
       "to": "now"
