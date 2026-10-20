@@ -279,6 +279,12 @@ function releaseRecovered(room) {
             confidence: entry.confidence || "estimated", tick: Game.time };
         entry.items = {}; entry.released = true;
     });
+    // ARK-116: a released entry is an empty shell (its provenance lives in `recovered`)
+    // that sat in Memory for craft.retentionTicks - 112 of them, ~25k chars serialised
+    // every tick (live 2026-10-20). Drop it once nothing is left in it.
+    Object.entries(Memory.craft.stranded || {}).forEach(([id, entry]) => {
+        if (entry.room === room.name && entry.released && !Object.keys(entry.items || {}).length) delete Memory.craft.stranded[id];
+    });
     reconcileRecovered(room);
     const retained = Object.keys(recovered).sort((a, b) => recovered[b].tick - recovered[a].tick);
     const keep = require("./config").get("craft.recoveredKeep", 20);

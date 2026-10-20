@@ -29,6 +29,10 @@ module.exports = function (project, assert) {
         assert(!safety.isBlockedRoom(room.name), "0129: allies start passable without hardcoded transit bans");
         safety.observeRoom(room); safety.observeRoom(room);
         assert(reads === 1, "0129: events are read only once per room per tick");
+        const quiet = { name: "E1N45", controller: { my: true, owner: { username: "me" } }, find: () => [], getEventLog: () => { reads++; return []; } };
+        Game.rooms[quiet.name] = quiet; safety.observeRoom(quiet);
+        assert(reads === 1, "ARK-116: an own room with no foreign creep does not parse its event log");
+        delete Game.rooms[quiet.name];
         events = [attack(victim.id, 100)]; next(); safety.observeRoom(room);
         assert(safety.isBlockedRoom(room.name) && safety.isBlockedRoom("E3N44"), "0129: allied tower damage blocks owned and reserved territory");
         assert(hostiles.isAlly("TransitAlly") && !safety.isBlockedRoom("E4N44") && !safety.isBlockedRoom("E1N45"), "0129: learned transit bans preserve diplomacy and safe allies");

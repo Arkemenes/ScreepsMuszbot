@@ -2,6 +2,7 @@
 const config = require("./config");
 const { isAlly } = require("./hostiles");
 const census = require("./census");
+const roomCache = require("./roomCache");
 
 let seenTick = -1;
 let scannedRooms = new Set();
@@ -83,6 +84,10 @@ function observeRoom(room) {
     learnedPlayers(); // bound persistent incident records by their lifetime
     if (!config.get("routing.learnAllyAttacks", true) ||
         typeof room.getEventLog !== "function" || typeof EVENT_ATTACK === "undefined") return;
+    // ARK-116: only a foreign creep, or a tower in a room another player owns, can attack
+    // ours - with neither present the event log (parsed per room per tick) has nothing to tell
+    const controller = room.controller;
+    if (!(controller && controller.owner && !controller.my) && !roomCache.foreignCreeps(room).length) return;
     for (const event of room.getEventLog()) {
         const data = event.data;
         if (event.event !== EVENT_ATTACK || !data || !(data.damage > 0)) continue;

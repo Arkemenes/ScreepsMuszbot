@@ -14326,7 +14326,9 @@ function priceSamples(bid, ask, n, vol) {
     chain = open();
     completeBuy(1); // partial
     step();
-    assert(!Memory.craft.active.ChainRoom && Memory.marketFlip.committedCredits === 0 && Object.keys(Memory.craft.stranded).length === 1 && Memory.craft.stats.aborted === 1,
+    assert(!Memory.craft.active.ChainRoom && Memory.marketFlip.committedCredits === 0 && Memory.craft.stats.aborted === 1 &&
+        // ARK-116: once released to the room pool the empty stranded shell is dropped; the record lives on in `recovered`
+        Object.keys(Memory.craft.stranded).length + Object.values(Memory.craft.recovered || {}).filter((e) => e.room === "ChainRoom").length >= 1,
         "0111 P6: a partial buy aborts the chain, frees the credits and strands the inputs as own stock");
     chain = open({ stallTicks: 50 });
     completeBuy();
