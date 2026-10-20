@@ -41,7 +41,7 @@ async function get(endpoint, params) {
     if (res.status === 429) fail("HTTP 429 rate limited; retry after " + res.headers.get("Retry-After") + "s");
     const body = await res.text();
     if (!res.ok) fail("HTTP " + res.status + ": " + body.slice(0, 300));
-    return JSON.parse(body);
+    try { return JSON.parse(body); } catch (e) { return fail("non-JSON reply (server down or maintenance?): " + body.slice(0, 200)); }
 }
 
 function decode(data) {

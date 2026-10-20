@@ -877,6 +877,29 @@ assert(planStore.getPlan("Wmig") === null,
     delete Game.rooms.Wscore;
 }
 
+// --- ARK-116: the plan preview is drawn once and replayed from the heap ----
+{
+    const architect = require(path.join(PROJECT, "src/rooms/architect"));
+    let drawn = 0, imported = [], buffer = "";
+    const visual = {
+        structure() { drawn++; buffer += "s\n"; return this; },
+        export() { return buffer; },
+        import(text) { imported.push(text); buffer += text; return this; },
+    };
+    const room = { name: "Wvis", visual, find: () => [], controller: { level: 8 } };
+    Game.rooms.Wvis = room;
+    const plan = { buildings: [{ x: 1, y: 1, structureType: STRUCTURE_ROAD }, { x: 2, y: 2, structureType: STRUCTURE_ROAD }] };
+    buffer = "other\n"; // something else drawn earlier this tick is not captured
+    architect.drawPlanPreview(room, plan, true);
+    buffer = "";
+    architect.drawPlanPreview(room, plan, false);
+    assert(drawn === 2 && imported.length === 1 && imported[0] === "s\ns\n",
+        "ARK-116: a quiet tick replays the cached plan preview instead of redrawing it (drawn " + drawn + ", imports " + imported.length + ")");
+    architect.drawPlanPreview(room, { buildings: plan.buildings.slice(0, 1) }, false);
+    assert(drawn === 3 && imported.length === 1, "ARK-116: a new plan object is drawn afresh even off the redraw grid");
+    delete Game.rooms.Wvis;
+}
+
 // --- 0010: a planned room's planCity early-exits before floodFill ----
 {
     const architect = require(path.join(PROJECT, "src/rooms/architect"));

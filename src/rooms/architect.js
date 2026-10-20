@@ -102,16 +102,13 @@ function planCity(room, opts) {
     }
 
     const existingPlan = planStore.getPlan(roomName);
-    if (
-        existingPlan &&
-        config.get("planner.visualizeEnabled", true) &&
-        planScanDue(
+    if (existingPlan && config.get("planner.visualizeEnabled", true)) {
+        const redraw = planScanDue(
             roomName + ":visualize",
             room,
             config.get("planner.visualizeForceInterval", 50)
-        )
-    ) {
-        cpuMeter.span("plan.visualize", () => visualizeStructures(existingPlan.buildings, roomName));
+        );
+        cpuMeter.span("plan.visualize", () => drawPlanPreview(room, existingPlan, redraw));
     }
 
     // Start building once the core of the plan is down (spawn + core stamps),
@@ -1471,6 +1468,28 @@ function destroyUnplannedRoads(roomName, dryRun = false) {
 
 global.destroyUnplannedRoads = destroyUnplannedRoads;
 
+// ARK-116: drawing 300+ planned structures cost ~0.3 CPU per room per tick (live
+// 2026-10-20, planner.visualizeForceInterval=1 to keep the preview on screen - visuals
+// last one tick). The drawn result is kept in the heap as RoomVisual.export() text and
+// replayed with import() until planScanDue() asks for a redraw or the plan changes.
+let planVisualCache = {};
+function drawPlanPreview(room, plan, redraw) {
+    const visual = room.visual;
+    const cached = planVisualCache[room.name];
+    if (!redraw && cached && cached.plan === plan && typeof visual.import === "function") {
+        visual.import(cached.data);
+        return;
+    }
+    if (typeof visual.export !== "function") {
+        visualizeStructures(plan.buildings, room.name);
+        return;
+    }
+    // export() holds everything drawn in the room this tick: keep only our part
+    const before = visual.export().length;
+    visualizeStructures(plan.buildings, room.name);
+    planVisualCache[room.name] = { plan, data: visual.export().slice(before) };
+}
+
 function visualizeStructures(structures, roomName, showRCL = false) {
     const room = Game.rooms[roomName];
     const roomVisual = room ? room.visual : new RoomVisual(roomName);
@@ -1621,3 +1640,4 @@ function getShortestPath(roomName, x1, y1, x2, y2, range = 1) {
 module.exports = planCity;
 // exposed for the offline smoke test only (0013: stamp scoring)
 module.exports.findStampLocation = findStampLocation;
+module.exports.drawPlanPreview = drawPlanPreview;
