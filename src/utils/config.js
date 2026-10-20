@@ -584,6 +584,8 @@ const defaults = {
         // planCity() won't spend a tick's CPU below this bucket
         minBucket: 500,
         maxSitesPerRoom: 8,
+        // plan preview: shown every tick from a heap replay, redrawn on change or every N ticks
+        visualizeRedrawInterval: 50,
     },
     traffic: {
         roadThreshold: 50,

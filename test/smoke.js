@@ -4854,6 +4854,13 @@ findMap[FIND_HOSTILE_CREEPS] = [];
                 JSON.stringify(oppRepairs.map((r) => r && r.id)) +
                 " builds=" + JSON.stringify(oppBuilds.map((b) => b && b.id)) + ")"
         );
+        // ARK-116: with the Build state's target in range the in-passing call is skipped
+        oppBuilds.length = 0; oppRepairs.length = 0;
+        oppCreep.memory.stack = [["Build", oppSite.id]];
+        Game.time++;
+        builder.run(oppCreep);
+        assert(oppBuilds.length === 1 && oppBuilds[0] === oppSite && oppRepairs.length === 0,
+            "ARK-116: a builder already at its Build target issues one build intent, not two (builds " + oppBuilds.length + ")");
     }
 
     // --- Fase 2: needs.js alternates solo defender vs a striker+medic

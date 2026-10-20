@@ -66,16 +66,17 @@ function planScanDue(key, room, forceInterval) {
     return due;
 }
 
-// console: planVisual(50) sets the preview's forced-refresh interval
-// (ticks) - it still redraws immediately on any real change regardless of
-// this number (see planScanDue() above); planVisual(false) turns the
-// preview off entirely; planVisual() resets to the default (50). Doesn't
-// affect createConstructionSites()'s own (separate) forced interval -
-// planner.scanForceInterval, config-only, no console toggle needed for
-// that one.
+// console: planVisual(50) - the preview shows every tick (replayed from the heap, see
+// drawPlanPreview); the number is only how often it is redrawn from scratch as a safety
+// net - it still redraws at once on any real change (planScanDue() above).
+// planVisual(false) turns the preview off; planVisual() resets to the default (50).
+// ARK-116: the old planner.visualizeForceInterval (1 = redraw every tick, the only way
+// to keep the preview on screen before the replay) is dropped and no longer read.
+// Doesn't affect createConstructionSites()'s own forced interval (planner.scanForceInterval).
 global.planVisual = function (arg) {
     Memory.settings = Memory.settings || {};
     Memory.settings.planner = Memory.settings.planner || {};
+    delete Memory.settings.planner.visualizeForceInterval;
     if (arg === false) {
         Memory.settings.planner.visualizeEnabled = false;
         console.log("[planVisual] disabled");
@@ -83,8 +84,8 @@ global.planVisual = function (arg) {
     }
     const interval = Number.isInteger(arg) && arg > 0 ? arg : 50;
     Memory.settings.planner.visualizeEnabled = true;
-    Memory.settings.planner.visualizeForceInterval = interval;
-    console.log("[planVisual] enabled, forceInterval=" + interval);
+    Memory.settings.planner.visualizeRedrawInterval = interval;
+    console.log("[planVisual] enabled (shown every tick), redraw every " + interval + " ticks");
 };
 
 // `opts.preview`: plan a room we don't own yet, so planLayout() (console) /
@@ -106,7 +107,7 @@ function planCity(room, opts) {
         const redraw = planScanDue(
             roomName + ":visualize",
             room,
-            config.get("planner.visualizeForceInterval", 50)
+            config.get("planner.visualizeRedrawInterval", 50)
         );
         cpuMeter.span("plan.visualize", () => drawPlanPreview(room, existingPlan, redraw));
     }
@@ -1469,7 +1470,7 @@ function destroyUnplannedRoads(roomName, dryRun = false) {
 global.destroyUnplannedRoads = destroyUnplannedRoads;
 
 // ARK-116: drawing 300+ planned structures cost ~0.3 CPU per room per tick (live
-// 2026-10-20, planner.visualizeForceInterval=1 to keep the preview on screen - visuals
+// 2026-10-20, redrawn every tick to keep the preview on screen - visuals
 // last one tick). The drawn result is kept in the heap as RoomVisual.export() text and
 // replayed with import() until planScanDue() asks for a redraw or the plan changes.
 let planVisualCache = {};

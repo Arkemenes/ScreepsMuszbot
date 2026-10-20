@@ -127,6 +127,13 @@ function opportunisticWork(creep) {
 
 function opportunisticWorkNow(creep) {
     if (creep.store[RESOURCE_ENERGY] === 0) return;
+    // ARK-116: build and repair share one intent slot - with the Build state's own target
+    // already in range, its call this same tick replaces ours, so ours was 0.2 CPU for nothing
+    const top = creep.memory.stack && creep.memory.stack[0];
+    if (top && top[0] === "Build") {
+        const target = Game.getObjectById(top[1]);
+        if (target && inRangeOf(creep, [target], 3).length) return;
+    }
 
     // when several are in range, take the one closest to full / finished
     const hurt = _.sortBy(
