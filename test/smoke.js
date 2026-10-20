@@ -15897,6 +15897,13 @@ function priceSamples(bid, ask, n, vol) {
     Memory.terminalOps.operations[calls.buy[0].id].accounting.credits -= 500;
     chain.buyCost = undefined;
     assert(chainMod.saleFloor(chain) > base * 1.01 + 400 / units, "0111: buying above the estimate raises the floor - the sale still covers what was really paid");
+    // ARK-116: the search for a new partial sale keeps the maintenance grid
+    chain = workingChain();
+    room.storage.store.widgetA = 2 * lot;
+    Game.time += 1; chainMod.tick({ maintenance: false });
+    assert(calls.sell.length === 0, "ARK-116: off the maintenance grid no new partial sale is searched");
+    Game.time += 1; chainMod.tick();
+    assert(calls.sell.length === 1, "ARK-116: ...and the next maintenance tick opens it");
     // switches
     chain = workingChain({ partialSales: false });
     room.storage.store.widgetA = 5 * lot;

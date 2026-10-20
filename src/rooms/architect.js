@@ -5,6 +5,7 @@ const planStore = require("../utils/planStore");
 const traffic = require("../utils/traffic");
 const config = require("../utils/config");
 const mapExits = require("../utils/mapExits");
+const cpuMeter = require("../utils/cpuMeter");
 
 // The plan's building list / mincut boxes for a room, or [] when unplanned.
 function planBuildings(roomName) {
@@ -110,7 +111,7 @@ function planCity(room, opts) {
             config.get("planner.visualizeForceInterval", 50)
         )
     ) {
-        visualizeStructures(existingPlan.buildings, roomName);
+        cpuMeter.span("plan.visualize", () => visualizeStructures(existingPlan.buildings, roomName));
     }
 
     // Start building once the core of the plan is down (spawn + core stamps),
@@ -127,7 +128,7 @@ function planCity(room, opts) {
             config.get("planner.scanForceInterval", 50)
         )
     ) {
-        createConstructionSites(room);
+        cpuMeter.span("plan.build", () => createConstructionSites(room));
     }
 
     if (Memory.rooms[room.name].planned) {

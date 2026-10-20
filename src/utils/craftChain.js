@@ -656,6 +656,10 @@ function partialSales(chain, room, item) {
     }
     chain.sold = (chain.soldBase || 0) + (chain.partialDealt || 0);
     if (!config.get("craft.partialSales", true) || item.product !== chain.product) return;
+    // ARK-116: looking for a new partial sale walks stock, reach and the book (~0.3 CPU per
+    // chain). Policy chains advance every tick for the labs; the sale search keeps the
+    // maintenance grid (craft.tickInterval) - a lot sold 10 ticks later costs nothing.
+    if (!maintenanceTick) return;
     const product = chain.product;
     const lot = Math.max(1, Math.ceil(item.target * config.get("craft.minPartialSellRatio", 0.1)));
     // Labs/factory output cannot be sold until transported to the warehouse.
@@ -983,8 +987,11 @@ function cancelRoom(roomName) {
     return keys.length > 0;
 }
 
+// False on the policy-only ticks between maintenance runs (see craftPlanner.tick).
+let maintenanceTick = true;
 function tick(options) {
     const mem = craft();
+    maintenanceTick = !options || options.maintenance !== false;
     Object.keys(mem.active).forEach((key) => {
         const chain = mem.active[key];
         if (!chain) return;
