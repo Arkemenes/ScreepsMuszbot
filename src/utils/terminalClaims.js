@@ -2,6 +2,7 @@
 const census = require("./census");
 const operationIndex = require("./terminalIndex");
 const labReservations = require("./labReservations");
+const terminalPowerCost = require("./terminalPowerCost");
 const FINAL = ["completed", "failed", "cancelled"];
 let intentTick = -1, intents = {};
 function key(owner) { return owner && typeof owner === "object" ? owner.kind + ":" + owner.id : owner || null; }
@@ -27,10 +28,11 @@ function owner(op) {
     return key(op.owner = op.policy === "swing" ? { kind: "swing", id: op.sourceRoom + ":" + op.resourceType } : { kind: "manual", id: op.id });
 }
 function active(op) { return op && FINAL.indexOf(op.state) < 0; }
-function feeClaim(op) { return Math.max(0, op.feeLoadedAmount || 0, op.pendingDeal && op.pendingDeal.cost || 0); }
+function pending(op) { return op.pendingDeal || op.pendingSend; }
+function feeClaim(op) { const intent = pending(op); return Math.max(0, op.feeLoadedAmount || 0, intent && terminalPowerCost.required(intent) || 0); }
 function outgoing(op, room, resource) {
     return active(op) && op.sourceRoom === room.name && op.resourceType === resource &&
-        (op.kind === "sell" || op.kind === "transfer" && !(op.sentAmount > 0));
+        (op.kind === "sell" || op.kind === "transfer" && (!(op.sentAmount > 0) || op.remaining > 0));
 }
 function value(source, resource) { return source && source.store && Math.max(0, source.store[resource] || 0) || 0; }
 function ledger(source, resource) {
@@ -60,13 +62,15 @@ function physicalReservations(room, resource, excludeId, excludeOwner) {
     ops.forEach((op) => {
         if (!active(op)) return;
         // Accepted intents remain funded even against their own owner's jobs.
-        const intentFee = op.sourceRoom === room.name && resource === RESOURCE_ENERGY ? Math.max(0, op.pendingDeal && op.pendingDeal.cost || 0) : 0;
-        const intentCargo = op.sourceRoom === room.name && op.kind === "sell" && op.resourceType === resource ? Math.max(0, op.pendingDeal && op.pendingDeal.quantity || 0) : 0;
+        const intent = pending(op);
+        const intentFee = op.sourceRoom === room.name && resource === RESOURCE_ENERGY ? Math.max(0, intent && terminalPowerCost.required(intent) || 0) : 0;
+        const intentCargo = op.sourceRoom === room.name && (op.kind === "sell" || op.pendingSend) && op.resourceType === resource ? Math.max(0, intent && intent.quantity || 0) : 0;
         terminal += intentFee + intentCargo;
         if (op.id === excludeId || excludeOwner && owner(op) === key(excludeOwner)) return;
         if (resource === RESOURCE_ENERGY && op.sourceRoom === room.name) terminal += Math.max(0, feeClaim(op) - intentFee);
-        if (op.targetRoom === room.name && op.resourceType === resource && (op.kind === "receipt" || op.kind === "transfer" && op.sentAmount > 0)) {
-            terminal += Math.max(0, op.amount - (op.receivedAmount || 0) - (op.recoveredAmount || 0));
+        if (op.targetRoom === room.name && op.resourceType === resource && (op.kind === "receipt" || op.kind === "transfer" && (op.sentAmount > 0 || op.pendingSend))) {
+            const expected = op.kind === "transfer" ? (op.sentAmount || 0) + (op.pendingSend && op.pendingSend.quantity || 0) : op.amount;
+            terminal += Math.max(0, expected - (op.receivedAmount || 0) - (op.recoveredAmount || 0));
             return;
         }
         if (!outgoing(op, room, resource) || op.id === excludeId || excludeOwner && owner(op) === key(excludeOwner)) return;
@@ -75,7 +79,7 @@ function physicalReservations(room, resource, excludeId, excludeOwner) {
         const published = order ? Math.max(0, order.remainingAmount === undefined ? order.amount || 0 : order.remainingAmount) : 0;
         const staged = Math.min(left, Math.max(op.loadedAmount || 0, published));
         terminal += Math.max(0, staged - intentCargo);
-        if (op.kind === "transfer" && resource === RESOURCE_ENERGY && op.loadedAmount > left) terminal += op.loadedAmount - left;
+        if (op.kind === "transfer" && resource === RESOURCE_ENERGY && op.loadedAmount > left) terminal += Math.max(0, op.loadedAmount - left - intentFee);
         unstaged += Math.max(0, left - staged - carried(op, room, resource));
     });
     if (spansOn) lap("claims.reserve.ops");

@@ -407,7 +407,7 @@ module.exports = function (project, assert) {
             resourceType: "energy", amount: 500, loaded: true };
         staleHauler.transfer = (to) => { deliveredTo = to.id; return OK; };
         census.build(); haul.run(staleHauler);
-        assert(deliveredTo === "ps", "0124 fuel: obsolete preventive cargo returns to storage");
+        assert(deliveredTo === "pt", "0124 fuel: loaded preventive cargo restores the minimum terminal reserve");
     } finally { room.terminal.send = oldSend; }
         delete Game.rooms[concurrentTarget.name];
 

@@ -5,3 +5,4 @@ Gruntfile.js
 package-lock.json
 dist/main.js
 graphify-out/*
+.env

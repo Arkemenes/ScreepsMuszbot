@@ -1,6 +1,6 @@
 # 0125 — Powered terminal relay aliado
 
-- **Status:** planned (cotação implementada; transporte pendente)
+- **Status:** in progress (cotação, mensagens e executor local implementados; canário depende da confirmação do protocolo RLY pelo aliado)
 - **Owner:** Arkemenes / ARK-90 (plano e cálculo), ARK-91 (execução)
 - **Created:** 2026-10-10
 
@@ -24,13 +24,30 @@ ativada com configuração privada válida e acompanhamento de pagamentos/entreg
 
 - Fase A, autorizada nesta etapa: spec, plan, tasks e cálculo de viabilidade,
   com comando `terminalRelayQuote` e smoke. Nenhum envio ao aliado nesta fase.
-- Fase B, planejada: modalidade relay em `terminalOps`, integração ao balanceamento
-  e transferências físicas explícitas, confirmação e métricas.
+- Fase B: modalidade relay em `terminalOps`, integração ao balanceamento e
+  transferências físicas explícitas implementadas. A ativação segue fechada por
+  padrão e exige chave privada, dono aliado no hub e configuração explícita.
+  Execução real depende de confirmar com o aliado o contrato RLY: o PDF disponível
+  documenta apenas o protocolo humano `MSG:`.
 - O balanceamento de energia existente só marca crítico quando o estado do
   destino é `critical`; o restante considera relay por padrão na fase B.
 - Balanceamento automático de outros recursos, quando existir, usa a mesma API
   e urgência padrão. Criar uma nova política de redistribuição mineral não faz
   parte desta feature.
+- Base de mensagens manuais entre aliados: comandos explícitos enfileiram texto
+  em inglês no `description` de um envio de 1 energia; o bot notifica e registra
+  mensagens recebidas sem interpretar seu conteúdo como comando. Isso dá um
+  canal humano para coordenar o relay sem habilitar remessas automáticas.
+- Descoberta automática do terminal dos aliados listados por `hostiles.allies()`:
+  cruzar a aliança com o intel de `Memory.rooms`, considerar salas RCL 6+ e escolher
+  a sala com menor frete estimado a partir dos nossos terminais. `setAllyRoom()`
+  continua disponível como override explícito.
+- Quando há mensagem pendente, reservar o custo de 1 energia de postagem mais o
+  frete do terminal de origem escolhido em `terminalFuel`; o job existente de
+  `stockPolicy` pode pedir ao hauler para levar essa energia do storage.
+- Cada terminal mantém um piso configurável de 10 energia (`terminalFuel.minimumReserve`).
+  A postagem pode consumir esse piso; em seguida `stockPolicy` repõe o saldo até
+  o piso, e recibos/retiradas preventivas não podem drená-lo.
 
 ## Cost model
 
@@ -79,9 +96,16 @@ do aliado: a execução revalida todas essas condições e refaz a cotação.
 7. Smoke: `0125: savings thresholds and powered sender are respected`.
 8. Smoke: `0125: invalid cost fails closed without sending`.
 9. Smoke: `0125: quote is read only and registered in the console`.
-10. Fase B: smoke cobre staging, financiamento até 200 ticks, pagamento FIFO,
-    envios parciais, correlação de `RLY #id from user`, `ok`/`err`/`forfeit`,
-    reset global, confirmação perdida e nenhuma retransmissão da carga já enviada.
+9a. Smoke: `0160: queued ally message uses existing terminal tick and one-energy postage`.
+9b. Smoke: `0160: inbound message shares transaction scan and does not create a receipt`.
+9c. Smoke: `0160: allies and RCL6+ Memory.rooms intel discover terminal contacts automatically`.
+9d. Smoke: `0160: queued message reserves postage and freight in the terminal fuel forecast`.
+9e. Smoke: `0160: existing stockPolicy hauler job feeds message energy to its sending terminal`.
+9f. Smoke: `0161: ten-energy postage reserve is usable by messages and replenished to its minimum`.
+10. Fase B: smoke cobre staging, fallback, segredo, orçamento de terminal,
+    urgência direta, disable e resultado ambíguo sem retransmissão. Ainda faltam
+    casos de envio de financiamento, pagamento FIFO, envios parciais, correlação
+    de `RLY #id from user`, `ok`/`err`/`forfeit` e reset global.
 11. Fase B: balanceamento não crítico considera quote; crítico usa direto;
     ausência de chave ou executor desativado usa direto.
 12. Fase B: stats distinguem energia estimada e realizada, transporte e
@@ -101,6 +125,8 @@ transferência física e usar o hub por padrão quando compensa e está disponí
 A exceção é uma flag explícita `urgent: true`; a cotação adota essa política.
 O plano de transporte está pronto para revisão antes da fase B.
 
-Sem pergunta bloqueante para a cotação. Antes da ativação real é necessária a
-chave privada e confirmação operacional com o aliado de como recuperar/correlacionar
-uma remessa cujo envio ao hub foi truncado e cuja confirmação não chegou.
+Uma chave privada e confirmação operacional com o aliado do contrato RLY são
+necessárias antes de um canário. O guia `docs/Terminal_Messenger_Guide.pdf`
+descreve `MSG:` e não especifica financiamento, IDs, receipts ou ack `RLY`;
+por isso o executor fica desativado por padrão e o protocolo local não deve ser
+considerado compatível até validação conjunta.

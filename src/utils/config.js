@@ -62,6 +62,7 @@ const defaults = {
     },
     // ROADMAP 0111: fabricação lucrativa (factory + lab), preço conservador.
     craft: {
+        operatedStallTicks: 300,
         // chains advance on a grid of N ticks (utils/cadence): their states last hundreds of ticks
         tickInterval: 10,
         // test por padrão: só loga candidatos/descartes, nunca compra nem
@@ -338,6 +339,7 @@ const defaults = {
     },
     terminalFuel: {
         enabled: true,
+        minimumReserve: 10,
         transactions: 2,
         margin: 0.2,
         quoteMaxAge: 300,
@@ -409,13 +411,23 @@ const defaults = {
         linkReceiveFillRatio: 0.95,
     },
     terminalRelay: {
-        // Economic quotes are enabled; transport is planned in ROADMAP 0125.
+        // Quotes stay available, while relay intents remain opt-in until the
+        // private key and the ally's RLY protocol are configured in Memory.
         enabled: true,
+        transportEnabled: false,
         hub: "E2N46",
         freightMultiplier: 0.5,
         messageEnergy: 2,
         minSavingsEnergy: 0,
         minSavingsRatio: 0,
+        fundingLeadTicks: 30,
+        outcomeMaxTicks: 1500,
+        maxEnergyInTransit: 50000,
+    },
+    terminalMessenger: {
+        contacts: {},
+        maxQueue: 20,
+        historySize: 50,
     },
     stockPolicy: {
         enabled: true,
@@ -442,7 +454,9 @@ const defaults = {
         listingLifetime: 1209600,
     },
     terminalOps: {
+        // User default (2026-10-17); an explicit Memory setting still overrides it.
         reuseOrderBook: true,
+        sendConfirmationTicks: 2,
         // operations' state machines run every N ticks (a terminal cooldown is 10)
         tickInterval: 5,
         // ROADMAP 0098: a SELL stages its goods in the terminal in batches of

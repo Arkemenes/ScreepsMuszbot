@@ -2,7 +2,8 @@ module.exports = function (project, assert) {
     const path = require("path"), load = (name) => require(path.join(project, "src/utils/" + name));
     const ops = load("terminalOps"), claims = load("terminalClaims"), book = load("orderBook"), market = load("market"), retry = load("terminalOrderRetry");
     const saved = { rooms: Game.rooms, creeps: Game.creeps, market: Game.market, time: Game.time, get: Game.getObjectById,
-        settings: Memory.settings, ops: Memory.terminalOps, craft: Memory.craft, flip: Memory.marketFlip, snapshot: market.snapshot };
+        settings: Memory.settings, ops: Memory.terminalOps, craft: Memory.craft, flip: Memory.marketFlip, snapshot: market.snapshot,
+        power: global.PWR_OPERATE_TERMINAL, powerInfo: global.POWER_INFO };
     const store = (initial) => Object.assign({ getCapacity: () => 300000, getFreeCapacity: () => 290000,
         getUsedCapacity: () => 0 }, initial);
     let room, buy, hauler, withdrawal, orders;
@@ -137,9 +138,108 @@ module.exports = function (project, assert) {
         assert(!buy.pendingDeal && buy.error === "capacidade de recebimento insuficiente", "0136: retries never bypass terminal capacity");
         room.terminal.store.getFreeCapacity = () => 290000; room.terminal.cooldown = 1; Game.time += 10; ops.tick();
         assert(!buy.pendingDeal && buy.error === "terminal em cooldown", "0136: retries never bypass terminal cooldown");
+
+        const fixture = require("./fixtures/0150-terminal-power.json");
+        global.PWR_OPERATE_TERMINAL = fixture.power;
+        global.POWER_INFO = { [fixture.power]: { effect: fixture.factors } };
+        const powerCost = load("terminalPowerCost");
+        for (const vector of fixture.rounding) assert(powerCost.debit(vector.raw, vector.factor) === vector.debit,
+            "0150 terminal: native rounding raw " + vector.raw + " factor " + vector.factor);
+        assert(powerCost.multiplier({ effects: [{ effect: fixture.power, level: 6, ticksRemaining: 100 }] }) === 1 &&
+            powerCost.multiplier({ effects: [{ effect: 999, level: 5, ticksRemaining: 100 }] }) === 1,
+            "0150 terminal: unsupported levels and unrelated effects never invent a discount");
+        reset(); buy.limit = 1.85; ops.tick();
+        assert(!buy.pendingDeal, "0150 terminal: unpowered purchase rejects an effective price above its limit");
+        reset(); buy.limit = 1.85;
+        room.terminal.effects = [{ effect: fixture.power, level: 1, ticksRemaining: 100 }]; ops.tick();
+        assert(buy.pendingDeal && buy.pendingDeal.cost === 810,
+            "0150 terminal: realized freight discount can make the same purchase economically eligible");
+        for (let level = 1; level <= 5; level++) {
+            reset(); room.terminal.effects = [{ effect: fixture.power, level, ticksRemaining: 1 }];
+            ops.tick();
+            assert(buy.pendingDeal && buy.pendingDeal.cost === Math.ceil(900 * fixture.factors[level - 1]) &&
+                buy.pendingDeal.requiredEnergy === 900,
+                "0150 terminal: level " + level + " uses discounted debit and raw API buffer on the final active tick");
+            assert(claims.physicalFree(room, room.terminal, "energy", buy.id, claims.owner(buy)) === 100,
+                "0150 terminal: accepted level " + level + " intent protects the raw buffer even from its owner");
+        }
+        reset(); room.terminal.effects = [{ effect: fixture.power, level: 1, ticksRemaining: 100 }];
+        room.terminal.store.energy = 810; let calls = 0; Game.market.deal = () => { calls++; return OK; };
+        ops.tick();
+        assert(calls === 0 && !buy.pendingDeal, "0150 terminal: discounted fuel alone never passes the raw API precondition");
+        Memory.settings.terminalFuel = { enabled: true, margin: 0 };
+        const forecast = load("terminalFuel").plan(room);
+        assert(forecast.forecast === 900 && forecast.reserve >= 900,
+            "0150 terminal: fuel forecast funds the API buffer rather than only expected consumption");
+        reset(); room.terminal.effects = [{ effect: fixture.power, level: 1, ticksRemaining: 1 }]; ops.tick();
+        const poweredTx = transaction(400);
+        buy = JSON.parse(JSON.stringify(buy)); Memory.terminalOps.operations[buy.id] = buy;
+        room.terminal.effects = [{ effect: fixture.power, level: 5, ticksRemaining: 100 }];
+        room.terminal.store.UH2O = 400; room.terminal.store.energy -= 324;
+        Game.market.incomingTransactions = [poweredTx]; Game.time++; ops.tick();
+        assert(buy.dealtAmount === 400 && buy.transactionCost === 324 && buy.accounting.energy === 324,
+            "0150 terminal: partial fill after reset uses the intent's factor, not the current effect");
+        assert(buy.effectUncertain && buy.accounting.confidence === "incomplete",
+            "0150 terminal: an unprovable effect timeline never certifies predicted freight as actual cost");
+        assert(!buy.pendingDeal && claims.feeClaim(buy) === 0,
+            "0150 terminal: settlement releases the unused API buffer without booking it as consumption");
+        reset(); room.terminal.effects = [{ effect: fixture.power, level: 1, ticksRemaining: 1 }]; ops.tick();
+        Game.market.incomingTransactions = [transaction(1000)]; room.terminal.store.UH2O = 1000;
+        room.terminal.store.energy -= 810; room.terminal.effects = []; Game.time++; ops.tick();
+        assert(buy.transactionCost === 810 && buy.dealtAmount === 1000 && claims.feeClaim(buy) === 0,
+            "0150 terminal: full fill books discounted debit and releases the gross buffer after expiry");
+        Game.time++; ops.tick();
+        assert(buy.transactionCost === 810 && buy.dealtAmount === 1000,
+            "0150 terminal: replay does not duplicate operated freight or quantity");
+        reset(); buy.resourceType = "energy"; buy.limit = 20; orders[0].resourceType = "energy";
+        room.terminal.effects = [{ effect: fixture.power, level: 1, ticksRemaining: 1 }]; ops.tick();
+        Game.market.incomingTransactions = [Object.assign(transaction(400), { resourceType: "energy" })];
+        room.terminal.effects = []; room.terminal.store.energy += 76; Game.time++; ops.tick();
+        assert(buy.dealtAmount === 400 && buy.netBought === 76 && buy.transactionCost === 324,
+            "0150 terminal: powered partial energy purchase confirms gross, net and discounted freight");
+        reset(); buy.kind = "sell"; buy.resourceType = "energy"; buy.loadedAmount = 1000; buy.limit = 1;
+        orders[0].type = ORDER_BUY; orders[0].resourceType = "energy"; orders[0].price = 5;
+        room.terminal.effects = [{ effect: fixture.power, level: 1, ticksRemaining: 100 }];
+        room.terminal.store.energy = 1850; calls = 0; Game.market.deal = () => { calls++; return OK; };
+        ops.tick();
+        assert(calls === 0 && !buy.pendingDeal, "0150 terminal: energy sale funds cargo plus raw freight, not cargo plus discounted freight");
+        reset(); buy.kind = "sell"; buy.resourceType = "energy"; buy.loadedAmount = 1000; buy.limit = 1;
+        orders[0].type = ORDER_BUY; orders[0].resourceType = "energy"; orders[0].price = 5;
+        room.terminal.effects = [{ effect: fixture.power, level: 1, ticksRemaining: 1 }];
+        room.terminal.store.energy = 1900; ops.tick();
+        assert(buy.pendingDeal && claims.physicalFree(room, room.terminal, "energy", buy.id, claims.owner(buy)) === 0,
+            "0150 terminal: accepted energy sale protects cargo and the entire raw API buffer");
+        room.terminal.store.energy -= 1810; room.terminal.effects = []; Game.time++; ops.tick();
+        assert(buy.dealtAmount === 1000 && buy.transactionCost === 810 && buy.accounting.credits === 5000,
+            "0150 terminal: energy sale balance evidence includes actual freight before confirming full quantity");
+        reset(); room.terminal.effects = [{ effect: fixture.power, level: 1, ticksRemaining: 0 }]; ops.tick();
+        assert(buy.pendingDeal.cost === 900, "0150 terminal: expired effect preserves the unpowered reference");
+        const policy = load("resourcePolicy"), swing = load("swingTrade");
+        const providers = { ready: market.historyReady, summary: market.sampleSummary, snapshot: market.snapshot,
+            terminalFree: policy.terminalFree, deficit: policy.deficit };
+        try {
+            reset();
+            Memory.settings.swing = { minSamples: 1, margin: 0 };
+            market.historyReady = () => true;
+            market.sampleSummary = () => ({ length: 100, buyCount: 100, sellCount: 100, buyTick: Game.time, sellTick: Game.time });
+            market.snapshot = () => ({ resources: { energy: { buyPrice: 20, sellPrice: 20, fairPrice: 1 } } });
+            policy.terminalFree = () => 300000; policy.deficit = () => 100;
+            orders[0].resourceType = "energy";
+            const baseQuote = swing.quote(room, "buy", "energy", 1000, { orders });
+            room.terminal.effects = [{ effect: fixture.power, level: 1, ticksRemaining: 100 }];
+            const poweredQuote = swing.quote(room, "buy", "energy", 1000, { orders });
+            assert(baseQuote.quantity === 1000 && baseQuote.netAmount === 100 && poweredQuote.quantity < 1000 &&
+                poweredQuote.netAmount === 100 && poweredQuote.cost < poweredQuote.requiredEnergy,
+                "0150 terminal: swing sizes gross energy against discounted net delivery without exceeding the deficit");
+        } finally {
+            market.historyReady = providers.ready; market.sampleSummary = providers.summary; market.snapshot = providers.snapshot;
+            policy.terminalFree = providers.terminalFree; policy.deficit = providers.deficit;
+        }
     } finally {
         Game.rooms = saved.rooms; Game.creeps = saved.creeps; Game.market = saved.market; Game.time = saved.time;
         Game.getObjectById = saved.get; Memory.settings = saved.settings; Memory.terminalOps = saved.ops;
         Memory.craft = saved.craft; Memory.marketFlip = saved.flip; market.snapshot = saved.snapshot; book.reset();
+        if (saved.power === undefined) delete global.PWR_OPERATE_TERMINAL; else global.PWR_OPERATE_TERMINAL = saved.power;
+        if (saved.powerInfo === undefined) delete global.POWER_INFO; else global.POWER_INFO = saved.powerInfo;
     }
 };

@@ -13,8 +13,12 @@ const purchaseCost = require("./purchaseCost");
 const orderRetry = require("./terminalOrderRetry");
 const listingPolicy = require("./listingPolicy");
 const listingLifecycle = require("./listingLifecycle");
+const terminalPowerCost = require("./terminalPowerCost");
+const terminalMessenger = require("./terminalMessenger");
+const terminalRouting = require("./terminalRouting");
+const hostiles = require("./hostiles");
 
-const FINAL_STATES = ["completed", "failed", "cancelled"];
+const FINAL_STATES = ["completed", "failed", "cancelled", "forfeited"];
 
 function memory() {
     if (!Memory.terminalOps) Memory.terminalOps = { nextId: 1, operations: {}, seenIncoming: {}, events: [], terminalBalance: {} };
@@ -46,6 +50,12 @@ function freeCapacity(store, resource) { return !store || typeof store.getFreeCa
 function room(name) { return Game.rooms && Game.rooms[name]; }
 function owned(name) { const value = room(name); return value && value.controller && value.controller.my && value.storage && value.terminal ? value : null; }
 function txCost(value, from, to) { return Game.market && typeof Game.market.calcTransactionCost === "function" ? Game.market.calcTransactionCost(value, from, to) : 0; }
+function dealFreight(op, quantity, destination) {
+    const source = room(op.sourceRoom);
+    const freightMultiplier = op.marketOnly ? 1 : terminalPowerCost.multiplier(source && source.terminal);
+    const requiredEnergy = op.marketOnly ? 0 : txCost(quantity, op.sourceRoom, destination);
+    return { requiredEnergy, cost: terminalPowerCost.debit(requiredEnergy, freightMultiplier), freightMultiplier };
+}
 // Successful calls register intents; cooldown/store changes arrive next tick.
 let terminalIntentTick = null;
 let terminalIntentOps = null;
@@ -65,7 +75,13 @@ function claimTerminal(name) { terminalBusy(name); terminalIntents.add(name); }
 // only one that pays its own transactionCost this way (sell/buy fund the fee
 // via a separate "fee" job instead), so this only inflates the load target
 // for that kind.
-function transferLoadTarget(op) { return op.amount + (op.kind === "transfer" && op.resourceType === RESOURCE_ENERGY ? (op.transactionCost || 0) : 0); }
+function transferLoadTarget(op) {
+    if (op.kind !== "transfer") return op.amount;
+    if (op.route === "relay" && op.resourceType === RESOURCE_ENERGY)
+        return op.routingQuote.cargoAmount + op.routingQuote.originFreight;
+    return op.remaining + (op.resourceType === RESOURCE_ENERGY ?
+        (op.requiredEnergy === undefined ? op.transactionCost || 0 : op.requiredEnergy) : 0);
+}
 // Single choke point for state changes, so every path that gives up on an
 // operation (credits, market unavailable, createOrder error, ...) is reported
 // here instead of requiring each call site to remember to log it. Silent
@@ -145,9 +161,50 @@ function create(kind, from, to, resourceType, value, options) {
 }
 function reservedFrom(roomName, resourceType) {
     return activeIds().map(operation).reduce((sum, op) => {
+        if (resourceType === RESOURCE_ENERGY && active(op) && op.kind === "transfer" && op.route === "relay" &&
+            op.sourceRoom === roomName && op.routingQuote && !(op.relay && op.relay.cargoSent)) {
+            const reserved = op.resourceType === RESOURCE_ENERGY
+                ? (op.routingQuote.cargoAmount || 0) + (op.routingQuote.originFreight || 0)
+                : (op.routingQuote.originFreight || 0) + (op.relay && op.relay.fundingSent ? 0 :
+                    (op.routingQuote.fundingAmount || 0) + (op.routingQuote.fundingFreight || 0));
+            return sum + Math.max(0, reserved - (op.resourceType === RESOURCE_ENERGY ? op.loadedAmount || 0 : 0));
+        }
         if (!active(op) || op.sourceRoom !== roomName || op.resourceType !== resourceType || (op.kind !== "transfer" && op.kind !== "sell")) return sum;
         return sum + Math.max(0, (op.amount || 0) - (op.loadedAmount || 0) - (op.sentAmount || 0));
     }, 0);
+}
+
+function relayKey() {
+    const settings = Memory.settings && Memory.settings.terminalRelay;
+    const key = settings && settings.key;
+    return typeof key === "string" && /^[A-Za-z0-9._~-]{8,50}$/.test(key) ? key : null;
+}
+function relayAlly() {
+    const hub = config.get("terminalRelay.hub", "E2N46");
+    const entry = Memory.rooms && Memory.rooms[hub] ||
+        Memory.roomRegistry && Memory.roomRegistry.rooms && Memory.roomRegistry.rooms[hub];
+    const owner = entry && (entry.owner || entry.o);
+    const level = entry && (entry.controllerLevel === undefined ? entry.l : entry.controllerLevel);
+    return typeof owner === "string" && Number(level) >= 6 && hostiles.isAlly(owner) ? owner : null;
+}
+function activeRelayCount(exceptId) {
+    return activeIds().map(operation).filter((op) => op && op.id !== exceptId && op.route === "relay" &&
+        op.resourceType !== RESOURCE_ENERGY && active(op)).length;
+}
+function relayCanExecute(sourceRoom, targetRoom, exceptId) {
+    const hub = config.get("terminalRelay.hub", "E2N46");
+    if (!config.get("terminalRelay.transportEnabled", false) || !relayKey() || !relayAlly() ||
+        !/^[WE]\d+[NS]\d+$/i.test(hub) || sourceRoom === hub || targetRoom === hub ||
+        activeRelayCount(exceptId) > 0) return false;
+    return true;
+}
+function quoteTransfer(from, to, resourceType, value, options) {
+    const opts = options || {};
+    return terminalRouting.quote(from, to, resourceType, value, {
+        urgent: opts.urgent === true,
+        fundingRoom: from,
+        relayAvailable: relayCanExecute(from, to),
+    });
 }
 
 function announce(command, response) {
@@ -160,11 +217,35 @@ function transfer(from, to, resourceType, value, options) {
     if (!validResource(resourceType) || marketOnlyResource(resourceType) || !amount(value)) return result(false, "recurso ou quantidade inválido para transferência física");
     if (lockConflict("transfer", from, to, resourceType, !!(options && options.automatic))) return result(false, "já existe uma operação concorrente para este terminal/recurso");
     const cost = txCost(value, from, to);
+    const quote = quoteTransfer(from, to, resourceType, value, options);
+    const route = quote.ok && quote.route === "relay" ? "relay" : "direct";
+    const relay = route === "relay" ? quote.relay : null;
+    const sourceFreight = relay ? relay.originFreight : cost;
+    const cargoAmount = relay ? relay.cargoAmount : value;
     const available = Math.max(0, storeValue(source.storage.store, resourceType) - reservedFrom(from, resourceType));
-    const needed = value + (resourceType === RESOURCE_ENERGY ? cost : 0);
+    const needed = cargoAmount + (resourceType === RESOURCE_ENERGY ? sourceFreight : 0);
     if (available < needed) return result(false, "material insuficiente: disponível " + available + ", necessário " + needed);
-    if (resourceType !== RESOURCE_ENERGY && storeValue(source.storage.store, RESOURCE_ENERGY) < cost) return result(false, "energia de taxa insuficiente: necessário " + cost);
-    return result(true, create("transfer", from, to, resourceType, value, Object.assign({ transactionCost: cost }, options || {})));
+    const totalEnergyCost = relay ? relay.freight : cost;
+    if (resourceType !== RESOURCE_ENERGY && storeValue(source.storage.store, RESOURCE_ENERGY) < totalEnergyCost)
+        return result(false, "energia de taxa/relay insuficiente: necessário " + totalEnergyCost);
+    const id = create("transfer", from, to, resourceType, value, Object.assign({ transactionCost: cost, requiredEnergy: cost }, options || {}));
+    const op = operation(id);
+    op.route = route;
+    op.requestedAmount = value;
+    if (route === "relay") {
+        op.routingQuote = { savingsEnergy: quote.savingsEnergy, savingsRatio: quote.savingsRatio,
+            directFreight: quote.direct.freight, relayFreight: quote.relay.freight,
+            cargoAmount: quote.relay.cargoAmount, fundingAmount: quote.relay.fundingAmount,
+            originFreight: quote.relay.originFreight, fundingFreight: quote.relay.fundingFreight,
+            hubFreight: quote.relay.hubFreight, quotedTick: Game.time };
+        op.relay = { id: Number(id.replace(/^terminal-/, "")), ally: relayAlly(), hub: quote.relay && config.get("terminalRelay.hub", "E2N46"),
+            phase: "staging", fundingSent: false, cargoSent: false, receivedAmount: 0, outcome: null };
+        op.requiredEnergy = quote.relay.freight;
+        op.transactionCost = quote.relay.freight;
+        touch(op, "staging");
+    }
+    else op.route = "direct";
+    return result(true, id);
 }
 function priceData(resourceType, requireEnergy) {
     const snapshot = marketPrices.snapshot();
@@ -339,6 +420,8 @@ function scoredOrders(op, candidatesOnly = false) {
     if (currentPrices) op.energyFairPrice = currentPrices.energy;
     const dead = orderRetry.excluded(op);
     const freight = new Map();
+    const source = room(op.sourceRoom);
+    const freightMultiplier = op.marketOnly ? 1 : terminalPowerCost.multiplier(source && source.terminal);
     return cpuMeter.span("terminalOps.scoreOrders", () => orders.filter((order) => {
         if (!order || (Game.market.orders || {})[order.id] || !(order.price > 0) ||
             (!op.marketOnly && !order.roomName) || !(orderAmount(order) > 0)) return false;
@@ -350,13 +433,14 @@ function scoredOrders(op, candidatesOnly = false) {
         const quantity = Math.min(op.remaining, orderAmount(order), op.kind === "sell" && !op.marketOnly ? (op.loadedAmount || 0) : op.remaining);
         const freightKey = quantity + ":" + order.roomName;
         if (!op.marketOnly && !freight.has(freightKey)) freight.set(freightKey, txCost(quantity, op.sourceRoom, order.roomName));
-        const cost = op.marketOnly ? 0 : freight.get(freightKey);
+        const requiredEnergy = op.marketOnly ? 0 : freight.get(freightKey);
+        const cost = terminalPowerCost.debit(requiredEnergy, freightMultiplier);
         const fee = quantity ? cost * (op.energyFairPrice || 0) / quantity : Infinity;
-        if (op.kind === "buy") return Object.assign({ order }, purchaseCost.evaluate(Object.assign({}, op, {
+        if (op.kind === "buy") return Object.assign({ order, requiredEnergy, freightMultiplier }, purchaseCost.evaluate(Object.assign({}, op, {
             cancelledListingFees: (op.cancelledListingFees || 0) + (op.marketOrderId ? op.orderFeesRemaining || 0 : 0),
         }), order.price, quantity, cost, op.energyFairPrice || 0));
         const effective = op.effectiveLimit ? require("./swingTrade").effective(op.kind, op.resourceType, order.price, quantity, cost, op.energyFairPrice || 0) : order.price - fee;
-        return { order, quantity, cost, fee, effective };
+        return { order, quantity, cost, requiredEnergy, freightMultiplier, fee, effective };
     }));
 }
 // op.limit gates on the order's own raw price - the number the user reads
@@ -388,7 +472,7 @@ function candidateOrders(op) {
         if (!candidate.order) { op.policyBlock = candidate.reason; return []; }
         op.limit = candidate.limit; op.energyFairPrice = candidate.energyFairPrice;
         delete op.policyBlock;
-        op.fuelQuote = { tick: Game.time, cost: candidate.cost };
+        op.fuelQuote = { tick: Game.time, cost: candidate.cost, requiredEnergy: terminalPowerCost.required(candidate) };
         return [op.kind === "buy" ? Object.assign({}, candidate, purchaseCost.evaluate(op, candidate.order.price, candidate.quantity, candidate.cost, candidate.energyFairPrice)) : candidate];
     }
     // deadOrderIds excludes orders that already burned a deal() call this
@@ -402,7 +486,7 @@ function candidateOrders(op) {
         (op.kind === "buy" ? item.ok : (op.effectiveLimit ? item.effective : item.order.price) >= op.limit) &&
         (op.kind === "buy" || op.skipFeeCap || item.fee <= item.order.price * maxFeeRatio)
     ).sort((a, b) => op.kind === "buy" ? a.effective - b.effective : b.effective - a.effective);
-    if (candidates[0]) op.fuelQuote = { tick: Game.time, cost: candidates[0].cost };
+    if (candidates[0]) op.fuelQuote = { tick: Game.time, cost: candidates[0].cost, requiredEnergy: terminalPowerCost.required(candidates[0]) };
     return candidates;
 }
 // Two separate things (bug real, usuario reportou em producao, 2026-10-02):
@@ -498,9 +582,10 @@ function executeDeal(op, target, selected) {
         if (!unlisted || !physical) { touch(op, "listed"); return; }
         choices = choices.map((item) => {
             const quantity = Math.min(item.quantity, unlisted, physical);
-            const cost = op.marketOnly ? 0 : txCost(quantity, op.sourceRoom, item.order.roomName);
+            const freight = dealFreight(op, quantity, item.order.roomName);
+            const cost = freight.cost;
             const fee = cost * (op.energyFairPrice || 0) / Math.max(1, quantity);
-            return Object.assign({}, item, { quantity, cost, fee, effective: item.order.price - fee });
+            return Object.assign({}, item, freight, { quantity, fee, effective: item.order.price - fee });
         }).filter((item) => item.quantity > 0 && (op.effectiveLimit ? item.effective : item.order.price) >= op.limit &&
             (op.skipFeeCap || item.fee <= item.order.price * config.get("terminalOps.maxFeeRatio", 0.05)));
     }
@@ -531,7 +616,9 @@ function executeDeal(op, target, selected) {
         op.policyBlock = "scarce-energy";
         return;
     }
-    const fuelNeeded = candidate && candidate.cost + (!fuel.enabled() && op.policy === "swing" && !(op.kind === "buy" && op.resourceType === RESOURCE_ENERGY) ? stockPolicy.terminalReserve(target) : 0);
+    const fuelNeeded = candidate && terminalPowerCost.required(candidate) +
+        (op.kind === "sell" && op.resourceType === RESOURCE_ENERGY ? candidate.quantity : 0) +
+        (!fuel.enabled() && op.policy === "swing" && !(op.kind === "buy" && op.resourceType === RESOURCE_ENERGY) ? stockPolicy.terminalReserve(target) : 0);
     const freeFuel = op.marketOnly ? Infinity : Math.max(0, storeValue(target.terminal.store, RESOURCE_ENERGY) -
         managedTerminalIncrease(target.name, RESOURCE_ENERGY, activeForRoom(target.name).filter((other) => other.id !== op.id)));
     if (!op.marketOnly && freeFuel < fuelNeeded) {
@@ -612,6 +699,8 @@ function executeDeal(op, target, selected) {
     // bookkeeping on the next tick against evidence that actually exists.
     op.pendingDeal = {
         orderId: candidate.order.id, quantity: candidate.quantity, cost: candidate.cost,
+        requiredEnergy: terminalPowerCost.required(candidate), freightMultiplier: candidate.freightMultiplier || 1,
+        power: op.marketOnly ? null : terminalPowerCost.snapshot(target.terminal),
         price: candidate.order.price, tick: Game.time,
         orderRemaining: orderAmount(candidate.order),
         orderRoom: candidate.order.roomName,
@@ -637,7 +726,7 @@ function dealTraded(op, source, pending) {
     if (!op.marketOnly && source && source.terminal) {
         const now = storeValue(source.terminal.store, op.resourceType);
         const moved = op.kind === "buy" ? now - pending.terminalBefore : pending.terminalBefore - now;
-        const expected = op.kind === "buy" && op.resourceType === RESOURCE_ENERGY ? pending.quantity - pending.cost : pending.quantity;
+        const expected = op.resourceType === RESOURCE_ENERGY ? pending.quantity + (op.kind === "buy" ? -pending.cost : pending.cost) : pending.quantity;
         if (moved >= expected) { pending.evidence = "terminal-balance"; return pending.quantity; }
         return 0;
     }
@@ -654,8 +743,13 @@ function settleDeal(op, source) {
     if (!pending) { touch(op, "waiting"); return; }
     if (Game.time <= pending.tick) return; // the engine has not run the intent yet
     const traded = dealTraded(op, source, pending);
+    if (traded > 0 && !op.marketOnly && source && pending.power !== undefined && !terminalPowerCost.sameAfter(pending.power,
+        terminalPowerCost.snapshot(source.terminal), Game.time - pending.tick)) {
+        op.effectUncertain = true;
+        require("./craftLedger").economic(op).confidence = "incomplete";
+    }
     const cost = traded === pending.quantity ? pending.cost : traded > 0 && !op.marketOnly ?
-        pending.orderRoom ? txCost(traded, op.sourceRoom, pending.orderRoom) : Math.ceil(pending.cost * traded / pending.quantity) : 0;
+        pending.orderRoom ? terminalPowerCost.debit(txCost(traded, op.sourceRoom, pending.orderRoom), pending.freightMultiplier || 1) : Math.ceil(pending.cost * traded / pending.quantity) : 0;
     op.lastDealObservation = { tick: Game.time, orderId: pending.orderId, requested: pending.quantity, traded,
         evidence: pending.evidence || "none", orderRemainingBefore: pending.orderRemaining,
         freight: cost, netAmount: traded - (op.kind === "buy" && op.resourceType === RESOURCE_ENERGY ? cost : 0),
@@ -791,7 +885,7 @@ function canExecutePurchase(op, source, candidate) {
     if (Game.market.credits < credits || marketAccounting.automatic(op) && marketAccounting.available(op.id) < credits) return false;
     const fuel = op.marketOnly ? Infinity : Math.max(0, storeValue(source.terminal.store, RESOURCE_ENERGY) -
         managedTerminalIncrease(source.name, RESOURCE_ENERGY, activeForRoom(source.name).filter((other) => other.id !== op.id)));
-    return fuel >= candidate.cost;
+    return fuel >= terminalPowerCost.required(candidate);
 }
 function buyListingCeiling(op, order) {
     const quantity = order ? orderAmount(order) : op.remaining;
@@ -847,11 +941,12 @@ function listResidual(op, target) {
         const quote = candidateOrders(op).find((item) => item.quantity > 0);
         if (quote && free > 0) {
             const quantity = Math.min(extended, free, quote.quantity);
-            const cost = op.marketOnly ? 0 : txCost(quantity, op.sourceRoom, quote.order.roomName);
+            const freight = dealFreight(op, quantity, quote.order.roomName);
+            const cost = freight.cost;
             const fee = cost * (op.energyFairPrice || 0) / quantity;
             const effective = quote.order.price - fee;
             if ((op.effectiveLimit ? effective : quote.order.price) >= op.limit && (op.skipFeeCap || fee <= quote.order.price * config.get("terminalOps.maxFeeRatio", 0.05))) {
-                executeDeal(op, target, Object.assign({}, quote, { quantity, cost, fee, effective, exposed }));
+                executeDeal(op, target, Object.assign({}, quote, freight, { quantity, fee, effective, exposed }));
                 return;
             }
         }
@@ -1127,8 +1222,20 @@ function scanIncoming() {
         if (!tx || !tx.transactionId) return;
         stillListed[tx.transactionId] = true;
         if (memory().seenIncoming[tx.transactionId]) return;
+        if (handleRelayTransaction(tx)) {
+            memory().seenIncoming[tx.transactionId] = Game.time; return;
+        }
+        // Message postage is not a resource delivery job. Process it in this
+        // existing scan so we do not add another per-tick transaction walk.
+        if (terminalMessenger.receiveTransaction(tx)) {
+            memory().seenIncoming[tx.transactionId] = Game.time; return;
+        }
         if (tx.to && validResource(tx.resourceType) && amount(tx.amount)) {
             const parent = awaitingReceiptFor(tx.to, tx.resourceType, tx);
+            // A pending managed send owns its arrival; its own unload leg will handle it.
+            if (parent && parent.kind === "transfer" && parent.pendingSend) {
+                memory().seenIncoming[tx.transactionId] = Game.time; return;
+            }
             if (!incomingReceipt(tx.to, tx.resourceType, tx.amount, parent && parent.id)) return;
         }
         memory().seenIncoming[tx.transactionId] = Game.time;
@@ -1185,7 +1292,7 @@ function reconcileClaims(name, resourceType, terminal) {
     if (busy) { receipts.forEach((op) => { delete op.deficitSinceTick; }); return; }
     const staged = activeForRoom(name).reduce((sum, op) => {
         if (op.sourceRoom !== name) return sum;
-        if (op.resourceType === resourceType && (op.kind === "sell" || (op.kind === "transfer" && !(op.sentAmount > 0)))) sum += Math.max(0, op.loadedAmount || 0);
+        if (op.resourceType === resourceType && (op.kind === "sell" || (op.kind === "transfer" && (!(op.sentAmount > 0) || op.remaining > 0)))) sum += Math.max(0, op.loadedAmount || 0);
         if (resourceType === RESOURCE_ENERGY) sum += claims.feeClaim(op);
         return sum;
     }, 0);
@@ -1194,7 +1301,7 @@ function reconcileClaims(name, resourceType, terminal) {
     if (staged > 0) { receipts.forEach((op) => { delete op.deficitSinceTick; }); return; }
     let free = Math.max(0, storeValue(terminal.store, resourceType) - staged);
     receipts.forEach((op) => {
-        const owed = op.kind === "receipt" ? Math.max(0, op.amount - (op.receivedAmount || 0) - (op.recoveredAmount || 0)) : Math.max(0, op.amount - (op.receivedAmount || 0));
+        const owed = op.kind === "receipt" ? Math.max(0, op.amount - (op.receivedAmount || 0) - (op.recoveredAmount || 0)) : Math.max(0, (op.sentAmount || 0) - (op.receivedAmount || 0));
         const covered = Math.min(owed, free);
         free -= covered;
         const shortfall = owed - covered;
@@ -1305,14 +1412,313 @@ function recover(op, source) {
     // no special recovery needed unless the dying hauler itself was
     // physically carrying cargo, which the drops check above already
     // covers using the correct (target) room passed in by tick().
-    if (op.kind === "transfer" && op.sentAmount > 0) { touch(op, "waiting"); return; }
+    if (op.kind === "transfer" && op.sentAmount > (op.receivedAmount || 0)) { touch(op, "waiting"); return; }
     if (op.loadedAmount > 0 && source) {
         op.recoveryAttempts = (op.recoveryAttempts || 0) + 1;
         if (op.recoveryAttempts > 3) { op.error = "hauler morreu e não foi possível recuperar a carga"; touch(op, "failed"); }
         else { touch(op, "recovering"); assign(op, source, "recover", source.terminal, source.storage, op.loadedAmount); }
     } else touch(op, op.kind === "receipt" ? "waiting" : "queued");
 }
+function settleSend(op, source, target) {
+    const p = op.pendingSend;
+    if (!p || Game.time <= p.tick) return;
+    const matches = (list) => Array.isArray(list) && list.find((tx) => tx && !tx.order && tx.time === p.tick &&
+        tx.from === op.sourceRoom && tx.to === op.targetRoom && tx.resourceType === op.resourceType &&
+        tx.description === "terminal operation " + op.id && tx.amount > 0);
+    const tx = matches(Game.market && Game.market.outgoingTransactions) || matches(Game.market && Game.market.incomingTransactions);
+    let traded = tx ? Math.min(p.quantity, tx.amount) : 0;
+    const nowCargo = storeValue(source.terminal.store, op.resourceType), nowEnergy = storeValue(source.terminal.store, RESOURCE_ENERGY);
+    const targetNow = storeValue(target.terminal.store, op.resourceType);
+    if (!traded && targetNow - p.targetBefore === p.quantity && p.cargoBefore - nowCargo ===
+        p.quantity + (op.resourceType === RESOURCE_ENERGY ? p.cost : 0) &&
+        p.energyBefore - nowEnergy === p.cost + (op.resourceType === RESOURCE_ENERGY ? p.quantity : 0)) traded = p.quantity;
+    if (!traded) {
+        if (Game.time - p.tick < config.get("terminalOps.sendConfirmationTicks", 2)) return;
+        if (nowCargo === p.cargoBefore && nowEnergy === p.energyBefore && targetNow === p.targetBefore) {
+            delete op.pendingSend;
+            op.error = "send retornou OK mas nenhum movimento foi observado";
+            touch(op, "atTerminal");
+            if (op.cancelRequested) cancel(op.id);
+        } else {
+            p.uncertain = true;
+            op.error = Game.time - p.tick >= config.get("terminalOps.transferStallTicks", 1500) ?
+                "send sem confirmação atribuível: intervenção necessária" : "aguardando confirmação atribuível de send";
+        }
+        return;
+    }
+    const cost = traded === p.quantity ? p.cost : terminalPowerCost.debit(txCost(traded, op.sourceRoom, op.targetRoom), p.freightMultiplier);
+    if (p.power !== undefined && !terminalPowerCost.sameAfter(p.power, terminalPowerCost.snapshot(source.terminal), Game.time - p.tick)) {
+        op.effectUncertain = true;
+        require("./craftLedger").economic(op).confidence = "incomplete";
+    }
+    op.transactionCost = (op.sentAmount > 0 ? op.transactionCost : 0) + cost;
+    op.sentAmount = (op.sentAmount || 0) + traded; op.sentTick = p.tick;
+    op.remaining = Math.max(0, op.amount - op.sentAmount);
+    op.loadedAmount = Math.max(0, op.loadedAmount - traded - (op.resourceType === RESOURCE_ENERGY ? cost : 0));
+    if (!op.remaining) { op.loadedAmount = 0; op.feeLoadedAmount = 0; }
+    else op.feeLoadedAmount = Math.max(0, (op.feeLoadedAmount || 0) - cost);
+    op.requiredEnergy = op.remaining ? txCost(op.remaining, op.sourceRoom, op.targetRoom) : 0;
+    op.targetTerminalBaseline = p.targetBefore;
+    delete op.pendingSend; delete op.error;
+    record(op, traded, 0, cost); touch(op, "awaitingReceipt");
+    if (op.cancelRequested) { delete op.cancelRequested; op.stopAfterReceipt = true; }
+}
+function relayDescription(op, phase) {
+    const key = relayKey();
+    const source = room(op.sourceRoom);
+    const username = source && source.controller && source.controller.owner && source.controller.owner.username;
+    if (!key || !username || !op.relay || !Number.isInteger(op.relay.id)) return null;
+    const description = key + " RLY #" + op.relay.id + " from " + username + " " + phase;
+    return description.length <= 100 ? description : null;
+}
+function refreshRelayQuote(op) {
+    const quote = terminalRouting.quote(op.sourceRoom, op.targetRoom, op.resourceType, op.remaining || op.amount, {
+        fundingRoom: op.sourceRoom,
+        relayAvailable: relayCanExecute(op.sourceRoom, op.targetRoom, op.id),
+    });
+    if (!quote.ok) return null;
+    return quote;
+}
+function relayAlert(op, message) {
+    const line = "[terminalRelay] " + op.id + " requires review: " + message;
+    op.error = message;
+    if (op.lastAlertTick !== Game.time) {
+        op.lastAlertTick = Game.time;
+        if (typeof Game.notify === "function") Game.notify(line, 0);
+        console.log(line);
+    }
+}
+function outgoingRelayTransaction(p) {
+    const outgoing = Game.market && Game.market.outgoingTransactions;
+    if (!Array.isArray(outgoing)) return null;
+    return outgoing.find((tx) => tx && tx.time === p.tick && tx.from === p.from && tx.to === p.to &&
+        tx.resourceType === p.resourceType && Number.isInteger(tx.amount) && tx.amount > 0) || null;
+}
+function settleRelaySend(op, source) {
+    const p = op.pendingSend;
+    if (!p) return;
+    const cargoNow = storeValue(source.terminal.store, p.resourceType);
+    const energyNow = storeValue(source.terminal.store, RESOURCE_ENERGY);
+    const cargoDelta = p.cargoBefore - cargoNow;
+    const energyDelta = p.energyBefore - energyNow;
+    const tx = outgoingRelayTransaction(p);
+    let sent = tx && tx.amount;
+    const exactDelta = p.resourceType === RESOURCE_ENERGY
+        ? energyDelta === p.quantity + p.cost
+        : cargoDelta === p.quantity && energyDelta === p.cost;
+    if (!sent && exactDelta) sent = p.quantity;
+    if (!sent) {
+        if (Game.time - p.tick < config.get("terminalOps.sendConfirmationTicks", 2)) return;
+        op.relay.phase = p.relayPhase === "funding" ? "fundingUncertain" : "receiptUncertain";
+        delete op.pendingSend;
+        relayAlert(op, "relay send is ambiguous; no retry was made");
+        touch(op, op.relay.phase);
+        return;
+    }
+    delete op.pendingSend;
+    if (sent !== p.quantity || !exactDelta) {
+        op.relay.phase = p.relayPhase === "funding" ? "fundingUncertain" : "receiptUncertain";
+        op.relay[p.relayPhase === "funding" ? "fundingSentAmount" : "sentCargoAmount"] = sent;
+        relayAlert(op, "relay send was partial or its terminal delta disagrees; no retry was made");
+        touch(op, op.relay.phase);
+        return;
+    }
+    if (p.relayPhase === "funding") {
+        op.relay.fundingSent = true;
+        op.relay.fundingSentAmount = sent;
+        op.relay.fundingCost = p.cost;
+        op.relay.fundingTick = p.tick;
+        op.relay.phase = "fundingConfirmed";
+        touch(op, "fundingConfirmed");
+        return;
+    }
+    op.relay.cargoSent = true;
+    op.relay.sentCargoAmount = sent;
+    op.relay.cargoCost = p.cost;
+    op.relay.cargoSentTick = p.tick;
+    op.relay.phase = "awaitingOutcome";
+    op.sentTick = p.tick;
+    op.transactionCost = p.cost + (op.relay.fundingCost || 0);
+    touch(op, "awaitingOutcome");
+}
+function startRelaySend(op, source, phaseName, quantity, resourceType, freight) {
+    if (terminalBusy(source.name)) { op.error = "terminal já usado neste tick"; touch(op, "waiting"); return false; }
+    if (source.terminal.cooldown) { op.error = "terminal em cooldown"; touch(op, phaseName === "funding" ? "fundingConfirmed" : "atTerminal"); return false; }
+    const description = relayDescription(op, phaseName);
+    if (!description) { op.error = "relay key, username or description invalid"; touch(op, "held"); return false; }
+    const required = freight + (resourceType === RESOURCE_ENERGY ? quantity : 0);
+    const freeFuel = storeValue(source.terminal.store, RESOURCE_ENERGY) -
+        managedTerminalIncrease(source.name, RESOURCE_ENERGY, activeForRoom(source.name).filter((other) => other.id !== op.id));
+    if (freeFuel < required) { op.error = "energia de relay insuficiente"; touch(op, phaseName === "funding" ? "fundingConfirmed" : "atTerminal"); return false; }
+    const multiplier = terminalPowerCost.multiplier(source.terminal);
+    const status = source.terminal.send(resourceType, quantity, op.relay.hub, description);
+    if (status !== OK) { op.error = "relay send retornou " + status; touch(op, phaseName === "funding" ? "fundingConfirmed" : "atTerminal"); return false; }
+    claimTerminal(source.name);
+    op.pendingSend = { relayPhase: phaseName, tick: Game.time, from: source.name, to: op.relay.hub,
+        resourceType, quantity, cost: freight, freightMultiplier: multiplier,
+        cargoBefore: storeValue(source.terminal.store, resourceType), energyBefore: storeValue(source.terminal.store, RESOURCE_ENERGY) };
+    touch(op, phaseName === "funding" ? "funding" : "sending");
+    return true;
+}
+function relayExpectedCost(op, value, from, to) {
+    const source = room(from);
+    const multiplier = terminalPowerCost.multiplier(source && source.terminal);
+    return terminalPowerCost.debit(txCost(value, from, to), multiplier);
+}
+function relayFinish(op, target, outcome, delivered) {
+    const actual = Math.max(0, Math.min(op.amount, Number.isInteger(delivered) ? delivered : 0));
+    op.relay.outcome = outcome;
+    op.relay.outcomeTick = Game.time;
+    op.relay.expectedDelivered = actual;
+    if (outcome === "forfeit") {
+        op.relay.lostAmount = Math.max(0, op.amount - actual);
+        op.sentAmount = actual;
+        op.receivedAmount = actual;
+        touch(op, "forfeited");
+        relayAlert(op, "ally reported that relay cargo was forfeited");
+        return;
+    }
+    if (op.relay.receivedAmount < actual) return;
+    op.sentAmount = actual;
+    op.amount = actual;
+    op.remaining = 0;
+    if (!actual || config.get("stockPolicy.enabled", true) && !stockPolicy.used(target, op.resourceType)) {
+        op.receivedAmount = actual;
+        if (!op.relay.statsRecorded) {
+            record(op, actual, 0, op.transactionCost || 0);
+            op.relay.statsRecorded = true;
+        }
+        touch(op, "completed");
+        return;
+    }
+    const unloaded = Math.max(0, actual - (op.receivedAmount || 0));
+    if (unloaded > 0) {
+        touch(op, "unloading");
+        assign(op, target, "unload", target.terminal, target.storage, unloaded);
+    }
+}
+function handleRelayTransaction(tx) {
+    const description = tx && tx.description;
+    if (typeof description !== "string" || !/^(?:[A-Za-z0-9._~-]{8,50}\s+)?RLY\s+#/i.test(description)) return false;
+    const match = description.match(/^(?:[A-Za-z0-9._~-]{8,50}\s+)?RLY\s+#(\d+)(?:\s+(ok|err|forfeit))?(?:\s+(\d+))?(?:\s+from\s+(\S+))?/i);
+    if (!match) return true;
+    const relayId = Number(match[1]);
+    const op = Object.values(memory().operations).find((candidate) => candidate && candidate.route === "relay" &&
+        candidate.relay && candidate.relay.id === relayId && active(candidate));
+    if (!op || !op.relay.cargoSent || !tx.transactionId || tx.time < op.relay.cargoSentTick ||
+        tx.time - op.relay.cargoSentTick > config.get("terminalRelay.outcomeMaxTicks", 1500)) return true;
+    const sender = tx.sender && tx.sender.username;
+    const source = room(op.sourceRoom);
+    const username = source && source.controller && source.controller.owner && source.controller.owner.username;
+    if (tx.from !== op.relay.hub || !sender || sender.toLowerCase() !== String(op.relay.ally).toLowerCase() ||
+        match[4] && (!username || match[4].toLowerCase() !== String(username).toLowerCase())) return true;
+    if (tx.to === op.targetRoom && tx.resourceType === op.resourceType) {
+        const received = Number.isInteger(tx.amount) ? Math.min(tx.amount, op.amount) : 0;
+        if (received > 0) {
+            op.relay.receivedAmount = Math.min(op.amount, (op.relay.receivedAmount || 0) + received);
+            op.relay.receiptTransactionIds = op.relay.receiptTransactionIds || [];
+            op.relay.receiptTransactionIds.push(tx.transactionId);
+            if (op.relay.ackReceived && op.relay.receivedAmount >= (op.relay.expectedDelivered || 0))
+                relayFinish(op, owned(op.targetRoom), op.relay.ackOutcome, op.relay.expectedDelivered);
+            else if (op.relay.receivedAmount >= op.amount) relayFinish(op, owned(op.targetRoom), "observed", op.amount);
+        }
+        return true;
+    }
+    if (tx.to !== op.sourceRoom || tx.resourceType !== RESOURCE_ENERGY) return true;
+    const outcome = match[2] && match[2].toLowerCase();
+    if (!outcome) return true;
+    const delivered = match[3] === undefined ? (outcome === "ok" ? op.amount : 0) : Number(match[3]);
+    op.relay.ackReceived = true;
+    op.relay.ackOutcome = outcome;
+    op.relay.ackTick = tx.time;
+    op.relay.expectedDelivered = delivered;
+    if (outcome === "forfeit" || op.relay.receivedAmount >= delivered) relayFinish(op, owned(op.targetRoom), outcome, delivered);
+    else touch(op, "awaitingOutcome");
+    return true;
+}
+function tickRelayTransfer(op, source, target) {
+    if (op.pendingSend) { settleRelaySend(op, source); if (op.pendingSend || !active(op)) return; }
+    if (["fundingUncertain", "receiptUncertain", "held", "forfeited"].includes(op.state)) return;
+    if (op.relay.cargoSent) {
+        if (op.relay.ackReceived && op.relay.receivedAmount >= (op.relay.expectedDelivered || 0))
+            relayFinish(op, target, op.relay.ackOutcome, op.relay.expectedDelivered);
+        else if (Game.time - op.relay.cargoSentTick >= config.get("terminalRelay.outcomeMaxTicks", 1500)) {
+            op.relay.phase = "receiptUncertain";
+            touch(op, "receiptUncertain");
+            relayAlert(op, "relay outcome timed out; cargo was not retransmitted");
+        }
+        return;
+    }
+    if (!op.relay.fundingSent) {
+        const refreshed = refreshRelayQuote(op);
+        if (!refreshed || refreshed.route !== "relay") {
+            op.route = "direct";
+            delete op.relay;
+            op.requiredEnergy = txCost(op.amount, op.sourceRoom, op.targetRoom);
+            op.transactionCost = op.requiredEnergy;
+            touch(op, "queued");
+            tickTransfer(op, source, target);
+            return;
+        }
+        op.routingQuote = { savingsEnergy: refreshed.savingsEnergy, savingsRatio: refreshed.savingsRatio,
+            directFreight: refreshed.direct.freight, relayFreight: refreshed.relay.freight,
+            cargoAmount: refreshed.relay.cargoAmount, fundingAmount: refreshed.relay.fundingAmount,
+            originFreight: refreshed.relay.originFreight, fundingFreight: refreshed.relay.fundingFreight,
+            hubFreight: refreshed.relay.hubFreight, quotedTick: Game.time };
+        if (op.loadedAmount < transferLoadTarget(op)) {
+            if (!op.haulerName) assign(op, source, "load", source.storage, source.terminal, transferLoadTarget(op) - op.loadedAmount);
+            return;
+        }
+        if (op.resourceType !== RESOURCE_ENERGY) {
+            const inFlight = activeRelayCount(op.id);
+            const exposure = activeIds().map(operation).filter((other) => other && other.route === "relay" && other.relay && other.relay.fundingSent && active(other))
+                .reduce((sum, other) => sum + Math.max(0, other.relay.fundingAmount || 0), 0);
+            if (inFlight > 0 || exposure + op.routingQuote.fundingAmount > config.get("terminalRelay.maxEnergyInTransit", 50000)) {
+                op.error = "relay FIFO or energy exposure limit"; touch(op, "held"); return;
+            }
+            const freight = relayExpectedCost(op, op.routingQuote.fundingAmount, source.name, op.relay.hub);
+            startRelaySend(op, source, "funding", op.routingQuote.fundingAmount, RESOURCE_ENERGY, freight);
+            return;
+        }
+        const freight = relayExpectedCost(op, op.routingQuote.cargoAmount, source.name, op.relay.hub);
+        const total = op.routingQuote.cargoAmount + freight;
+        if (total > config.get("terminalRelay.maxEnergyInTransit", 50000)) { op.error = "relay energy exposure limit"; touch(op, "held"); return; }
+        startRelaySend(op, source, "cargo", op.routingQuote.cargoAmount, RESOURCE_ENERGY, freight);
+        return;
+    }
+    if (op.state !== "fundingConfirmed") return;
+    const elapsed = Game.time - (op.relay.fundingTick || Game.time);
+    if (elapsed > config.get("terminalRelay.fundingLeadTicks", 30)) {
+        op.relay.phase = "fundingUncertain";
+        touch(op, "fundingUncertain");
+        relayAlert(op, "funding window elapsed after payment; cargo was not sent");
+        return;
+    }
+    if (source.terminal.cooldown) return;
+    const requiredExtraFunding = op.routingQuote.fundingAmount + op.routingQuote.fundingFreight;
+    if ((op.relay.fundingSentAmount || 0) < op.routingQuote.fundingAmount || (op.relay.fundingCost || 0) < op.routingQuote.fundingFreight) {
+        op.relay.phase = "fundingUncertain";
+        touch(op, "fundingUncertain");
+        relayAlert(op, "funding amount or freight is short; cargo was not sent");
+        return;
+    }
+    const freight = relayExpectedCost(op, op.amount, source.name, op.relay.hub);
+    if (freight !== op.routingQuote.originFreight || requiredExtraFunding <= 0) {
+        op.relay.phase = "fundingUncertain";
+        touch(op, "fundingUncertain");
+        relayAlert(op, "relay quote changed after funding; manual reconciliation required");
+        return;
+    }
+    startRelaySend(op, source, "cargo", op.amount, op.resourceType, freight);
+}
 function tickTransfer(op, source, target) {
+    if (op.route === "relay" && op.relay) { tickRelayTransfer(op, source, target); return; }
+    if (op.pendingSend) { settleSend(op, source, target); if (op.pendingSend || op.state === "atTerminal" || !active(op)) return; }
+    const outstanding = (op.sentAmount || 0) - (op.receivedAmount || 0);
+    if (op.sentAmount > 0 && outstanding <= 0 && op.remaining > 0) {
+        if (op.stopAfterReceipt) { cancel(op.id); return; }
+        delete op.waitingDirection; touch(op, "queued");
+    }
     if (op.state === "queued" || (op.state === "waiting" && op.waitingDirection !== "unload")) assign(op, source, "load", source.storage, source.terminal, transferLoadTarget(op) - op.loadedAmount);
     if (op.state === "atTerminal") {
         if (op.loadedAmount < transferLoadTarget(op)) { touch(op, "queued"); return; }
@@ -1329,10 +1735,22 @@ function tickTransfer(op, source, target) {
             return;
         }
         delete op.stallStartedTick;
+        const freight = dealFreight(op, op.remaining, op.targetRoom);
+        const required = freight.requiredEnergy + (op.resourceType === RESOURCE_ENERGY ? op.remaining : 0);
+        const freeFuel = storeValue(source.terminal.store, RESOURCE_ENERGY) -
+            managedTerminalIncrease(source.name, RESOURCE_ENERGY, activeForRoom(source.name).filter((other) => other.id !== op.id));
+        if (freeFuel < required) { op.error = "energia de taxa insuficiente"; return; }
         touch(op, "executing");
-        const status = source.terminal.send(op.resourceType, op.amount, op.targetRoom, "terminal operation " + op.id);
+        const status = source.terminal.send(op.resourceType, op.remaining, op.targetRoom, "terminal operation " + op.id);
         if (status === OK) claimTerminal(source.name);
-        if (status === OK) { op.sentAmount = op.amount; op.sentTick = Game.time; op.remaining = 0; op.targetTerminalBaseline = storeValue(target.terminal.store, op.resourceType); record(op, op.amount, 0, op.transactionCost); touch(op, "awaitingReceipt"); }
+        if (status === OK) {
+            op.pendingSend = { tick: Game.time, quantity: op.remaining, cost: freight.cost,
+                requiredEnergy: freight.requiredEnergy, freightMultiplier: freight.freightMultiplier,
+                power: terminalPowerCost.snapshot(source.terminal),
+                cargoBefore: storeValue(source.terminal.store, op.resourceType), energyBefore: storeValue(source.terminal.store, RESOURCE_ENERGY),
+                targetBefore: storeValue(target.terminal.store, op.resourceType) };
+            touch(op, "awaitingReceipt"); return;
+        }
         else { op.error = "send retornou " + status; touch(op, "waiting"); }
     }
     // Compare/request the amount still owed, not op.amount (the original
@@ -1345,7 +1763,7 @@ function tickTransfer(op, source, target) {
     // original total (bug real, usuário reportou em produção, 2026-09-28:
     // terminal-195 delivered 1500 of 30925 then never resumed). tickReceipt()
     // already gets this right by tracking a remaining amount instead.
-    const remainingUnload = Math.max(0, op.amount - (op.receivedAmount || 0));
+    const remainingUnload = Math.max(0, (op.sentAmount || 0) - (op.receivedAmount || 0));
     const unloading = op.state === "awaitingReceipt" || (op.state === "waiting" && op.waitingDirection === "unload");
     if (unloading && remainingUnload > 0) {
         // Stall guard: op.receivedAmount only grows through THIS op's own
@@ -1372,7 +1790,8 @@ function tickTransfer(op, source, target) {
     const present = Math.max(0, storeValue(target.terminal.store, op.resourceType) - (op.targetTerminalBaseline || 0));
     if (present >= remainingUnload) {
         if (config.get("stockPolicy.enabled", true) && !stockPolicy.used(target, op.resourceType)) {
-            op.receivedAmount = op.amount; touch(op, "completed"); return;
+            op.receivedAmount = op.sentAmount;
+            touch(op, op.remaining > 0 && !op.stopAfterReceipt ? "queued" : op.stopAfterReceipt ? "cancelled" : "completed"); return;
         }
         assign(op, target, "unload", target.terminal, target.storage, remainingUnload); return;
     }
@@ -1443,6 +1862,34 @@ function phase(name, fn) {
         cpuMeter.record("spans", "terminalOps." + name, used);
     }
 }
+function dispatchTerminalMessage() {
+    const message = terminalMessenger.nextQueued();
+    if (!message) return;
+    if (!Game.rooms || !Game.market || typeof Game.market.calcTransactionCost !== "function") {
+        message.lastError = "market transaction cost unavailable"; return;
+    }
+    let chosen = null;
+    for (const name in Game.rooms) {
+        const source = Game.rooms[name], terminal = source && source.terminal;
+        if (!source || !source.controller || !source.controller.my || !terminal || terminal.my === false ||
+            typeof terminal.send !== "function" || terminal.cooldown || terminalBusy(name)) continue;
+        let freight;
+        try { freight = txCost(1, name, message.to); } catch (error) { continue; }
+        if (!Number.isFinite(freight) || freight < 0) continue;
+        // The terminal's minimum float is intentionally spendable by a queued
+        // message; only other operation funding stays protected here. The
+        // stockPolicy hauler restores the float after postage is sent.
+        const protectedEnergy = Math.max(0, Number(require("./terminalFuel").operationReserve(source)) || 0);
+        const freeEnergy = Math.max(0, claims.physicalFree(source, terminal, RESOURCE_ENERGY) - protectedEnergy);
+        if (freeEnergy < 1 + freight) { message.lastError = "insufficient unreserved terminal energy"; continue; }
+        if (!chosen || freight < chosen.freight) chosen = { name, terminal, freight };
+    }
+    if (!chosen) { message.lastError = message.lastError || "no owned terminal is ready"; return; }
+    const status = chosen.terminal.send(RESOURCE_ENERGY, 1, message.to, terminalMessenger.PREFIX + message.text);
+    if (status !== OK) { message.lastError = "terminal.send returned " + status; return; }
+    claimTerminal(chosen.name);
+    terminalMessenger.markSent(message.id, { from: chosen.name, freight: chosen.freight });
+}
 // The state machines run on a grid (terminalOps.tickInterval, default 5): a deal or a hauler
 // hand-off is noticed at most 4 ticks late, well inside a terminal's 10-tick cooldown, while
 // every phase below used to walk every active operation on every tick.
@@ -1456,6 +1903,7 @@ function tick() {
     phase("gc+orders", () => { activeIds(); bindCreatedOrders(); syncManagedOrders(); });
     phase("incoming", scanIncoming);
     phase("operations", runOperations);
+    phase("messages", dispatchTerminalMessage);
 }
 // ROADMAP 0111 (bug real, usuario reportou em producao, 2026-10-02): uma
 // compra em "awaitingReceipt" so fechava quando um recibo LIGADO a ela
@@ -1505,7 +1953,11 @@ function runOperation(id) {
             return;
         }
         if (!source || (op.kind === "transfer" && !target)) { op.error = "terminal/storage indisponível"; touch(op, "waiting"); return; }
-        if (op.cancelRequested && !op.pendingDeal && !op.pendingExtension && op.state !== "recovering") { cancel(op.id); return; }
+        if (op.cancelRequested && !op.pendingDeal && !op.pendingSend && !op.pendingExtension && op.state !== "recovering") { cancel(op.id); return; }
+        if (op.pendingSend) { tickTransfer(op, source, target); return; }
+        if (op.effectUncertain && op.remaining > 0 && op.state !== "recovering") {
+            op.error = "efeito de terminal alterado durante confirmação: custo não atribuível"; return;
+        }
         if (op.state === "cancellingListing") { cancelListingForDeal(op); return; }
         if (op.kind === "buy" && (op.state === "listing" || op.state === "listed")) {
             const candidate = candidateOrders(op).find((item) => canExecutePurchase(op, source, item));
@@ -1521,7 +1973,7 @@ function runOperation(id) {
             return;
         }
         if (op.haulerName && Game.creeps && Game.creeps[op.haulerName] && Game.creeps[op.haulerName].memory.terminalJob) return;
-        if (op.haulerName && (!Game.creeps || !Game.creeps[op.haulerName])) recover(op, op.kind === "transfer" && op.sentAmount > 0 ? target : source);
+        if (op.haulerName && (!Game.creeps || !Game.creeps[op.haulerName])) recover(op, op.kind === "transfer" && op.sentAmount > (op.receivedAmount || 0) ? target : source);
         if (["loading", "unloading", "recovering"].indexOf(op.state) >= 0) return;
         if (op.kind === "transfer") tickTransfer(op, source, target);
         else if (op.kind === "sell") {
@@ -1620,7 +2072,8 @@ function runHauler(creep) {
                 }
                 else touch(op, op.kind === "receipt" ? "waiting" : "queued");
             }
-            else { op.receivedAmount += carried; if (op.receivedAmount >= op.amount) { if (op.kind === "receipt") completeReceipt(op); else touch(op, "completed"); } else touch(op, "waiting"); }
+            else { op.receivedAmount += carried; if (op.kind === "transfer" && op.stopAfterReceipt && op.receivedAmount >= op.sentAmount) touch(op, "cancelled");
+                else if (op.receivedAmount >= op.amount) { if (op.kind === "receipt") completeReceipt(op); else touch(op, "completed"); } else touch(op, "waiting"); }
             // A finished leg releases the creep back to normal duty, so this op
             // must stop tracking it - otherwise the creep's later, unrelated
             // death (doing regular hauling, nothing to do with this operation)
@@ -1657,8 +2110,12 @@ function runHauler(creep) {
 }
 function cancel(id) {
     const op = operation(id); if (!op) return result(false, "operação desconhecida");
+    if (op.route === "relay" && op.relay && (op.pendingSend || op.relay.fundingSent || op.relay.cargoSent)) {
+        op.error = "relay funding/cargo already sent; reconcile before cancelling";
+        return result(false, op.error);
+    }
     hydrateMarketFees(op);
-    if (op.pendingDeal || op.pendingExtension) { op.cancelRequested = true; op.error = "aguardando confirmação do intent antes de cancelar"; return result(true, id); }
+    if (op.pendingDeal || op.pendingSend || op.pendingExtension) { op.cancelRequested = true; op.error = "aguardando confirmação do intent antes de cancelar"; return result(true, id); }
     if (op.listingPolicyManaged && op.marketOrderId) {
         const state = listingLifecycle.enroll(op, Game.market.orders && Game.market.orders[op.marketOrderId], Date.now());
         if (state.cancelConfirmed) { delete op.marketOrderId; delete op.cancelRequested; }
@@ -1771,9 +2228,47 @@ function terminalNetworkStats(previous) {
     networkCache = { events: mem.events, count: mem.events.length, window, snapshot, tick: Game.time, expires };
     return snapshot;
 }
-// Read-only quote: the relay executor is a separate, planned phase (0125).
-const terminalRouting = require("./terminalRouting");
+function terminalRelayStats() {
+    const stats = { queued: 0, inTransit: 0, uncertain: 0, completed: 0, requested: 0, delivered: 0,
+        estimatedSavingsEnergy: 0, estimatedRelayFreight: 0, knownFreightEnergy: 0, fundingEnergy: 0, lost: 0 };
+    Object.values(memory().operations).forEach((op) => {
+        if (!op || op.route !== "relay" || !op.relay) return;
+        if (active(op)) {
+            stats.queued++;
+            if (op.relay.cargoSent) stats.inTransit++;
+            if (["fundingUncertain", "receiptUncertain", "held"].includes(op.state)) stats.uncertain++;
+        } else if (op.state === "completed") stats.completed++;
+        stats.requested += op.requestedAmount || op.amount || 0;
+        stats.delivered += op.receivedAmount || 0;
+        stats.estimatedSavingsEnergy += op.routingQuote && op.routingQuote.savingsEnergy || 0;
+        stats.estimatedRelayFreight += op.routingQuote && op.routingQuote.relayFreight || 0;
+        stats.knownFreightEnergy += op.transactionCost || 0;
+        stats.fundingEnergy += op.relay.fundingSentAmount || 0;
+        stats.lost += op.relay.lostAmount || 0;
+    });
+    return stats;
+}
+function relayStatus() {
+    return { transportEnabled: !!config.get("terminalRelay.transportEnabled", false), keyConfigured: !!relayKey(),
+        hub: config.get("terminalRelay.hub", "E2N46"), ally: relayAlly(), stats: terminalRelayStats(),
+        operations: Object.values(memory().operations).filter((op) => op && op.route === "relay" && active(op))
+            .map((op) => ({ id: op.id, state: op.state, from: op.sourceRoom, to: op.targetRoom, resourceType: op.resourceType,
+                requested: op.requestedAmount || op.amount, sent: op.relay.sentCargoAmount || 0,
+                delivered: op.receivedAmount || op.relay.receivedAmount || 0, outcome: op.relay.outcome || null, error: op.error || null })) };
+}
+function setRelayEnabled(enabled) {
+    if (typeof enabled !== "boolean") return "Usage: setTerminalRelayEnabled(true|false)";
+    if (!Memory.settings || typeof Memory.settings !== "object") Memory.settings = {};
+    if (!Memory.settings.terminalRelay || typeof Memory.settings.terminalRelay !== "object") Memory.settings.terminalRelay = {};
+    if (enabled && (!relayKey() || !relayAlly() || !/^[WE]\d+[NS]\d+$/i.test(config.get("terminalRelay.hub", "E2N46"))))
+        return "Relay remains disabled: configure a private key and allied hub owner first.";
+    Memory.settings.terminalRelay.transportEnabled = enabled;
+    return enabled ? "Relay transport enabled for eligible transfers." : "Relay transport disabled for new transfers; in-flight operations will still reconcile.";
+}
 global.terminalRelayQuote = terminalRouting.quote;
+global.terminalRelayStatus = () => JSON.stringify(relayStatus(), null, 2);
+global.terminalRelayStats = () => JSON.stringify(terminalRelayStats(), null, 2);
+global.setTerminalRelayEnabled = setRelayEnabled;
 global.terminalTransfer = function () { return announce("terminalTransfer", transfer.apply(null, arguments)); };
 global.terminalBuy = buy;
 global.terminalSell = sell;
@@ -1785,4 +2280,4 @@ global.terminalOperation = (id) => {
     const op = operation(id);
     return op ? JSON.stringify(op, null, 2) : "[terminalOps] operação desconhecida: " + id;
 };
-module.exports = { perf, lockConflict, transfer, buy, sell, sellLot, saleAvailable, evaluatePurchase: purchaseCost.evaluate, cancel, tick, runHauler, operation, activeForRoom, txCost, stats, marketTransactionStats, terminalTransferStats, terminalNetworkStats };
+module.exports = { perf, lockConflict, transfer, quoteTransfer, buy, sell, sellLot, saleAvailable, evaluatePurchase: purchaseCost.evaluate, cancel, tick, runHauler, operation, activeForRoom, txCost, stats, marketTransactionStats, terminalTransferStats, terminalNetworkStats, terminalRelayStats, relayStatus, setRelayEnabled };

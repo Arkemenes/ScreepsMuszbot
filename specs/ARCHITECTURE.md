@@ -1,5 +1,9 @@
 # Architecture — estado atual
 
+## Prioridade labs/terminal (0150, 17/10/2026)
+
+Parcial local: terminalPowerCost compartilha fator de OPERATE_TERMINAL entre deals de terminalOps, swing e cotação de relay; custo econômico é separado de requiredEnergy bruto para claims/fuel. Pending guarda fator para liquidação após reset/expiração. Sends agora conciliam intent/parcial antes de contabilizar; efeitos concorrentes não atribuíveis marcam economia incompleta e suspendem novos gastos. Não há operador econômico habilitado por esta entrega. labReactionAmount integra quantidade/expiração/caudas strict no modelo/runtime/executor/ledger; somente efeito reconhecido é permitido. powerStatus é sob demanda, sem observador por tick. [Pacote e teste live pendente](../docs/pacote-power-compatibilidade-2026-10-17.md). [Decisão, orçamento conjunto de ops e gate de CPU](../docs/prioridade-labs-terminal-2026-10-17.md). reuseOrderBook permanece true por padrão; false explícito é respeitado.
+
 ## Storage inicial e transição RCL 4 (0158 / ARK-161)
 
 `utils/bootstrapStorage.prepareRoom` roda sob `guard` antes de intel/economia.
@@ -373,7 +377,7 @@ hauler limita retiradas de minerais ao excedente, com ledger de intents no heap.
 a causa em `craftStatus` e no log. Não há cancelamento/relistagem automática para
 dar prioridade à fabricação; recebimentos e cooldown físico seguem em terminalOps.
 
-**Cotação de relay (ROADMAP 0125, transporte planejado).**
+**Relay de terminal (ROADMAP 0125, executor fechado por padrão).**
 `utils/terminalRouting.js` compara envio direto com origem → hub E2N46 → destino,
 incluindo frete do financiamento e a mensagem de 2 energia. `terminalRelayQuote`
 é registrado por `terminalOps` e documentado no `help`; não emite intents nem
@@ -381,9 +385,29 @@ grava Memory. A quantidade é sempre a entrega desejada: energia embarca também
 o frete que o hub desconta. A seleção avalia o hub por padrão; `urgent: true` força direto.
 Empate, urgência crítica, rota indisponível ou
 limiares de economia não atingidos mantêm direto. Config em
-`Memory.settings.terminalRelay`; defaults de cotação habilitados, sem ativar
-transporte. Power ativo dos terminais próprios entra no custo. A fase B irá
-integrar o protocolo ao balanceamento não crítico e às operações de terminal.
+`Memory.settings.terminalRelay`; defaults de cotação habilitados e transporte
+desativado. Power ativo dos terminais próprios entra no custo. A fase B integra
+o balanceamento não crítico e as operações de terminal ao executor; staging,
+reservas, confirmação conservadora e stats ficam em `terminalOps`. A chave só
+fica em `Memory.settings.terminalRelay.key`; estado/status não a serializa.
+O protocolo RLY ainda requer validação com o aliado: o PDF disponível documenta
+somente mensagens `MSG:`. Nenhum canário é seguro antes dessa confirmação.
+
+`utils/terminalMessenger.js` oferece mensagens manuais entre aliados. Resolve
+automaticamente aliados da lista `hostiles.allies()` para salas RCL 6+ em
+`Memory.rooms` (`owner`/`controllerLevel`, escritos por `rooms/intel.js`); quando há mais de uma sala válida, prefere o destino com
+menor frete estimado pelos terminais próprios visíveis. Overrides opcionais
+ficam em `Memory.settings.terminalMessenger.contacts`. `message()` enfileira
+texto `MSG:` de até 96 caracteres e `terminalOps` envia 1 energia mais frete
+depois das operações, respeitando intents e reservas existentes. O frete e a
+postagem pendente entram no orçamento de `terminalFuel`, assim o `stockPolicy`
+já pede ao hauler que leve a energia necessária ao terminal remetente.
+Cada terminal mantém o piso configurável de 10 energia
+(`terminalFuel.minimumReserve`); mensagens podem usar esse saldo e o hauler
+repõe o piso depois. Receipts e retiradas preventivas preservam a reserva.
+Mensagens recebidas são processadas dentro do scan de `incomingTransactions`, notificadas
+uma vez e não geram receipts de hauling. O texto é apenas exibido; não é
+interpretado nem executado.
 
 
 `utils/terminalOps.js` is already the single entry point for terminal work:
@@ -786,7 +810,7 @@ Preço e energia: energyLedger resolve slots WORK aceitos e limites compartilhad
 | `mincut.js` | Min-cut de Dinic para posicionar ramparts (vendored). |
 | `stats.js` | Escreve `Memory.stats` para o Grafana, incluindo `market.fairPrice` esparso do snapshot de `utils/market.js` (ROADMAP 0096). ROADMAP 0079 follow-up (2026-09-24): `market.transactions.{bought,sold}.<resourceType>` (`{amount, credits}`) e `terminalNetwork.transfers` (`[{from, to, amount}]`), lidos de `terminalOps.marketTransactionStats()`/`terminalTransferStats()` — a spec original marcava os dois como "não faz sentido popular" porque o bot nunca chamava `Game.market.deal()`/`terminal.send()`; ROADMAP 0098 passou a chamar os dois de verdade, então os painéis "Mercado"/"Terminal Network" do dashboard deixam de ficar sempre vazios. |
 | `profiler.js` | screeps-profiler (vendored). |
-| `visual-room.js` | `RoomVisual.prototype.structure` etc (vendored). |
+| `visual-room.js` | Build oficial Screeps do RoomVisual v2.0.0 (commit `874f8b9`, 0159 / ARK-182), vendorizado com licença MIT no banner. `utils/index.js` carrega o entry CommonJS que registra `structure`, `connectRoads`, `speech`, `animatedPosition`, `resource` e `test` no prototype. Architect mantém seus previews/opacidade; caches de símbolos/cores/estradas ficam no heap. |
 | `console.js` | Registra `global.help()` — imprime a lista de comandos de console conhecidos (mantida à mão), agrupada por assunto. `require`ido por efeito colateral em `utils/index.js`. |
 | `traffic.js` | Contador de tráfego por tile, 100% heap. `record(creep)` (chamado 1×/creep/tick pelo `main`), `decay()` (1×/100 ticks, −1%), `hot(roomName, threshold)`, `isHot(roomName, x, y, threshold)`, `worthRepairing(structure)` — política de repair de estrada (0108: só repara abaixo de `ROAD_REPAIR_FLOOR`=0.4; abaixo do piso, estrada reservada pelo plano (`utils/plan.js`'s `planEntriesAt`) vale sempre, e só onde o plano não diz nada — sala sem plano ou tile não reservado — ainda exige tráfego recente; qualquer outra estrutura sempre vale reparar). |
 | `rampartGates.js` | Quais ramparts uma sala deixa um aliado atravessar (portões). Para cada par de saídas: caminho com ramparts bloqueadas; se existe, nada a abrir; senão, caminho com rampart a custo alto (`rampartGates.rampartCost`) e as ramparts sobre ele são portões. Cache de heap por sala, recalculado quando muda o nº de ramparts e a cada 600 ticks. Console `rampartGates()` lista os portões por sala. |
@@ -1182,9 +1206,9 @@ O coletor de market possui gate próprio `market.minBucket=500`, independente do
 
 ### Reserva dinâmica de energia do terminal (0124 / ARK-32)
 
-`utils/terminalFuel` centraliza a energia protegida: carga de saída e frete já carregado, mais o frete ainda não coberto das próximas duas transações executáveis e margem de 20%. Quotes publicados por `terminalOps` e observações elegíveis de `swingTrade` expiram em 300 ticks; listings e operações em settlement não projetam um novo frete. Intents aceitos continuam protegidos até o engine aplicá-los. Transferências usam o custo recalculado. Reposição de energia tem prioridade no forecast e no executor.
+`utils/terminalFuel` centraliza a energia protegida: piso mínimo configurável de 10, carga de saída e frete já carregado, mais o frete ainda não coberto das próximas duas transações executáveis e margem de 20%. Mensagens podem gastar o piso; o job de `stockPolicy` o recompõe pelo hauler. Quotes publicados por `terminalOps` e observações elegíveis de `swingTrade` expiram em 300 ticks; listings e operações em settlement não projetam um novo frete. Intents aceitos continuam protegidos até o engine aplicá-los. Transferências usam o custo recalculado. Reposição de energia tem prioridade no forecast e no executor.
 
-Sem operações elegíveis, a reserva preventiva é zero. Quando o storage tem menos de 10% do alvo de energia, a margem fica em zero e vendas automáticas com frete superior a 10% do estoque livre de compromissos aguardam. Compromissos existentes continuam protegidos. `resourcePolicy`, abastecimento e retirada de haulers, receipts e executor compartilham a política; o executor exige o frete exato, sem somar novamente a reserva inteira. Haulers em trânsito são descontados da necessidade, e jobs são revalidados antes da coleta/descarga. O excesso só retorna ao storage quando supera 25% da reserva, evitando pequenas viagens inversas.
+Sem operações elegíveis, a reserva preventiva mantém o piso mínimo de 10 energia. Quando o storage tem menos de 10% do alvo de energia, a margem fica em zero e vendas automáticas com frete superior a 10% do estoque livre de compromissos aguardam. Compromissos existentes continuam protegidos. `resourcePolicy`, abastecimento e retirada de haulers, receipts e executor compartilham a política; o executor exige o frete exato, sem somar novamente a reserva inteira. Haulers em trânsito são descontados da necessidade, e jobs são revalidados antes da coleta/descarga. O excesso só retorna ao storage quando supera 25% da reserva, evitando pequenas viagens inversas.
 
 Configuração em `Memory.settings.terminalFuel`; `enabled:false` preserva o piso legado de `logistics.terminalReserveRatio`. Diagnóstico: `terminalFuelStatus(roomName?)`. O mercado continua em simulação por padrão no código; nenhuma configuração de execução existente em Memory é sobrescrita.
 

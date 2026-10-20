@@ -2,6 +2,7 @@
 const config = require("./config");
 const census = require("./census");
 const labReservations = require("./labReservations");
+const reactionAmount = require("./labReactionAmount");
 // ROADMAP 0115: the lab reactions running in a room. A craft chain may run several at
 // once (independent steps of the reaction tree, in labs of their own): those are
 // Memory.rooms[r].labReactions, a list. A manual setLabReaction() (rooms/refining.js) and
@@ -29,6 +30,9 @@ function execute(structure) {
     const reactions = list(structure.room.name);
     const reaction = reactions.find((r) => outputsOf(r).includes(structure.id));
     if (!reaction || structure.cooldown > 0) return;
+    const power = reactionAmount.snapshot(structure);
+    const quantity = reactionAmount.amount(power);
+    if (!(quantity > 0)) return;
     const roomName = structure.room.name;
     const a = Game.getObjectById(reaction.input1), b = Game.getObjectById(reaction.input2);
     if (!a || !b || a.id === b.id || structure.id === a.id || structure.id === b.id) return;
@@ -36,7 +40,7 @@ function execute(structure) {
     if (labReservations.blocked(roomName, structure.id) || labReservations.blocked(roomName, a.id) || labReservations.blocked(roomName, b.id) ||
         structure.isActive && !structure.isActive() || a.isActive && !a.isActive() || b.isActive && !b.isActive()) return;
     if (!ledgers[roomName]) {
-        const available = {}, used = {}, outputs = new Set();
+        const available = {}, used = {}, outputs = new Set(), groups = {};
         // Capture every source before the first intent: production this tick
         // never enters the snapshot, including labs with two simultaneous roles.
         reactions.forEach((r) => {
@@ -45,7 +49,7 @@ function execute(structure) {
                 if (!(id in available)) available[id] = lab && lab.store && lab.store[resource] || 0;
             }
         });
-        ledgers[roomName] = { available, used, outputs };
+        ledgers[roomName] = { available, used, outputs, groups };
     }
     const ledger = ledgers[roomName];
     if (a.mineralType !== reaction.a || b.mineralType !== reaction.b ||
@@ -53,25 +57,46 @@ function execute(structure) {
     if (structure.pos && (!structure.pos.inRangeTo(a, 2) || !structure.pos.inRangeTo(b, 2))) return;
     const owner = reaction.owner && Memory.craft && Memory.craft.active && Memory.craft.active[reaction.owner];
     const state = owner && owner.queue[owner.qi || 0].run;
-    const group = (reaction.owner || "manual") + ":" + reaction.product;
+    const group = reaction.quotaKey || (reaction.owner || "manual") + ":" + reaction.product;
     const quota = reaction.remaining === undefined ? Infinity : reaction.remaining;
-    const pending = state ? (state.pending || []).filter((i) => i.tick === Game.time && i.product === reaction.product).length * 5 : 0;
-    if (quota - Math.max(pending, ledger.used[group] || 0) < 5 || ledger.outputs.has(structure.id)) {
+    const pending = state ? (state.pending || []).filter((i) => i.tick === Game.time && i.product === reaction.product &&
+        (!reaction.quotaKey || i.quotaKey === reaction.quotaKey))
+        .reduce((sum, i) => sum + (i.amount === undefined ? reactionAmount.base() : i.amount), 0) : 0;
+    if (quota - Math.max(pending, ledger.used[group] || 0) < quantity || ledger.outputs.has(structure.id)) {
         if (state) state.wait[structure.id] = "reservation";
         return;
     }
-    if (ledger.available[a.id] < 5 || ledger.available[b.id] < 5) {
+    const left = quota - Math.max(pending, ledger.used[group] || 0) - quantity;
+    if (Number.isFinite(left) && left % reactionAmount.base() !== 0) {
+        if (!ledger.groups[group]) {
+            const entries = ledger.groups[group] = [];
+            for (const r of reactions) {
+                if ((r.quotaKey || (r.owner || "manual") + ":" + r.product) !== group) continue;
+                for (const id of outputsOf(r)) if (!entries.some((entry) => entry.id === id)) {
+                    const lab = Game.getObjectById(id);
+                    if (lab) entries.push({ id, power: reactionAmount.snapshot(lab), next: lab.cooldown || 0 });
+                }
+            }
+        }
+        const cooldown = typeof REACTION_TIME !== "undefined" && REACTION_TIME[reaction.product] || 1;
+        const future = (ledger.groups[group] || []).map((entry) => reactionAmount.opportunities(entry.power, cooldown,
+            entry.id === structure.id || ledger.outputs.has(entry.id) ? cooldown : entry.next));
+        if (!reactionAmount.canFinish(left, future)) { if (state) state.wait[structure.id] = "quota-tail"; return; }
+    }
+    if (ledger.available[a.id] < quantity || ledger.available[b.id] < quantity) {
         if (state) state.wait[structure.id] = "reservation";
         return;
     }
-    if ((structure.store[reaction.product] || 0) > 2995) return;
+    const capacity = typeof LAB_MINERAL_CAPACITY === "number" ? LAB_MINERAL_CAPACITY : 3000;
+    if ((structure.store[reaction.product] || 0) + quantity > capacity) return;
     const status = structure.runReaction(a, b);
     if (status !== OK) { if (state) state.wait[structure.id] = "intent:" + status; return; }
-    ledger.available[a.id] -= 5; ledger.available[b.id] -= 5;
-    ledger.used[group] = (ledger.used[group] || 0) + 5;
+    ledger.available[a.id] -= quantity; ledger.available[b.id] -= quantity;
+    ledger.used[group] = (ledger.used[group] || 0) + quantity;
     ledger.outputs.add(structure.id);
-    require("./craftLedger").production(structure, reaction.product, 5);
-    if (state) state.pending.push({ tick: Game.time, product: reaction.product, out: structure.id, inputs: [a.id, b.id] });
+    require("./craftLedger").production(structure, reaction.product, quantity, power);
+    if (state) state.pending.push({ tick: Game.time, product: reaction.product, amount: quantity, power, quotaKey: reaction.quotaKey,
+        before: structure.store[reaction.product] || 0, out: structure.id, inputs: [a.id, b.id] });
 }
 let deliveryTick = -1, deliveries = {};
 function deliveryLimit(roomName, lab, resource) {

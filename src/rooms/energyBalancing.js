@@ -30,13 +30,20 @@ function allActiveTransfers(roomName) {
 function pending(targetName) {
     return terminalOps.activeForRoom(targetName).find((op) => op.kind === "transfer" && op.targetRoom === targetName);
 }
-function maxSend(source, target, cap) {
+function routeQuote(source, target, amount, urgent) {
+    return terminalOps.quoteTransfer(source.room.name, target.room.name, RESOURCE_ENERGY, amount, { urgent });
+}
+function routeEnergy(source, target, amount, urgent) {
+    const quote = routeQuote(source, target, amount, urgent);
+    if (!quote || !quote.ok) return amount + terminalOps.txCost(amount, source.room.name, target.room.name);
+    return quote.route === "relay" ? quote.relay.totalEnergy : quote.direct.totalEnergy;
+}
+function maxSend(source, target, cap, urgent) {
     const budget = Math.min(source.excess, cap === undefined ? Infinity : cap);
     let low = 0, high = Math.min(budget, config.get("logistics.balanceMaxAmount", 50000));
     while (low < high) {
         const mid = Math.ceil((low + high + 1) / 2);
-        const cost = terminalOps.txCost(mid, source.room.name, target.room.name);
-        if (mid + cost <= budget) low = mid; else high = mid - 1;
+        if (routeEnergy(source, target, mid, urgent) <= budget) low = mid; else high = mid - 1;
     }
     return low;
 }
@@ -129,21 +136,33 @@ function run() {
         if (receiving[name] || sending[name]) { observe(name, { reason: "target-terminal-locked", source: null, requestedAmount: 0, sentAmount: 0, state: "blocked", lastError: null }); continue; }
         const sources = entries.filter((source) => source.room.name !== name && !receiving[source.room.name] && source.state !== "critical" && source.excess > 0 &&
             (isCritical || (source.ratio - meanRatio >= band && source.surplus > 0)))
-            .sort((a, b) => b.excess - a.excess || distance(a, target) - distance(b, target) || a.room.name.localeCompare(b.room.name));
-        const source = sources[0];
+            .map((source) => {
+                const cap = isCritical ? undefined : source.surplus;
+                const possible = Math.min(maxSend(source, target, cap, isCritical), isCritical ? Infinity : target.surplus || Infinity);
+                const delivered = Math.min(possible, Math.max(0, isCritical ? criticalNeed(target) : Math.max(criticalNeed(target), target.deficit)));
+                if (!(delivered > 0)) return null;
+                return { source, delivered, energy: routeEnergy(source, target, delivered, isCritical), quote: routeQuote(source, target, delivered, isCritical) };
+            }).filter(Boolean)
+            .sort((a, b) => a.energy / a.delivered - b.energy / b.delivered || b.delivered - a.delivered ||
+                distance(a.source, target) - distance(b.source, target) || a.source.room.name.localeCompare(b.source.room.name));
+        const candidate = sources[0];
+        const source = candidate && candidate.source;
         if (!source) {
             const lockedSource = entries.some((other) => other.room.name !== name && receiving[other.room.name] && other.state !== "critical" && other.excess > 0 && (isCritical || other.ratio - meanRatio >= band));
             observe(name, { reason: lockedSource ? "source-terminal-locked" : "no-eligible-source", source: null, requestedAmount: 0, sentAmount: 0, state: lockedSource ? "blocked" : "none", lastError: null });
             continue;
         }
         const desired = isCritical ? criticalNeed(target) : Math.max(criticalNeed(target), target.deficit);
-        const value = Math.min(maxSend(source, target, isCritical ? undefined : source.surplus), desired);
+        const value = Math.min(candidate.delivered, desired);
         if (value <= 0) { observe(name, { reason: "no-preservable-volume", source: source.room.name, requestedAmount: 0, sentAmount: 0, state: "blocked", lastError: null }); continue; }
-        const created = terminalOps.transfer(source.room.name, name, RESOURCE_ENERGY, value, { automatic: true, reason: target.state });
+        const quote = routeQuote(source, target, value, isCritical);
+        const created = terminalOps.transfer(source.room.name, name, RESOURCE_ENERGY, value,
+            { automatic: true, reason: target.state, urgent: isCritical });
         if (created.ok) {
             mem.pending[name] = created.id;
             receiving[name] = true; sending[source.room.name] = true;
-            const spent = value + terminalOps.txCost(value, source.room.name, name);
+            const spent = quote && quote.ok ? quote.route === "relay" ? quote.relay.totalEnergy : quote.direct.totalEnergy :
+                value + terminalOps.txCost(value, source.room.name, name);
             source.excess = Math.max(0, source.excess - spent);
             source.surplus = Math.max(0, source.surplus - spent);
             const op = terminalOps.operation(created.id);

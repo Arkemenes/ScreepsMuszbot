@@ -109,8 +109,8 @@ global.CONTROLLER_STRUCTURES = {
     road: big([2500, 2500, 2500, 2500, 2500, 2500, 2500, 2500, 2500]),
 };
 
-// visual-room.js uses dozens of RESOURCE_*/RESOURCE_SYMBOL_* as computed keys at
-// load; define every such token found in src/ so bare identifiers don't throw.
+// visual-room.js uses RESOURCE_*/RESOURCE_SYMBOL_* when drawing; define every
+// such token found in src/ so bare identifiers don't throw in offline previews.
 const seen = new Set();
 (function walk(dir) {
     for (const name of fs.readdirSync(dir)) {
@@ -12126,7 +12126,8 @@ Memory.settings = Object.assign({}, Memory.settings, {
     source.terminal.store[RESOURCE_ENERGY] = 1000;
     Game.creeps = {}; // the hauler goes on to die doing unrelated work much later
     terminalOps.tick();
-    assert(op.state === "awaitingReceipt" && op.sentAmount === 1000, "0097 a stale haulerName from a finished leg does not resurface as a spurious recovery");
+    assert(op.state === "awaitingReceipt" && op.pendingSend && op.pendingSend.quantity === 1000 && !op.sentAmount,
+        "0097 a stale haulerName does not cause recovery; the accepted send awaits engine confirmation");
     Game.rooms = oldRooms; Memory.terminalOps = oldOps; Game.creeps = oldCreeps; Game.getObjectById = oldGetObject;
 }
 // 0111 follow-up (2026-10-02): an operation cancelled while its hauler was still walking
@@ -12299,13 +12300,13 @@ Memory.settings = Object.assign({}, Memory.settings, {
     Memory.terminalOps.operations[receipt.id] = receipt;
     Game.creeps = {};
     terminalOps.tick();
-    assert(receipt.state === "waiting" && receipt.receivedAmount === 0, "0098 dead receipt hauler returns to a retryable unload state");
+    assert(receipt.state === "waiting" && receipt.receivedAmount === 10, "0098 dead receipt hauler returns to a retryable unload state while retaining the terminal fuel floor");
     const creep = { name: "PartialReceiptHauler", memory: { terminalJob: { operationId: receipt.id, direction: "unload", fromId: target.terminal.id, toId: target.storage.id, resourceType: RESOURCE_ENERGY, amount: 100 } }, store: makeStore(50, 100), transfer: () => OK, withdraw: () => OK };
     Game.creeps = { PartialReceiptHauler: creep };
     Game.getObjectById = (id) => id === target.terminal.id ? target.terminal : id === target.storage.id ? target.storage : null;
     receipt.haulerName = creep.name; receipt.state = "unloading";
     terminalOps.runHauler(creep);
-    assert(receipt.state === "waiting" && receipt.receivedAmount === 50, "0098 partial receipt unload remains retryable with the remaining amount");
+    assert(receipt.state === "waiting" && receipt.receivedAmount === 60, "0098 partial receipt unload remains retryable after counting the retained terminal fuel floor");
     Memory.terminalOps = { nextId: 1, operations: {}, seenIncoming: {}, events: [], terminalBalance: {} };
     Game.creeps = {};
     Game.market = { incomingTransactions: [{ transactionId: "tx-a", to: "W7N11", resourceType: RESOURCE_ENERGY, amount: 100 }, { transactionId: "tx-b", to: "W7N11", resourceType: RESOURCE_ENERGY, amount: 50 }] };
@@ -12403,7 +12404,7 @@ Memory.settings = Object.assign({}, Memory.settings, {
     };
     terminalOps.tick();
     const surplusReceipt = Object.values(Memory.terminalOps.operations).find((op) => op.kind === "receipt");
-    assert(surplusReceipt && surplusReceipt.amount === 4000, "0098 terminal stock beyond what a pending SELL needs is swept back to storage as a receipt, even with no prior 'seen' baseline");
+    assert(surplusReceipt && surplusReceipt.amount === 3990, "0098 terminal stock beyond what a pending SELL and fuel floor need is swept back to storage as a receipt, even with no prior 'seen' baseline");
     terminalOps.tick();
     assert(dealAmount === 1000, "0098 SELL deals terminal stock that already exceeds the staging buffer instead of stalling with loadedAmount stuck at zero");
     Game.rooms = oldRooms; Game.market = oldMarket; Memory.terminalOps = oldOps;
@@ -16090,6 +16091,9 @@ require("./listingReuseCases")(PROJECT, assert);
 require("./craftPurchaseCases")(PROJECT, assert);
 require("./craftRecoveryCases")(PROJECT, assert);
 require("./terminalIntentCases")(PROJECT, assert);
+require("./terminalSendCases")(PROJECT, assert);
+require("./labPowerCases")(PROJECT, assert);
+require("./powerStatusCases")(PROJECT, assert);
 require("./recoveredBasisCases")(PROJECT, assert);
 require("./economyCoordinationCpuCases")(PROJECT, assert);
 require("./economyScaleCases")(PROJECT, assert);
@@ -16109,3 +16113,6 @@ require("./boostPolicyCases")(PROJECT, assert);
 require("./boostLogisticsCases")(PROJECT, assert);
 require("./boostConfirmationCases")(PROJECT, assert);
 require("./bootstrapStorageCases")(PROJECT, assert);
+require("./roomVisualCases")(PROJECT, assert);
+require("./terminalMessengerCases")(PROJECT, assert);
+require("./terminalRelayExecutionCases")(PROJECT, assert);

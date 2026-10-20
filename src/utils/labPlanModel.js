@@ -14,6 +14,7 @@ function composition(resource, recipes) {
     return result;
 }
 const slots = require("./labSlots");
+const reactionAmount = require("./labReactionAmount");
 
 const trioCache = new Map();
 function trios(built) {
@@ -39,14 +40,16 @@ function materialTotals(stock, labs, recipes) {
 }
 function* evaluate(plan, scenario, options = {}) {
     const { product, qty, built, recipes } = scenario;
+    const baseAmount = reactionAmount.base();
     const bandwidth = scenario.bandwidth == null ? Infinity : scenario.bandwidth;
     const delay = scenario.delay || 0;
-    assert(qty > 0 && qty % 5 === 0);
+    assert(Number.isSafeInteger(qty) && qty > 0);
     assert(bandwidth > 0 && (bandwidth === Infinity || Number.isInteger(bandwidth)));
     const stock = { ...scenario.stock };
     const initialLabs = scenario.labs || [];
     const initial = materialTotals(stock, initialLabs, recipes);
     const labs = built.map((_, i) => ({ role: null, amount: 0, next: 0, ready: 0, desired: null, ...initialLabs[i] }));
+    const operated = labs.some((lab) => lab.reactionPower);
     const initialFinal = (stock[product] || 0) + labs.reduce((n, l) => n + (l.role === product ? l.amount : 0), 0);
     const steps = scenario.steps;
     const targets = Object.fromEntries(steps.map((p) => [p, scenario.targets ? scenario.targets[p] || 0 : qty]));
@@ -59,6 +62,7 @@ function* evaluate(plan, scenario, options = {}) {
     const fullTrace = options.trace === true;
     let tick = 0, phaseIndex = 0, round = 0, phase = null, quota = null, cursor = 0;
     let finishing = false, lastProgress = 0;
+    let reactionUnits = 0;
     let layoutKey = null, pairs = [], sourceUses = [], copies = {}, outputOrder = [];
     function refreshLayout() {
         const key = labs.map((l) => l.desired || "").join(",") + "|" + phase.products.join(",");
@@ -162,7 +166,7 @@ function* evaluate(plan, scenario, options = {}) {
         assert.deepEqual(materialTotals(stock, labs, recipes), initial, "0128 atom conservation");
         assert(steps.every((p) => produced[p] === targets[p]), "0128 exact step balances");
         assert(labs.every((l) => l.amount >= 0 && l.amount <= 3000), "0128 capacity");
-        assert.equal(counters.calls, Object.values(targets).reduce((sum, n) => sum + n / 5, 0), "0128 exact reaction count");
+        assert.equal(reactionUnits, Object.values(targets).reduce((sum, n) => sum + n, 0), "0128 exact reaction units");
         counters.dualRoleLabs = [...dualLabs].sort((a, b) => a - b);
         return { status: "complete", ticks: tick + 1, ...counters, produced, trace: fullTrace ? trace : undefined };
     }
@@ -182,18 +186,25 @@ function* evaluate(plan, scenario, options = {}) {
             // Downstream-first reservations; new production never enters before[].
             for (const out of outputOrder) {
                 const lab = labs[out], p = lab.role;
-                if (lab.role !== lab.desired || tick < lab.ready || tick < lab.next || before[out] > 2995 || lab.amount > 2995 || remaining(p) < 5) continue;
+                const quantity = lab.reactionPower ? reactionAmount.amount(lab.reactionPower, tick) : baseAmount;
+                if (!(quantity > 0) || lab.role !== lab.desired || tick < lab.ready || tick < lab.next ||
+                    before[out] + quantity > 3000 || lab.amount + quantity > 3000 || remaining(p) < quantity) continue;
+                if (operated && (remaining(p) - quantity) % baseAmount !== 0) {
+                    const future = labs.map((other, index) => other.desired === p ? reactionAmount.opportunities(other.reactionPower,
+                        recipes[p].cooldown, Math.max(tick, index === out ? tick + recipes[p].cooldown : other.next, other.ready)) : null);
+                    if (!reactionAmount.canFinish(remaining(p) - quantity, future)) continue;
+                }
                 const available = pairs[out].filter((g) => labs[g.a].role === recipes[p].inputs[0] && labs[g.b].role === recipes[p].inputs[1] &&
-                    labs[g.a].role === labs[g.a].desired && labs[g.b].role === labs[g.b].desired && tick >= labs[g.a].ready && tick >= labs[g.b].ready && before[g.a] >= 5 && before[g.b] >= 5);
+                    labs[g.a].role === labs[g.a].desired && labs[g.b].role === labs[g.b].desired && tick >= labs[g.a].ready && tick >= labs[g.b].ready && before[g.a] >= quantity && before[g.b] >= quantity);
                 available.sort((a, b) => Math.min(before[b.a], before[b.b]) - Math.min(before[a.a], before[a.b]) || a.a - b.a || a.b - b.b);
                 if (!available.length) continue;
                 const g = available[0];
-                assert(labs[g.a].amount >= 5 && labs[g.b].amount >= 5, "0128 no double consumption");
-                before[g.a] -= 5; before[g.b] -= 5;
-                labs[g.a].amount -= 5; labs[g.b].amount -= 5;
-                lab.amount += 5; produced[p] += 5; lab.next = tick + recipes[p].cooldown;
+                assert(labs[g.a].amount >= quantity && labs[g.b].amount >= quantity, "0128 no double consumption");
+                before[g.a] -= quantity; before[g.b] -= quantity;
+                labs[g.a].amount -= quantity; labs[g.b].amount -= quantity;
+                lab.amount += quantity; produced[p] += quantity; reactionUnits += quantity; lab.next = tick + recipes[p].cooldown;
                 calls++; counters.calls++;
-                if (fullTrace) trace.reactions.push({ tick, product: p, out: built[out], inputs: [built[g.a], built[g.b]] });
+                if (fullTrace) trace.reactions.push({ tick, product: p, amount: quantity, out: built[out], inputs: [built[g.a], built[g.b]] });
             }
         }
         const dual = labs.map((l, i) => i).filter((i) => remaining(labs[i].role) && consumers(labs[i].role).length);
@@ -228,7 +239,7 @@ function* evaluate(plan, scenario, options = {}) {
         }
         reassign();
         if (!calls && !moved) {
-            const future = labs.flatMap((l) => [l.next, l.ready]).filter((t) => t > tick);
+            const future = labs.flatMap((l) => [l.next, l.ready, l.reactionPower && !l.reactionPower.unsupported ? l.reactionPower.remaining : 0]).filter((t) => t > tick);
             if (future.length) {
                 const nextTick = Math.min(...future);
                 counters.dualRoleTicks += dual.length * (nextTick - tick - 1);

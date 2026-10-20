@@ -2,13 +2,19 @@
 
 > **Decisão posterior — 16/10/2026:** implementação local autorizada passo a passo no [plano de execução incremental](../../../docs/plano-execucao-incremental-2026-10-16.md). Histórico persistente sofisticado adiado até necessidade demonstrada; cobertura inicial no heap, com lacunas explícitas. Gates operacionais continuam válidos.
 
-- **Status:** planned — execução local autorizada em etapas; não implementada.
+- **Status:** in-progress — compatibilidade de deals/sends/labs e quotas strict implementada localmente; piloto/ops/lifecycle e aceite live pendentes.
 - **Issue:** ARK-137; consolidação ARK-141.
 - **Revisão documental:** 2026-10-16.
 - **Autorização:** implementação local incremental; publicação/ativação e gastos seguem os gates do plano de execução.
 - **Contrato:** [spec.md](spec.md). **DAG/aceite:** [planejamento integrado](../../../docs/planejamento-integrado-2026-10-16.md).
 
 ## Approach / Modules
+
+Prioridade de 17/10/2026: labs e terminal, conforme [avaliação e sequência](../../../docs/prioridade-labs-terminal-2026-10-17.md). Os módulos abaixo são propostas, não runtime entregue.
+
+Terminal: primitiva pura de custo/cooldown efetivo compartilhada com terminalOps, terminalFuel e terminalRouting, preservando custo bruto separado do efetivo para impedir desconto duplo. Mapear iniciador/pagador de cada send/deal antes de reservar combustível. Separar requiredEnergy bruto exigido pela API de expectedDebit descontado; preservar buffer físico, conciliar sobra sem lançá-la como gasto. Não alterar política de ordens/cadência global para aproveitar efeito.
+
+Orçamento comum de ops e decisão por retorno marginal para lab/terminal; uma pendência compromete saldo antes de avaliar outro candidato. Reusar cobertura/snapshots; diagnóstico sob demanda. nextWakeTick usa oportunidade concreta, sem polling adicional de todas as salas. Sem efeito e com flags off, preservar comportamento e evitar inicialização pesada.
 
 powerPolicy.decide é pura: GPL/constantes, target, custo total/restante, payback marginal, preferência e autorização expirada. powerLogistics usa terminalOps e admission/owners persistentes. powerSpawn.run e feedJob consultam autorização viva inclusive para saldo já no spawn.
 reactionAmount e política de cauda são primitivas comuns de labPlanModel/runtime/executor; craftLedger contabiliza quantidade conciliada, não 5 fixo.
@@ -25,8 +31,18 @@ Operador: unspawned/spawnPending/active/safe/renewPending/respawnWait; ler TTL/c
 
 Fase 0: fixtures de GPL/target maior manual, E=20/31.6/70 e power±30%, banda 24–30 dias, quotes/readiness vencidos, stock no spawn com off, livre antes de listados, físico100 com listagens100+100, ordem sem lastro, pools distintos, busca incompleta e cancelamento parcial/concorrente e dry-run sem mutação.
 Suporte operado: testar base e níveis 1–5, último tick, aplicação/renovação bloqueada no mesmo tick, efeitos desconhecidos, capacidade, insumos compartilhados, strict/boundedSurplus, meta10/A7, entrega final e ausência de stall.
-Fase 2: coletar baseline 48h do regime atual; demonstrar gargalo marginal, orçamento de ops/energia/reagentes/logística e demanda executável. Criação/upgrade manuais só após autorização separada. Revalidar novo regime antes de expansão. CPU inclui renew/trânsito/coleta; medir contribuição final/venda, não apenas throughput bruto.
+Fase 2: coletar baseline 48h do regime atual; demonstrar gargalo/economia marginal e orçamento de ops/energia/logística; reagentes e demanda executável quando o retorno depende de produção/venda adicional. Economia de frete sobre operações úteis existentes não exige nova venda. Criação/upgrade manuais só após autorização separada. Revalidar novo regime antes de expansão. CPU inclui renew/trânsito/coleta; medir contribuição final/venda, não apenas throughput bruto.
 
 ## Risks & mitigations
 
+Terminal T1 custa 100 ops/aplicação para fator0,9; geração T1 ideal é 20 ops/1.000 ticks. Alto volume de anúncios passivos não paga frete próprio. Medir sends/deals próprios, economia arredondada e espera por cooldown. Poll de5 pode absorver vantagem10→9; não responder com poll global de1. Pilotos separados e combinado precisam demonstrar retorno e ausência de aumento sustentado da CPU total frente à baseline comparável (usuário relata19,5/6h). Carga diferente é comparação inconclusiva, não sucesso.
+
 Payback depende de atribuição e demanda: unknown bloqueia investimento. Cancelamento/GPL irreversíveis: dry-run, budget e reconciliação. Operador abandonado no off: gestão safe separada. Overshoot invisível: quotaMode explícito e custo propagado. Buscas/step machines limitadas, nextWakeTick e stall guard no spec.
+
+## Implementação T10-A — 17/10/2026
+
+[Pacote de deals/reservas](../../../docs/entrega-0150-terminal-a-2026-10-17.md) implementado localmente; compatibilidade de sends, concorrência de efeitos e operador continuam pendentes. Não confundir suporte a efeito já observado com ativação do poder.
+
+## Compatibilidade B — 17/10/2026
+
+[Entrega e gate live](../../../docs/pacote-power-compatibilidade-2026-10-17.md): sends deferidos/parciais, quantidade comum de labs e quota strict, cronologia de efeitos e powerStatus sob demanda. Operador/ops/readiness/piloto continuam pendentes; aguardam fatos e validação em jogo antes de acrescentar controle ativo.

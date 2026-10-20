@@ -55,3 +55,38 @@ harness — keep it green and extend it.
 - **Tarefas:** o projeto `ScreepsMuszbot` no Linear (workspace e time `Arkemenes`, chave `ARK`) é a fonte de verdade. Antes de começar um trabalho, garanta que exista uma issue; mova-a para *In Progress* ao iniciar e para *Done* ao concluir. Issues criadas por agentes entram no *Backlog* para revisão do usuário. Convenção completa: `90-AI/convencao-projetos-linear.md` no vault Obsidian.
 - **Estrutura do código:** quando existir `graphify-out/graph.json`, use `graphify query "<pergunta>"` (relações: `graphify path "A" "B"`; conceitos: `graphify explain "X"`) antes de varrer arquivos. Leia `graphify-out/GRAPH_REPORT.md` só para revisão ampla de arquitetura. Após alterar código, rode `graphify update .` (só AST, sem custo de API).
 - **Contexto e decisões:** ficam no vault Obsidian (`90-AI/<agente>/projetos/`); a continuidade entre sessões fica no ai-memory. Nunca grave segredos em issues, notas, grafo ou commits.
+
+## Live game data (Screeps API)
+
+The token in `.env` is **read-only** (query only). `tools/screeps-api.js` is a
+GET-only client that reads it (`SCREEPS_TOKEN`, `SCREEPS_HOST`,
+`SCREEPS_SHARD`; template in `.env.example`; `.env` is git-ignored). Never
+print, log or commit the token.
+
+**When to query:** whenever live evidence matters — measuring CPU before and
+after a change, checking the bucket, confirming a deploy behaves as expected,
+or when offline tests and the live game disagree. Prefer live data over
+guessing.
+
+**Query sparingly.** `/api/user/memory` is rate-limited (~1440 calls/day per
+token) and the same budget is consumed by `exporter.py`, which feeds the
+Grafana dashboard (one call every `POLL_INTERVAL`=120s, ~720/day). Every call
+an agent makes is taken from the dashboard's budget, and an HTTP 429 blocks
+both for hours. Rules of thumb:
+
+- One query per question; reuse the output instead of re-fetching.
+- Never poll in a loop. After a deploy, wait at least one meter window
+  (`stats.cpuWindowTicks`, 60 ticks ≈ 3–4 min) before measuring again.
+- Fetch the narrowest path you need (`stats.cpu`, not all of `Memory`).
+- On HTTP 429, stop and tell the user; do not retry.
+
+Commands:
+
+- `node tools/screeps-api.js cpu [n]` — bucket, limit, CPU meter window
+  (modules / roles / structures / spans) and bucket balance from
+  `Memory.stats.cpu`. Use it first for any CPU question.
+- `node tools/screeps-api.js memory <path>` — e.g. `stats`, `settings`,
+  `rooms.W1N1` (`gz:` payloads are decoded).
+- `node tools/screeps-api.js segment <id>` — one RawMemory segment.
+- `node tools/screeps-api.js get <endpoint> [k=v ...]` — any GET endpoint,
+  e.g. `get /api/user/overview interval=8`.

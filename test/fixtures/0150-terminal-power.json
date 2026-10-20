@@ -1,0 +1,70 @@
+{
+  "engineRevision": "a90d26fc9eb943147799e65d0bf9d4d0d79a2722",
+  "commonRevision": "2fb779b26eef9b4b0f412584f6bd47c897949766",
+  "sources": [
+    {
+      "file": "src/game/market.js",
+      "sha256": "aab44c51f81ee988fecafd2c4896593be3b86ba2106e8a7fb8e83093219f82af"
+    },
+    {
+      "file": "src/game/structures.js",
+      "sha256": "ff603ba00c22553e6339ea72cf1f44da7973b75627f9d13069349890328f0783"
+    },
+    {
+      "file": "src/processor/global-intents/market.js",
+      "sha256": "82e562b5f237d770801524a01f80e165ab737306ef08592cd4fa6e9c73edd629"
+    }
+  ],
+  "constantsSha256": "bbe53873f88cadac7832c2cf1c317eef545f39b4a338fabf634d4c28ec82deaf",
+  "power": 8,
+  "factors": [
+    0.9,
+    0.8,
+    0.7,
+    0.6,
+    0.5
+  ],
+  "semantics": "Authored contract fixture, not a full engine emulator. API requires raw freight; processor charges ceil(raw * payer effect), endTime > gameTime. Server version unverified.",
+  "rounding": [
+    {
+      "raw": 101,
+      "factor": 0.9,
+      "debit": 91
+    },
+    {
+      "raw": 101,
+      "factor": 0.8,
+      "debit": 81
+    },
+    {
+      "raw": 101,
+      "factor": 0.7,
+      "debit": 71
+    },
+    {
+      "raw": 101,
+      "factor": 0.6,
+      "debit": 61
+    },
+    {
+      "raw": 101,
+      "factor": 0.5,
+      "debit": 51
+    },
+    {
+      "raw": 1,
+      "factor": 0.5,
+      "debit": 1
+    },
+    {
+      "raw": 0,
+      "factor": 0.9,
+      "debit": 0
+    },
+    {
+      "raw": 101,
+      "factor": 1,
+      "debit": 101
+    }
+  ]
+}

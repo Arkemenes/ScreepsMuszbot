@@ -36,7 +36,7 @@ A ordem numérica organiza a execução. A coluna de dependências identifica os
 | 12 | **0149: piloto de XLH2O próprio em builders**, sem compra automática | 5, 6, 7 e 8 | Benefício por ação/TTL cobre composto/energia/logística/lab; spawn não espera; parcial/reset/off/cleanup seguros |
 | 13 | **0150/fase 0: GPL**, plano explicável e processamento de power livre | 5; GPL/quotes/custos/retorno atuais; logística reconciliada | Target inicial 3 configurável, custo restante real; sem novos anúncios de power; allowCancel=false; consumo/GPL confirmados |
 | 14 | **0150/labs: compatibilidade com OPERATE_LAB**, sem ativar operator | Contrato mecânico pinado; reservas/pending compatíveis | Quantidade comum no modelo/runtime/executor; insumos completos; quota strict por padrão; concorrência e caudas terminam corretamente |
-| 15 | **0150/operator: avaliar e, se aprovado pelo gate, executar piloto** | 7, 13, 14 e evidência representativa de pelo menos 48h observadas | Gargalo real de reação; reagentes/transporte/ops/venda disponíveis; retorno marginal; criação/upgrade manuais e gestão opt-in |
+| 15 | **0150/operator: avaliar e, se aprovado pelo gate, executar piloto** | 13, 14 e pelo menos 48h válidas; 7 para piloto lab/combinado, telemetria de frete próprio para terminal-only | Gargalo/economia real de lab ou terminal; insumos/ops/logística disponíveis; demanda se houver venda adicional; retorno marginal; criação/upgrade manuais e gestão opt-in |
 | 16 | **Expandir salas, compostos ou poderes**, uma dimensão por vez | Resultado útil dos pilotos; novo regime reavaliado | Produção, margem, recuperação e CPU sustentáveis em escala; não extrapolar automaticamente uma sala para dez |
 
 Etapa 13 não depende de 14/15 e pode ser avaliada antes dos pilotos 11/12, mantendo seus próprios gates. Etapas 4 e 10 podem preceder observabilidade mais ampla. A infraestrutura adiada não é pré-requisito das etapas 1–14.
@@ -92,3 +92,17 @@ Por orientação do usuário, avançar boosts em paralelo à investigação de C
 ## Progresso autônomo — pacote0149-B
 
 Implementados localmente cálculo de retorno, checker puro de prefixos e preparação física com haulers/claims/lifecycle. Núcleo puro de confirmação não está ligado a intent de boost. [Pacote e limites](pacote-boost-2026-10-16.md). Não ativado/deployado. Próximo gate funcional: contexto observado/admissão de canais e combustível futuro, depois executor/confirmacão e piloto controlado. Persistência sofisticada continua adiada.
+
+## Prioridade labs/terminal — 17/10/2026
+
+[Sequência atualizada e premissas](prioridade-labs-terminal-2026-10-17.md). Etapa14 passa a incluir compatibilidade de OPERATE_TERMINAL em frete/combustível/reservas/relay, além de quantidade de OPERATE_LAB. Antes da etapa15: diagnóstico sob demanda, orçamento compartilhado de ops e agendamento limitado. Avaliar poderes separadamente e depois combinados; sem aumento sustentado da CPU total sob carga comparável. Média19,5/6h informada pelo usuário é baseline, não folga garantida. Sem nova persistência preventiva ou poll global mais frequente. Factory permanece posterior. 0149-B continua parcial; esta prioridade não conclui seu executor.
+
+reuseOrderBook=true confirmado como padrão local por solicitação do usuário; overrides explícitos são preservados. Gates de 48h, criação/upgrade manuais e ativação permanecem. Atualização de ARK-137/ARK-139 pendente por falha do serviço de revisão automática de aprovação (limite de uso).
+
+## Avanço 0150/T10-A — 17/10/2026
+
+[Deals e reservas de terminal operado](entrega-0150-terminal-a-2026-10-17.md) implementados localmente. Não conclui etapa14: sends e compatibilidade de labs continuam pendentes. Sem publicação/ativação; custo CPU live pendente. ARK-137 passou a In Progress após recuperação do serviço de aprovação; a falha remota anterior fica como registro histórico.
+
+## Continuação autônoma — compatibilidade B
+
+[Pacote e teste necessário](pacote-power-compatibilidade-2026-10-17.md): T5/T10 offline, T6 strict e T11-A locais; nenhuma ativação de operador. Pausa operacional condicionada ao teste do usuário: baseline/pós CPU150 e powerStatus com fatos da conta e transferências. Lifecycle/ops ainda não estão implementados; os48h/gates de investimento não são substituídos pelo smoke.

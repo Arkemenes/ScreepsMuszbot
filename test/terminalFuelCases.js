@@ -17,13 +17,13 @@ module.exports = function (project, assert) {
         Memory.settings = { terminalFuel: { enabled: true } };
         Memory.terminalOps = { operations: {} }; Memory.swing = { observations: {} };
         census.build();
-        assert(fuel.reserve(room) === 0 && fuel.releasable(room) === 30000,
-            "0124 fuel: idle terminal has no fixed energy reserve");
+        assert(fuel.reserve(room) === 10 && fuel.keep(room) === 10 && fuel.releasable(room) === 29990,
+            "0161 fuel: every terminal keeps a ten-energy minimum reserve");
         Memory.terminalOps.operations = { a: op("1", 1500), b: op("2", 2500), c: op("3", 7000) };
-        assert(fuel.plan(room).reserve === 4800 && fuel.plan(room).transactions === 2,
+        assert(fuel.plan(room).reserve === 4810 && fuel.plan(room).transactions === 2,
             "0124 fuel: next two freight costs plus 20 percent margin");
         Memory.terminalOps.operations.a.feeLoadedAmount = 1500;
-        assert(fuel.plan(room).reserve === 4800 && fuel.unfunded(room) === 3300,
+        assert(fuel.plan(room).reserve === 4810 && fuel.unfunded(room) === 3310,
             "0124 fuel: staged fee counted once");
         Memory.terminalOps.operations.c.state = "listed";
         Memory.terminalOps.operations.b.fuelQuote.tick -= 301;
@@ -38,14 +38,14 @@ module.exports = function (project, assert) {
         Memory.terminalOps.operations = { transfer: op("4", 0, { kind: "transfer",
             resourceType: "energy", targetRoom: "Other", remaining: 1000, amount: 1000, loadedAmount: 1200 }) };
         assert(fuel.plan(room).cargo === 1000 && fuel.plan(room).funded === 200 &&
-            fuel.keep(room) === 1240 && fuel.unfunded(room) === 40,
+            fuel.keep(room) === 1250 && fuel.unfunded(room) === 50,
             "0124 fuel: outgoing energy cargo and staged freight protected separately");
 
         Memory.terminalOps.operations.transfer.sentAmount = 1000;
         Memory.terminalOps.operations.transfer.sentTick = Game.time;
-        assert(fuel.keep(room) === 1200, "0124 fuel: accepted transfer intent remains protected until engine applies it");
+        assert(fuel.keep(room) === 1210, "0124 fuel: accepted transfer intent remains protected until engine applies it");
         Game.time++;
-        assert(fuel.keep(room) === 0, "0124 fuel: sent transfer releases source fuel after engine tick");
+        assert(fuel.keep(room) === 10, "0161 fuel: sent transfer releases excess source fuel but retains the ten-energy minimum");
         Memory.terminalOps.operations.transfer.sentAmount = 0;
         Memory.terminalOps.operations.transfer.remaining = 1000;
         Memory.terminalOps.operations.transfer.fuelQuote.tick = Game.time;

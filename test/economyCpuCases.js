@@ -320,10 +320,10 @@ module.exports = function (project, assert) {
             ownKeys(value) { forecastScans++; return Reflect.ownKeys(value); }
         });
         const released = fuel.releasable(room);
-        assert(released === 98 && forecastScans === 1,
+        assert(released === 88 && forecastScans === 1,
             "ARK-116: fuel release shares one forecast for the reserve and keep floor");
         room.terminal.store.energy = 1;
-        assert(fuel.releasable(room) === 1 && forecastScans === 2,
+        assert(fuel.releasable(room) === 0 && forecastScans === 2,
             "ARK-116: the next release decision observes same-tick balance changes");
         stock.commitments = saved.commitments;
         const hauler = load("src/roles/hauler");
@@ -402,7 +402,7 @@ module.exports = function (project, assert) {
         let capacityReads = 0, freeCapacity = 0;
         stock.terminalFree = (selectedRoom, exclude, floor) => {
             capacityReads++;
-            assert(selectedRoom === packedRoom && floor === 0,
+            assert(selectedRoom === packedRoom && floor === 10,
                 "ARK-116: stock selection supplies its existing fuel floor to capacity evaluation");
             return freeCapacity;
         };

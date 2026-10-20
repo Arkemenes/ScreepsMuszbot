@@ -137,7 +137,7 @@ function sync(c) {
     return inv;
 }
 function totals(c) {
-    sync(c); let spent = 0, revenue = 0, energy = 0, known = true, salesEnergy = 0, salesFees = 0;
+    sync(c); let spent = 0, revenue = 0, energy = 0, known = !c.inventory.uncertainProduction, salesEnergy = 0, salesFees = 0;
     Object.values(c.economics.operations).forEach((a) => {
         if (a.kind === "buy") spent -= a.credits; else revenue += a.credits;
         spent += a.fees;
@@ -150,7 +150,7 @@ function totals(c) {
     if (sold < (c.soldBase || 0)) known = false;
     return { spent, revenue, energy, known, salesEnergy, salesFees };
 }
-function production(s, r, q) {
+function production(s, r, q, reactionPower) {
     const c = chains().find((c) => c.room === s.room.name && c.state === "working" && (c.queue || []).slice(c.qi || 0)
         .some((i) => i.started && !i.finished && (i.product === r || i.policy && i.targets[r])));
     if (!c) return;
@@ -159,13 +159,17 @@ function production(s, r, q) {
     const recipe = require("./marketPricing").recipeOf(r);
     const growth = q - (recipe && recipe.components[r] || 0) * q / (recipe && recipe.amount || q);
     if (!inv.pending.some((p) => p.id === s.id && p.tick === Game.time))
-        inv.pending.push({ id: s.id, product: r, quantity: q, growth, before: value(s, r), tick: Game.time });
+        inv.pending.push({ id: s.id, product: r, quantity: q, growth, before: value(s, r), tick: Game.time, reactionPower });
 }
 function settle(c) {
     const inv = sync(c);
     inv.pending = inv.pending.filter((p) => {
         if (p.tick >= Game.time) return true;
         const s = Game.getObjectById(p.id);
+        if (p.reactionPower !== undefined && !require("./labReactionAmount").sameAfter(p.reactionPower,
+            require("./labReactionAmount").snapshot(s), Game.time - p.tick)) {
+            inv.uncertainProduction = true; inv.confidence = "incomplete"; return false;
+        }
         if (s && value(s, p.product) >= p.before + (p.growth === undefined ? p.quantity : p.growth)) {
             const basis = consume(c, p.product, p.quantity);
             inv.balances[p.product] = (inv.balances[p.product] || 0) + p.quantity;

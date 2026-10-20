@@ -3,7 +3,8 @@
 module.exports = function labPolicyCases(PROJECT, assert) {
     const path = require("node:path");
     const load = (name) => require(path.join(PROJECT, name));
-    const saved = { Memory: global.Memory, Game: global.Game, REACTIONS: global.REACTIONS, REACTION_TIME: global.REACTION_TIME };
+    const saved = { Memory: global.Memory, Game: global.Game, REACTIONS: global.REACTIONS, REACTION_TIME: global.REACTION_TIME,
+        PWR_OPERATE_LAB: global.PWR_OPERATE_LAB, POWER_INFO: global.POWER_INFO };
     const research = load("docs/lab-search/recipes.cjs");
     const slots = load("src/utils/labSlots");
     const core = load("src/utils/labPlanModel");
@@ -104,16 +105,19 @@ module.exports = function labPolicyCases(PROJECT, assert) {
         for (const intent of calls) {
             if (drop) { drop = false; continue; }
             const r = research.recipes[intent.product];
-            assert((intent.a.store[r.inputs[0]] || intent.a.store[r.inputs[1]] || 0) >= 5 &&
-                (intent.b.store[r.inputs[0]] || intent.b.store[r.inputs[1]] || 0) >= 5, "0127: shared input is consumed once");
+            const effect = (intent.out.effects || []).find((e) => e.effect === global.PWR_OPERATE_LAB && e.ticksRemaining > 0);
+            const quantity = 5 + (effect ? POWER_INFO[PWR_OPERATE_LAB].effect[effect.level - 1] : 0);
+            assert((intent.a.store[r.inputs[0]] || intent.a.store[r.inputs[1]] || 0) >= quantity &&
+                (intent.b.store[r.inputs[0]] || intent.b.store[r.inputs[1]] || 0) >= quantity, "0127: shared input is consumed once");
             for (const lab of [intent.a, intent.b]) {
-                lab.store[lab.mineralType] -= 5;
+                lab.store[lab.mineralType] -= quantity;
                 if (!lab.store[lab.mineralType]) lab.mineralType = null;
             }
-            intent.out.store[intent.product] = (intent.out.store[intent.product] || 0) + 5;
+            intent.out.store[intent.product] = (intent.out.store[intent.product] || 0) + quantity;
             intent.out.mineralType = intent.product;
             intent.out.cooldown = r.cooldown - 1;
         }
+        w.labs.forEach((lab) => (lab.effects || []).forEach((effect) => { effect.ticksRemaining = Math.max(0, effect.ticksRemaining - 1); }));
     }
     function run(w, options = {}) {
         let peak = 0, switchedCooling = false, dropped = false;
@@ -149,6 +153,19 @@ module.exports = function labPolicyCases(PROJECT, assert) {
         throw new Error("Policy stalled: " + JSON.stringify(w.item.run));
     }
     try {
+        global.PWR_OPERATE_LAB = 5; global.POWER_INFO = { 5: { effect: [2, 4, 6, 8, 10] } };
+        {
+            const powered = world("XLH2O", 100, [1, 2, 3, 4, 5, 6]);
+            powered.labs[2].effects = [{ effect: 5, level: 1, ticksRemaining: 1000 }];
+            run(powered, { reset: true });
+            assert(powered.item.run.done && Object.values(powered.item.run.produced).every((n) => n === 100),
+                "0150 lab: full runtime finishes a mixed operated/base layout exactly across reset");
+            const short = world("XLH2O", 10, [1, 2, 3]);
+            short.labs[2].effects = [{ effect: 5, level: 1, ticksRemaining: 5 }];
+            run(short);
+            assert(short.item.run.done && Object.values(short.item.run.produced).every((n) => n === 10),
+                "0150 lab: full runtime survives expiry and finishes strict quota ten without surplus");
+        }
         let w = world("XLH2O", 20, [1, 2, 3]);
         {
             w.room.controller.pos={x:25,y:25};

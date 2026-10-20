@@ -1,8 +1,8 @@
-# 0150 — Power com meta evolutiva e operador compatível com labs
+# 0150 — Power com meta evolutiva e operador compatível com labs e terminal
 
 > **Decisão posterior — 16/10/2026:** implementação local autorizada passo a passo no [plano de execução incremental](../../../docs/plano-execucao-incremental-2026-10-16.md). Histórico persistente sofisticado adiado até necessidade demonstrada; cobertura inicial no heap, com lacunas explícitas. Gates operacionais continuam válidos.
 
-- **Status:** planned — execução local autorizada em etapas; não implementada.
+- **Status:** in-progress — compatibilidade de deals/sends/labs e quotas strict implementada localmente; piloto/ops/lifecycle e aceite live pendentes.
 - **Issue:** ARK-137 (filha de ARK-128).
 - **Created / revisão documental:** 2026-10-15.
 - **Contrato integrado e aceite:** [planejamento vigente](../../../docs/planejamento-integrado-2026-10-16.md); análises anteriores são históricas.
@@ -25,10 +25,23 @@ Os estoques e 7.600 power do handoff são históricos, não um orçamento atual.
 - Não criar novas ordens para power; venda futura só em bids conforme política autorizada, sem vender o lote comprometido para processamento.
 - Antes do operador: quantidade efetiva de reação em reservas, capacidade, quotas, pendências, confirmação e craftLedger; reconhecer OPERATE_LAB sem suspender a cadeia, tratar caudas de lote e efeitos desconhecidos conservadoramente.
 - Operador opt-in; criação/upgrade manuais após gate. Usar GPL livre real e poderes lidos de POWER_INFO, não presumir conta vazia.
-- Gate do operador exige pelo menos 2 dias reais de observação válida (0155), gargalo marginal comprovado, reagentes/transporte e profundidade de bid suficiente; book instantâneo não promete demanda futura.
+- Gate do operador exige pelo menos 2 dias reais de observação válida (0155), gargalo ou economia marginal comprovados e logística disponível. Para ganho baseado em venda adicional, exigir reagentes e profundidade de bid suficiente; para terminal baseado em economia de frete de operações úteis existentes, provar gasto evitado sem exigir venda incremental. Book instantâneo não promete demanda futura.
 - Budget de ops considera geração real e usos interrompidos por renew/trânsito; 2 labs sustentados em T1 é limite ideal, não rendimento garantido.
 - Suspender atividade econômica por CPU/bucket, mantendo renovação, proteção e retorno seguro; TTL/caminho/margem e cooldown real de spawn. Não prometer teto rígido por medir depois.
-- Reusar infraestrutura de ciclo de vida na futura 0122; factory avançada e outros poderes fora desta fase.
+- Prioridade de 17/10/2026: OPERATE_LAB e OPERATE_TERMINAL, com orçamento compartilhado de ops e CPU; [decisão e sequência](../../../docs/prioridade-labs-terminal-2026-10-17.md).
+- Reusar infraestrutura de ciclo de vida na futura 0122; factory avançada e demais poderes fora desta fase.
+
+### Terminal operado e orçamento conjunto
+
+Antes de ativar OPERATE_TERMINAL, alinhar custo efetivo, combustível, reservas, decisão econômica e confirmação de sends/deals iniciados por nós. O desconto pertence ao terminal pagador do frete; anúncio passivo atendido por outro jogador não gera economia de frete para nós. Não descontar taxas de listing/reprice. Preservar Math.ceil do frete e arredondamento nativo do cooldown; sem efeito manter comportamento atual. Não aplicar fator duas vezes em relay. Mudança/expiração de efeito invalida cotação antes do intent; reconciliação usa deltas atribuíveis, sem inferir sucesso pelo retorno OK.
+
+Separar `requiredEnergy` (pré-condição física para a API aceitar o intent) de `expectedDebit` (consumo previsto com efeito). Nas fontes públicas consultadas, game/market.js e game/structures.js exigem combustível bruto antes de enfileirar deal/send, embora o processor debite o frete descontado. Exemplo: frete bruto100, fator0,9 e terminal com90 ainda pode receber ERR_NOT_ENOUGH_RESOURCES. Disponibilizar/reservar o buffer bruto conservador, incluindo carga ao vender/enviar energia; não contabilizar diferença como consumo. Conciliar e liberar sobra depois, protegendo concorrência. Fixtures de T10 devem cobrir API e processor, não só a fórmula econômica. Versão instalada desconhecida: não reduzir esse buffer por suposição.
+
+Fixtures devem verificar fonte/revisão e fronteira de expiração próprias do terminal, níveis 1–5, energia como carga, efeito externo, capacidade, cooldown e reset. Custo bruto calcTransactionCost não implica desconto automático na API. A cotação parcial de terminalRouting não conclui este contrato.
+
+Um orçamento de ops cobre ambos os poderes e pendências; geração usa nível real, cooldown, deslocamento e renew. T1 ideal gera 20 ops/1.000 ticks; lab custa 10 e terminal 100 por aplicação nas constantes consultadas. Sustentação simultânea não é presumida. Decisão compara contribuição marginal após custos e demanda, sem prioridade fixa por tipo nem compra automática. Unknown bloqueia gasto. Evitar reaplicação antecipada sem benefício justificado.
+
+Diagnóstico sob demanda reusa snapshots/telemetria, sem nova varredura global por tick nem histórico persistente preventivo. Agendar oportunidades do terminal afetado sem aumentar globalmente o poll. O gate de CPU cobre o operador inteiro e seus consumidores, incluindo manutenção/recuperação; suspender economia preserva safety managed. Baseline relatada em 17/10: 19,5 CPU/6h. Aceite desta prioridade exige ausência de aumento sustentado da CPU total sob carga comparável; throughput ou menor frete não são prova de redução de CPU.
 
 ### Reações operadas e quotas (pré-requisito da fase 2)
 
@@ -75,7 +88,13 @@ Separar power.enabled (alimentação/processamento) de creep.enabled (economia d
 9. Lote operado respeita `reactionAmount`: nível 1–5 do efeito, efeito começando/expirando, cauda residual e mistura com labs sem efeito; confirmação e `craftLedger` batem com o delta real.
 10. `powerPlan()` não cancela nada; sem `power.allowCancel` nenhum cancelamento ocorre; com o flag, somente conjunto mínimo demonstrado no pool físico entregável, com teste de sobrecompromisso100/100/100, pools distintos/sem lastro e reconciliação; unknown não cancela.
 
+11. Terminal operado aplica frete/cooldown do pagador correto, arredondamento e expiração; sem efeito preserva comportamento, anúncios passivos não contam como economia própria e relay não duplica desconto.
+12. Lab e terminal disputam um saldo único de ops, sem dupla reserva; geração real, pendências, renew e trânsito entram no retorno. Ausência de orçamento ou cobertura impede intent econômico.
+13. Pilotos separados e combinado têm retorno útil e comparação de CPU total representativa; aumento sustentado bloqueia expansão. Diagnóstico não introduz scans globais nem persistência sofisticada.
+
 ## Constitution check
+
+Diagnóstico incremental T11-A: powerStatus(roomName?) somente sob demanda, sem escrever Memory nem gastar recursos; informa GPL real, poderes/níveis/cooldowns/TTL observados, ops armazenados (não presumidos livres), efeitos e estoque de labs/terminal/powerSpawn e CPU publicada. Cobertura e orçamento não comprovados permanecem unknown. Não adota, cria, renova nem habilita operador. Custo de geração ideal é informativo e não autoriza sustentar ambos os poderes.
 
 Reusar census/roomCache; configuração em Memory.settings; dados derivados no heap limitado;
 somente ownership/recuperação persistente necessária, nunca objetos de jogo; guard e stall guard.
@@ -85,3 +104,15 @@ Smoke e invariantes verificam comportamento, não só ausência de exceção.
 ## Review gate
 
 [Revisão independente e reavaliação favorável](../../../docs/revisao-final-planejamento-2026-10-16.md): R1–R6 fechados no desenho. [Resposta e precisões](../../../docs/resposta-revisao-final-planejamento-2026-10-16.md). ARK-141 conclui somente planejamento/documentação; AC de runtime/live permanecem abertos. Implementação local segue o plano incremental autorizado; ativação/investimentos preservam os gates operacionais.
+
+## Implementação T10-A — 17/10/2026
+
+[Pacote de deals/reservas](../../../docs/entrega-0150-terminal-a-2026-10-17.md) implementado localmente; compatibilidade de sends, concorrência de efeitos e operador continuam pendentes. Não confundir suporte a efeito já observado com ativação do poder.
+
+### Contrato incremental de send — T10-B
+
+OK de send cria pendingSend escalar e reserva carga+buffer bruto até conciliação. Transação por descrição/rota/recurso/tick comprova quantidade; fallback requer movimentos compatíveis nos dois terminais. Parcial mantém amount original, sentAmount acumulado, remaining positivo e descarrega a parcela antes de enviar o resto. Não criar receipt concorrente para pending de transferência gerida. Sem efeito observado, só repetir depois de confirmar ausência de movimento; ambiguidade bloqueia novo send com motivo e stall guard. Cancelamento espera conciliação, não solta carga aceita. Usar fator do intent, buffer bruto na pré-carga e débito previsto somente no custo confirmado; legado sem pending mantém tratamento anterior.
+
+## Compatibilidade B — 17/10/2026
+
+[Entrega e gate live](../../../docs/pacote-power-compatibilidade-2026-10-17.md): sends deferidos/parciais, quantidade comum de labs e quota strict, cronologia de efeitos e powerStatus sob demanda. Operador/ops/readiness/piloto continuam pendentes; aguardam fatos e validação em jogo antes de acrescentar controle ativo.

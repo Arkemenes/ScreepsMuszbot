@@ -8,6 +8,7 @@ const labReactions = require("./labReactions");
 const census = require("./census");
 const cpuMeter = require("./cpuMeter");
 const labReservations = require("./labReservations");
+const reactionAmount = require("./labReactionAmount");
 const layoutCache = new Map();
 const activeCache = new Map();
 
@@ -124,7 +125,8 @@ function snapshot(room, chain, item, resolved, state) {
     });
     const labs = resolved.built.map((slot, i) => {
         const lab = Game.getObjectById(resolved.ids[slot]);
-        return { role: lab.mineralType || state && state.roles[i] || null,
+        const power = reactionAmount.snapshot(lab);
+        return { role: lab.mineralType || state && state.roles[i] || null, ...(power ? { reactionPower: power } : {}),
             amount: lab.mineralType ? lab.store[lab.mineralType] || 0 : 0, next: lab.cooldown || 0, ready: 0,
             refilling: !!(state && state.refilling && state.refilling[i]) };
     });
@@ -138,23 +140,25 @@ function confirm(room, chain, item, state, labs) {
     for (const intent of state.pending || []) {
         if (intent.tick >= Game.time) { pending.push(intent); continue; }
         const out = Game.getObjectById(intent.out);
-        // Policy suspends for powers. An observed new cooldown proves the engine
-        // applied the reaction, even when consumers/haulers moved the output.
+        // A cooldown proves execution; an unchanged/expired effect timeline
+        // proves its quantity even when haulers moved the output meanwhile.
         const elapsed = Game.time - intent.tick;
         const expected = map[intent.product].cooldown - elapsed;
-        if (expected <= 0 || out && (out.effects || []).some((e) => e.ticksRemaining > 0)) {
+        const observedPower = reactionAmount.snapshot(out);
+        if (expected <= 0 || !reactionAmount.sameAfter(intent.power || null, observedPower, elapsed)) {
             state.uncertain = true;
             continue;
         }
         const success = out && expected > 0 && out.cooldown === expected;
         if (!success) { state.rejected = (state.rejected || 0) + 1; continue; }
-        state.produced[intent.product] = (state.produced[intent.product] || 0) + 5;
+        const quantity = intent.amount === undefined ? reactionAmount.base() : intent.amount;
+        state.produced[intent.product] = (state.produced[intent.product] || 0) + quantity;
         function change(id, resource, amount) {
             if (!byId.has(id)) return;
             const delta = adjustments[byId.get(id)]; delta[resource] = (delta[resource] || 0) + amount;
         }
-        change(intent.out, intent.product, 5);
-        intent.inputs.forEach((id, i) => change(id, map[intent.product].inputs[i], -5));
+        change(intent.out, intent.product, quantity);
+        intent.inputs.forEach((id, i) => change(id, map[intent.product].inputs[i], -quantity));
         chain.stateTick = Game.time;
     }
     state.pending = pending;
@@ -271,13 +275,15 @@ function assignments(room, chain, item, state, plan, resolved, labs) {
             Math.min(labs[a.a].store[map[p].inputs[0]] || 0, labs[a.b].store[map[p].inputs[1]] || 0) || a.a - b.a || a.b - b.b);
         if (!pairs.length) { reasons[lab.id] = "unavailable"; continue; }
         const pair = pairs[0];
-        const reason = lab.cooldown ? "cooldown" : (lab.store[p] || 0) > 2995 ? "capacity" :
-            (labs[pair.a].store[map[p].inputs[0]] || 0) < 5 || (labs[pair.b].store[map[p].inputs[1]] || 0) < 5 ? "input" : "ready";
+        const quantity = reactionAmount.amount(reactionAmount.snapshot(lab));
+        const reason = !quantity ? "powers" : lab.cooldown ? "cooldown" : (lab.store[p] || 0) + quantity > 3000 ? "capacity" :
+            (labs[pair.a].store[map[p].inputs[0]] || 0) < quantity || (labs[pair.b].store[map[p].inputs[1]] || 0) < quantity ? "input" : "ready";
         reasons[lab.id] = reason;
         reactions.push({ a: map[p].inputs[0], b: map[p].inputs[1], product: p,
             input1: labs[pair.a].id, input2: labs[pair.b].id, output: lab.id,
             keep: (phase.keep || []).includes(p) || consumers(i).length > 0,
-            owner: chain.key || chain.room, remaining: phaseRemaining(state, p) });
+            owner: chain.key || chain.room, remaining: phaseRemaining(state, p),
+            quotaKey: [chain.key || chain.room, chain.qi || 0, p, state.phaseSince].join(":") });
     }
     // ROADMAP 0147 probe: would this decision have been identical to the previous one?
     // (an upper bound: it hashes the lab states and the plan position, not every input)
@@ -327,8 +333,15 @@ function tick(room, chain, item) {
         chain.holds = {};
         state.phase = 0; state.roles = labs.map((lab) => lab.mineralType || null); state.switching = labs.map(() => 0); state.refilling = labs.map(() => false);
     }
-    if (labs.some((lab) => (lab.effects || []).some((effect) => effect.ticksRemaining > 0))) {
+    const hasPowers = labs.some((lab) => (lab.effects || []).some((effect) => effect.ticksRemaining > 0));
+    const powers = hasPowers ? labs.map((lab) => reactionAmount.snapshot(lab)) : null;
+    if (powers && powers.some((power) => power && power.unsupported)) {
         clear(room); state.wait = { room: "powers" }; return false;
+    }
+    const powerSignature = powers ? powers.map((power) => power ? power.extra + ":" + (Game.time + power.remaining) : "").join(",") : "";
+    if ((state.powerSignature || "") !== powerSignature) {
+        if (state.pending.length) { clear(room); state.wait = { room: "power-change-pending" }; return false; }
+        state.powerSignature = powerSignature; state.planId = null; state.evalKey = null; state.phase = 0; state.enter = true;
     }
     if (!state.planId) {
         clear(room);
@@ -389,6 +402,19 @@ function tick(room, chain, item) {
         cpuMeter.span("labPolicy.enter", () => enter(item, state, plan, labs, logistics)); state.enter = false;
     }
     cpuMeter.span("labPolicy.assignments", () => assignments(room, chain, item, state, plan, resolved, labs));
+    if (powerSignature) {
+        const events = labs.map((lab, i) => Math.max(Game.time + (lab.cooldown || 0), powers[i] ? Game.time + powers[i].remaining : 0));
+        state.nextWakeTick = Math.min(...events.filter((tick) => tick > Game.time));
+        if (!Number.isFinite(state.nextWakeTick)) state.nextWakeTick = Game.time;
+        const stamp = Math.max(state.phaseSince || 0, chain.stateTick || 0);
+        if (state.stallStamp !== stamp) { state.stallStamp = stamp; state.stallDeadline =
+            Math.max(stamp, state.nextWakeTick) + config.get("craft.operatedStallTicks", 300); }
+        if (Game.time >= state.stallDeadline) {
+            clear(room); state.planId = null; state.evalKey = null; state.enter = true;
+            state.wait = { room: "operated-stall-replan" }; delete state.stallStamp;
+            return false;
+        }
+    }
     return true;
 }
 function reconcile(room, chain, item) {

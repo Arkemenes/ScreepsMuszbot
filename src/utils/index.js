@@ -1,4 +1,5 @@
 require("./console"); // registers global.help() - console command reference
+require("./powerStatus"); // on-demand facts only; no per-tick observer or operator
 
 let utils = {
     memory: require("./memory"),

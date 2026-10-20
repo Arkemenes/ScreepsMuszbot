@@ -4,6 +4,7 @@ const market = require("./market");
 const book = require("./orderBook");
 const policy = require("./resourcePolicy");
 const accounting = require("./marketAccounting");
+const terminalPowerCost = require("./terminalPowerCost");
 function memory() {
     if (!Memory.swing) Memory.swing = { observations: {}, pending: {}, noRelist: {} };
     const mem = Memory.swing;
@@ -58,6 +59,7 @@ function quote(room, kind, r, quantity, options) {
     const matches = [];
     let deficit;
     const freight = new Map();
+    const freightMultiplier = terminalPowerCost.multiplier(room.terminal);
     const transactionCost = (amount, destination) => {
         let quantities = freight.get(destination);
         if (!quantities) { quantities = new Map(); freight.set(destination, quantities); }
@@ -80,18 +82,19 @@ function quote(room, kind, r, quantity, options) {
                 let low = 0, high = q;
                 for (let step = 0; low < high && step < 32; step++) {
                     const mid = Math.ceil((low + high) / 2);
-                    const fee = transactionCost(mid, order.roomName);
+                    const fee = terminalPowerCost.debit(transactionCost(mid, order.roomName), freightMultiplier);
                     if (mid - fee <= deficit) low = mid; else high = mid - 1;
                 }
                 q = low;
             }
         }
         if (!(q > 0)) return;
-        const cost = transactionCost(q, order.roomName);
+        const requiredEnergy = transactionCost(q, order.roomName);
+        const cost = terminalPowerCost.debit(requiredEnergy, freightMultiplier);
         const price = effective(kind, r, order.price, q, cost, ref.energy);
         if (kind === "buy" ? price > limit : price < limit) return;
         if (kind === "buy" && !require("./purchaseCost").evaluate({ resourceType: r, limit }, order.price, q, cost, ref.energy).ok) return;
-        matches.push({ order, quantity: q, cost, effective: price, fee: cost * ref.energy / q,
+        matches.push({ order, quantity: q, cost, requiredEnergy, freightMultiplier, effective: price, fee: cost * ref.energy / q,
             reference: ref.price, limit, energyFairPrice: ref.energy, netAmount: r === RESOURCE_ENERGY && kind === "buy" ? q - cost : q });
     });
     matches.sort((a, b) => kind === "buy" ? a.effective - b.effective : b.effective - a.effective);
@@ -189,7 +192,7 @@ function tick() {
             }
             const q = quote(room, "buy", r, Infinity, { orders: ordersFor(r) });
             observe(room, r, "buy", q.order ? { reason: "eligible", quantity: q.quantity, netAmount: q.netAmount,
-                effective: q.effective, reference: q.reference, limit: q.limit, cost: q.cost, orderId: q.order.id } : q);
+                effective: q.effective, reference: q.reference, limit: q.limit, cost: q.cost, requiredEnergy: q.requiredEnergy, orderId: q.order.id } : q);
             if (!test && q.order) {
                 const result = ops.buy(room.name, r, q.quantity, q.limit, false, true, { policy: "swing", effectiveLimit: true, automaticPurchase: true });
                 if (result.ok) memory().observations[room.name + ":" + r + ":buy"].opId = result.id;
@@ -211,7 +214,7 @@ function tick() {
             const saleOptions = { policy: "swing", effectiveLimit: true, owner, lotId };
             const q = quote(room, "sell", r, free, { orders: ordersFor(r), excludeId: sales.length ? sales[0].id : undefined });
             if (q.order) {
-                observe(room, r, "sell", { reason: "eligible", quantity: q.quantity, effective: q.effective, reference: q.reference, limit: q.limit, cost: q.cost, orderId: q.order.id });
+                observe(room, r, "sell", { reason: "eligible", quantity: q.quantity, effective: q.effective, reference: q.reference, limit: q.limit, cost: q.cost, requiredEnergy: q.requiredEnergy, orderId: q.order.id });
                 if (!test) {
                     const result = ops.sellLot(room.name, r, sold + q.quantity, q.limit, false, true, saleOptions);
                     if (result.ok) memory().observations[room.name + ":" + r + ":sell"].opId = result.id;

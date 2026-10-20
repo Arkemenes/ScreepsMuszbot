@@ -1,15 +1,12 @@
 // Freight quotes only: this module never sends cargo or writes Memory.
 const config = require("./config");
+const terminalPowerCost = require("./terminalPowerCost");
 
 function roomName(value) {
     return typeof value === "string" && /^[WE]\d+[NS]\d+$/i.test(value) ? value.toUpperCase() : null;
 }
 function multiplier(room) {
-    if (typeof Game === "undefined" || typeof PWR_OPERATE_TERMINAL === "undefined" || typeof POWER_INFO === "undefined") return 1;
-    const terminal = Game.rooms && Game.rooms[room] && Game.rooms[room].terminal;
-    const effect = terminal && (terminal.effects || []).find((entry) => entry.effect === PWR_OPERATE_TERMINAL && entry.ticksRemaining > 0);
-    const info = POWER_INFO[PWR_OPERATE_TERMINAL];
-    return effect && info && Array.isArray(info.effect) ? info.effect[effect.level - 1] : 1;
+    return terminalPowerCost.multiplier(typeof Game !== "undefined" && Game.rooms && Game.rooms[room] && Game.rooms[room].terminal);
 }
 
 // amount is the quantity wanted AT THE DESTINATION, including for energy.
@@ -41,7 +38,7 @@ function quote(from, to, resourceType, amount, options) {
         function freight(value, origin, destination, factor) {
             const raw = cost(value, origin, destination);
             if (!Number.isSafeInteger(raw) || raw < 0) throw new Error("invalid freight");
-            return Math.ceil(raw * factor);
+            return terminalPowerCost.debit(raw, factor);
         }
         const directFreight = freight(amount, source, target, sourceMultiplier);
         const hubFreight = freight(amount, hub, target, hubMultiplier);

@@ -1,0 +1,17 @@
+{
+  "engineRevision": "a90d26fc9eb943147799e65d0bf9d4d0d79a2722",
+  "commonRevision": "2fb779b26eef9b4b0f412584f6bd47c897949766",
+  "source": "src/processor/intents/labs/run-reaction.js",
+  "sha256": "e0f2b802ec878339e3d2c164e2360265008087d9672ccd1c1d3395fb84727d9d",
+  "power": 5,
+  "base": 5,
+  "extras": [
+    2,
+    4,
+    6,
+    8,
+    10
+  ],
+  "capacity": 3000,
+  "semantics": "Authored mechanical fixture: full input/output quantity, unchanged reaction cooldown, active while endTime > gameTime. Installed server version unverified."
+}

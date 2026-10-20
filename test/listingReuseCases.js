@@ -103,6 +103,12 @@ module.exports = function (project, assert) {
         let fetches = 0;
         const orders = [{ id: "x", type: ORDER_SELL, resourceType: "O", price: 12, amount: 100 }];
         global.Memory = { settings: {} };
+        assert(load("config").get("terminalOps.reuseOrderBook") === true,
+            "terminal book reuse: enabled by default without persisted settings");
+        Memory.settings.terminalOps = { reuseOrderBook: false };
+        assert(load("config").get("terminalOps.reuseOrderBook") === false,
+            "terminal book reuse: explicit opt-out overrides the default");
+        delete Memory.settings.terminalOps;
         global.Game = { time: 50000, cpu: { getUsed: () => 0 }, market: { getAllOrders: () => { fetches++; return orders; } } };
         const book = load("orderBook"); book.reset();
         const first = book.query(ORDER_SELL, "O"); book.query(ORDER_SELL, "O");

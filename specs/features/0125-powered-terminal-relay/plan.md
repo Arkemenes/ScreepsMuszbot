@@ -1,5 +1,10 @@
 # 0125 — Powered terminal relay — Plan
 
+**Estado da execução:** cotação, mensageria e executor local implementados. O
+executor permanece fechado até que o aliado confirme o protocolo `RLY`; o PDF
+disponível (`docs/Terminal_Messenger_Guide.pdf`) descreve apenas `MSG:`. Ainda
+faltam smoke de funding/outcomes/reset e um canário operacional.
+
 ## Approach
 
 Separar cotação (sem intents) da execução. Entregar primeiro o modelo matemático
@@ -21,12 +26,14 @@ o maior excedente ou a menor distância direta gera a rota mais barata.
 | Path | Responsibility / change |
 |------|-------------------------|
 | `src/utils/terminalRouting.js` | Cotação direta/relay, entrega líquida, arredondamento e limiares; já implementado. |
-| `src/utils/config.js` | Defaults de cotação; depois flags e limites do executor. |
-| `src/utils/terminalOps.js` | Registra `terminalRelayQuote`; depois staging, financiamento e reconciliação. |
-| `src/rooms/energyBalancing.js` | Fase B: orçamento por rota, urgência explícita, idempotência e stats. |
-| `src/utils/console.js` | Referência do comando e, na fase B, controles de acompanhamento. |
-| `src/utils/stats.js` | Fase B: métricas de custo, economia e carga em trânsito. |
-| `test/smoke.js` | Cotações agora; cenários do protocolo na fase B. |
+| `src/utils/terminalMessenger.js` | Descobre salas de aliados por `hostiles.allies()` + intel real de `Memory.rooms`; permite override manual; mantém fila/histórico limitados e protocolo `MSG:`. |
+| `src/utils/terminalFuel.js` | Reserva o custo da postagem pendente e do frete no orçamento da sala remetente de menor custo; mantém piso configurável de 10 energia e deixa a postagem usar esse saldo. O job existente de `stockPolicy` restaura o piso depois. |
+| `src/utils/config.js` | Defaults de cotação e flags/limites do executor, desligado por padrão. |
+| `src/utils/terminalOps.js` | Cotação, staging, funding, envio, reconciliação e stats do executor. |
+| `src/rooms/energyBalancing.js` | Orçamento por rota e urgência explícita. |
+| `src/utils/console.js` | Referência da cotação, status, stats e ativação controlada. |
+| `src/utils/stats.js` | Stats específicas do relay expostas por `terminalOps`. |
+| `test/smoke.js` | Cotações, mensagens e testes offline da configuração/executor. |
 
 ## Phase A — Quote
 
@@ -43,6 +50,19 @@ ativo usa `terminal.effects` e `POWER_INFO`; sem visão, estimativa conservadora
 Não chamar `send`, não criar operações, não guardar cotações em Memory.
 
 ## Phase B — Executor and safety
+
+O `terminalMessenger` mantém o envio explícito via `message()`. Resolve aliados
+automaticamente usando a lista já configurada em `Memory.settings.allies` (ou
+defaults de `hostiles.allies()`) e salas RCL 6+ observadas em `Memory.rooms`; entre
+várias salas elegíveis, escolhe a de menor frete. `setAllyRoom()` permite um
+override manual. `terminalOps` envia no máximo uma mensagem quando o terminal
+escolhido está livre, respeitando reservas. Enquanto houver postagem pendente,
+`terminalFuel` reserva 1 energia mais o frete no terminal remetente de menor
+custo; `stockPolicyJob()` já faz o hauler abastecê-lo a partir do storage. Cada
+terminal mantém um piso de 10 energia por padrão (`terminalFuel.minimumReserve`):
+uma postagem pode usar esse saldo e o hauler o recompõe depois; recibos e
+retiradas preventivas preservam o piso. O texto recebido é notificado, não
+executado, e a postagem não vira receipt.
 
 1. Preparar credenciais: `Memory.settings.terminalRelay.key` privada, nunca
    hardcoded; `transportEnabled` inicialmente false. `enabled` existente só
