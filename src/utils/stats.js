@@ -153,6 +153,7 @@ function exportStats() {
         const fresh = cpuMeter.snapshot();
         if (Memory.stats.cpu) {
             Memory.stats.cpu.bucket = Game.cpu.bucket;
+            Memory.stats.cpu.tick = Game.time; // ARK-116: the tick this bucket belongs to (stats.time moves every 60)
             Memory.stats.cpu.limit = Game.cpu.limit;
             Memory.stats.cpu.used = Game.cpu.getUsed();
             Memory.stats.cpu.accounting = cpuMeter.accounting();
@@ -286,6 +287,7 @@ function exportStats() {
 
     // Collect CPU stats
     Memory.stats.cpu.bucket = Game.cpu.bucket;
+    Memory.stats.cpu.tick = Game.time; // ARK-116: the tick this bucket belongs to (stats.time moves every 60)
     Memory.stats.cpu.limit = Game.cpu.limit;
     Memory.stats.cpu.used = Game.cpu.getUsed();
     Memory.stats.cpu.accounting = cpuMeter.accounting();

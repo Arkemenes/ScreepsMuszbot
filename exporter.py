@@ -297,7 +297,9 @@ def update_metrics():
     cpu_limit.set(cpu.get("limit", 0))
     cpu_bucket.set(cpu.get("bucket", 0))
 
-    game_time.set(stats.get("time", 0))
+    # cpu.tick is written with cpu.bucket every tick; stats.time only moves on a full publish
+    # (every 60 ticks), which skewed deriv(bucket)/deriv(game_time) in the CPU panels
+    game_time.set(cpu.get("tick", stats.get("time", 0)))
 
     # --- Memória / Heap ---
     memory = stats.get("memory", {})

@@ -10138,6 +10138,9 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
     const wired = Memory.stats && Memory.stats.cpu && Memory.stats.cpu.meter;
     assert(wired && wired.window === 3 && wired.modules.stats && wired.modules.creep && wired.modules.structure,
         "0113: the main loop feeds the modules and stats publishes the closed window in Memory.stats.cpu.meter (got " + JSON.stringify(wired && Object.keys(wired)) + ")");
+    Game.time++; mainWire.loop(); // a tick between full publishes
+    assert(Memory.stats.cpu.tick === Game.time && Memory.stats.cpu.bucket === Game.cpu.bucket,
+        "ARK-116: cpu.tick is published with cpu.bucket every tick, not only on full stats publishes (tick " + Memory.stats.cpu.tick + " vs " + Game.time + ")");
     assert(Object.keys(wired.roles).length > 0 && Object.keys(wired.roles).every((r) => roleNames[r] && !Game.creeps[r]),
         "0113: roles are keyed by role name, never by creep name (got " + Object.keys(wired.roles).join() + ")");
     assert(Object.keys(wired.structures).length > 0 && Object.keys(wired.structures).every((k) => typeof k === "string" && !(Game.structures && Game.structures[k])),
