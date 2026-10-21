@@ -55,15 +55,16 @@ function actionEvidence(roomName, body, ttl, constants) {
     return { actions, observedTicks: r.observedTicks, builderWork: util.workAlive };
 }
 
-// the worth() context for compound at price 0, or { fail: reason }
-function buildContext(room, compound) {
+// the worth() context for compound at price 0, or { fail: reason }; for a given creep (the
+// executor's candidate) its own body and remaining life, else the room's first builder and a
+// fresh life (the published break-even)
+function buildContext(room, compound, candidate) {
     const fail = (reason) => ({ fail: reason });
     const constants = boostConstants.current();
     if (!constants.workType) return fail("missing-constants");
-    const builders = census.creepsByRole(room.name, "builder");
-    const creep = builders.find((c) => c.body && c.body.length) || null;
+    const creep = candidate || census.creepsByRole(room.name, "builder").find((c) => c.body && c.body.length) || null;
     if (!creep) return fail("no-builder");
-    const ttl = Number(config.get("boost.breakevenTtl", 1500));
+    const ttl = candidate ? Number(candidate.ticksToLive) || 0 : Number(config.get("boost.breakevenTtl", 1500));
     const delayTicks = Number(config.get("boost.breakevenDelayTicks", 50));
     const evidence = actionEvidence(room.name, creep.body, ttl, constants);
     if (!evidence) return fail("no-action-evidence");

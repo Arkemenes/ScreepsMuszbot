@@ -303,6 +303,12 @@ function exportStats() {
             roomStats.terminalReport = require("./terminalReport").summary(roomName); // ROADMAP 0163
             roomStats.extractorEconomics = require("./extractorEconomics").summary(roomName); // ROADMAP 0164
             roomStats.boostBreakeven = require("./boostBreakeven").summary(room); // ROADMAP 0154 T4
+            // ROADMAP 0149: the executor's last plan and the last confirmed application
+            const boostPlan = require("./boostExecutor").status(roomName);
+            const applied = Memory.rooms[roomName] && Memory.rooms[roomName].boostApplied;
+            if (boostPlan || applied) roomStats.boost = { status: boostPlan ? String(boostPlan.result.status) : "",
+                reason: boostPlan && boostPlan.result.reason ? String(boostPlan.result.reason) : "",
+                lastParts: applied ? applied.parts : null, lastTick: applied ? applied.tick : null };
             // ROADMAP 0148: last on-demand builder decision (mode is exported as an info label)
             const onDemand = onDemandPopulation.status(roomName);
             if (onDemand) {

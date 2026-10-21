@@ -360,6 +360,8 @@ module.exports.loop = function () {
                 if (Memory.rooms && Memory.rooms[room.name] && Memory.rooms[room.name].labBoostReservations)
                     guard("boostLogistics:" + room.name, () => require("./utils/boostLogistics").tickRoom(room));
             });
+            // ROADMAP 0149: plan / confirm automatic builder boosts (application runs in roles/builder)
+            _.forEach(Game.myRooms, (room) => guard("boostExecutor:" + room.name, () => require("./utils/boostExecutor").tick(room)));
             guard("craftPlanner", () => utils.craftPlanner.tick());
             guard("energyBalancing", () => utils.energyBalancing.run());
             if (!shedding()) guard("swingTrade", () => utils.swingTrade.tick());

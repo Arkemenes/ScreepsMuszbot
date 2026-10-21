@@ -9,8 +9,13 @@
 
 const defaults = {
     boost: {
-        enabled: false,
-        room: null,
+        // ROADMAP 0149 executor (utils/boostExecutor): on by default in every room (user decision:
+        // new features on; viability first) - boostPolicy.worth decides each boost from observed
+        // duty and live prices, only own stock is used
+        enabled: true,
+        room: "all",
+        planInterval: 50,
+        minTtl: 1200,
         compound: "XLH2O",
         deadlineTicks: 100,
         drainTimeoutTicks: 300,

@@ -248,6 +248,9 @@ var builder = {
     /** @param {Creep} creep **/
     run: function (creep) {
         if (takeCover(creep)) return;
+        // ROADMAP 0149: a prepared boost lab takes this tick (walk there / boostCreep); until the
+        // lab is ready the builder keeps working - a boost never makes it wait
+        if (require("../utils/boostExecutor").claim(creep)) return;
         // ARK-116: nothing to build, repair or upgrade last time - look again later
         if (creep.memory.idleUntil) {
             if (Game.time < creep.memory.idleUntil && creep.memory.idleRoom === creep.room.name) return;

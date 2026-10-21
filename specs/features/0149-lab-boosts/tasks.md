@@ -2,7 +2,7 @@
 
 > **Decisão posterior — 16/10/2026:** implementação local autorizada passo a passo no [plano de execução incremental](../../../docs/plano-execucao-incremental-2026-10-16.md). Histórico persistente sofisticado adiado até necessidade demonstrada; cobertura inicial no heap, com lacunas explícitas. Gates operacionais continuam válidos.
 
-- **Status:** in-progress — 0149-A/B locais: previsão, retorno, preparação/transporte e cleanup; aplicação automática ainda pendente.
+- **Status:** done (código) — executor automático publicado em 2026-10-21 (planejar → aplicar → confirmar, fallback de compra); T7 (piloto live) na ARK-203.
 - **Issue:** ARK-136; consolidação ARK-141.
 - **Revisão documental:** 2026-10-16.
 - **Autorização:** implementação local incremental; publicação/ativação e gastos seguem os gates do plano de execução.
@@ -16,11 +16,11 @@
 ## Implementação incremental — itens completos ainda pendentes
 
 - [x] **T1 — Implementar cálculo puro de benefício/custo por ação, corpo e TTL.** AC1–3,7. Verificação futura: `0149 realizable benefit`.
-- [ ] **T2 — Adicionar adaptador canônico e bundle de claims/entregas/energia por owner.** AC4,8. Verificação futura: `0149 canonical reservations; 0149 missing delivery`.
-- [ ] **T3 — Integrar todos os leitores: refining, runtime, modelo, executor, transientStock, hauler e claims.** AC4,8. Verificação futura: `0149 all reservation readers`.
-- [ ] **T4 — Integrar spawn sem espera, seleção real por bodyPartsCount, parcial e confirmação do corpo inteiro.** AC3,5. Verificação futura: `0149 spawn never waits; 0149 partial confirmation; 0149 engine part selection`.
-- [ ] **T5 — Encerrar reset/morte/prazo/off/pin e drenar antes de retornar ao pool.** AC5,8. Verificação futura: `0149 reservation lifecycle; 0149 forced cleanup off idle drain; 0149 manual takeover and quarantine`.
-- [ ] **T6 — Testar fallback e helper futuro de compra por asks existentes sem listing.** AC6,9. Verificação futura: `0149 fallback; 0149 executable acquisition`.
+- [x] **T2 — Adicionar adaptador canônico e bundle de claims/entregas/energia por owner.** AC4,8. Entregue em 0149-A/B (registro canônico `labBoostReservations` com funding/shipments por owner); 2026-10-21 a admissão passa por `readinessContext.validateAndSpend` antes do `reserve`. Smoke `0149 canonical bundle` / `0149 canonical reservations`.
+- [x] **T3 — Integrar todos os leitores: refining, runtime, modelo, executor, transientStock, hauler e claims.** AC4,8. Entregue em 0149-A (adaptador `labReservations` lido por refining, runtime, executor, transientStock, hauler e claims).
+- [x] **T4 — Integrar spawn sem espera, seleção real por bodyPartsCount, parcial e confirmação do corpo inteiro.** AC3,5. Feito 2026-10-21: `utils/boostExecutor` — candidato = builder sem boost com TTL ≥ `boost.minTtl` (1200), lab livre, contexto real do `boostBreakeven`, estoque próprio valorado pelo bid; `claim()` no `roles/builder` só toma o tick com o lab preparado (andar / `boostCreep` com recibo capturado), senão o builder trabalha; confirmação no tick seguinte por `boostConfirmation.reconcile`. Smoke `0149 spawn never waits`, `0149 engine part selection`, `0149 partial confirmation`.
+- [x] **T5 — Encerrar reset/morte/prazo/off/pin e drenar antes de retornar ao pool.** AC5,8. Ciclo de vida de 0149-B (reset/morte/prazo/off/manual/quarentena) + 2026-10-21: aplicado → `cancel(…, "applied")` drena a sobra; dono/lab sumido durante a aplicação → incerto e drena; um boost por vez por sala. Smoke `0149 reservation lifecycle`, `0149 forced cleanup off idle drain`.
+- [x] **T6 — Testar fallback e helper futuro de compra por asks existentes sem listing.** AC6,9. Feito 2026-10-21: sem estoque, `worth` ao ask + frete estimado (`boost.buyFreightPerUnit` 0,6 e/un × energia fairPrice); só se pagar, `terminalOps.buy` da quantidade que falta, teto ask × `boost.buyLimitRatio` (1,02), sem listagem; `boost.buy` false desliga; `boost.enabled` false = builder normal. Smoke `0149 executable acquisition` (3), `0149 fallback`.
 - [ ] **T7 — Medir piloto autorizado com composto próprio e atribuição de benefício.** AC7. Verificação futura: `LIVE-0149: custo total, trabalho útil e oportunidade do lab`.
 
 ## Definition of done futura

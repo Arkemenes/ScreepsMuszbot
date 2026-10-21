@@ -11,7 +11,13 @@ const sessionId = "boost:" + Date.now() + ":" + Math.random();
 const active = (r) => r && (r.state === "reserved" || r.state === "loading");
 const records = (room) => reservations.all(room.name);
 const value = (s, resource) => s && s.store && s.store[resource] || 0;
-function enabled(room) { return config.get("boost.enabled", false) === true && config.get("boost.room", null) === room.name; }
+// boost.room: one room name, or "all" (ROADMAP 0149 executor default: every room, the worth
+// decision gates each boost)
+function enabled(room) {
+    if (config.get("boost.enabled", false) !== true) return false;
+    const target = config.get("boost.room", null);
+    return target === "all" || target === room.name;
+}
 function manual(room, labId) {
     const mem = Memory.rooms[room.name] || {};
     return !!(mem.labLoad && !mem.labLoadAuto && mem.labLoad[labId] || mem.labPolicyHold && mem.labPolicyHold[labId]);
@@ -223,4 +229,4 @@ function status(room) {
             automaticApplication: false };
     });
 }
-module.exports = { reserve, feedJob, withdrawalLimit, withdrawn, deliveryLimit, delivered, cancel, tickRoom, energyWithdrawn, status };
+module.exports = { reserve, feedJob, withdrawalLimit, withdrawn, deliveryLimit, delivered, cancel, tickRoom, energyWithdrawn, status, enabled, freeLab };
