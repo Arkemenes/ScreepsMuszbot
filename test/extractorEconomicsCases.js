@@ -52,8 +52,9 @@ module.exports = function (project, assert) {
         assert(econ.admitted(room) === false && Memory.rooms.MinRoom.extractorEconomics.stale === true,
             "0164 price unknown: the previous verdict stands (marked stale)");
         delete Memory.rooms.MinRoom.extractorEconomics; Game.time = 22101;
-        assert(econ.admitted(room) === true && Memory.rooms.MinRoom.extractorEconomics.reason === "price-unknown",
-            "0164 price unknown: with no previous verdict the room is admitted (legacy) as price-unknown");
+        assert(econ.admitted(room) === true && Memory.rooms.MinRoom.extractorEconomics.reason === "price-unknown" &&
+            Memory.rooms.MinRoom.extractorEconomics.nextCheckTick === 22201,
+            "0164 price unknown: with no previous verdict the room is admitted (legacy) as price-unknown, retried after unknownRecheckTicks");
         snap = { resources: { energy: { fairPrice: 33 }, Z: { fairPrice: 13, sellPrice: 12 } } }; Game.time = 23200;
         econ.admitted(room);
 

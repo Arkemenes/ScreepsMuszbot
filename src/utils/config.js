@@ -959,6 +959,8 @@ const defaults = {
         enabled: true,
         // verdict cache per room (also re-evaluated when the mineral type changes)
         checkTicks: 1000,
+        // an unpriced verdict (market history still warming after a reset) is retried sooner
+        unknownRecheckTicks: 100,
         // admitted when profit (credits) is above this
         minProfit: 0,
     },

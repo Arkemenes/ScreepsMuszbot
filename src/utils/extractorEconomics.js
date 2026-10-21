@@ -89,9 +89,12 @@ function admitted(room) {
     const next = Game.time + Number(config.get("extractorEconomics.checkTicks", 1000));
     let verdict;
     if (!e.priced) {
+        // market history lives in the heap: right after a reset prices come back within minutes,
+        // so an unpriced verdict is looked at again soon instead of a full checkTicks later
+        const soon = Game.time + Number(config.get("extractorEconomics.unknownRecheckTicks", 100));
         verdict = prev && prev.mineral === mineral.mineralType && prev.reason !== "price-unknown"
-            ? Object.assign({}, prev, { tick: Game.time, nextCheckTick: next, stale: true })
-            : { admitted: true, reason: "price-unknown", mineral: e.mineral, tick: Game.time, nextCheckTick: next };
+            ? Object.assign({}, prev, { tick: Game.time, nextCheckTick: soon, stale: true })
+            : { admitted: true, reason: "price-unknown", mineral: e.mineral, tick: Game.time, nextCheckTick: soon };
     } else {
         const ok = e.profit > Number(config.get("extractorEconomics.minProfit", 0));
         verdict = { admitted: ok, reason: ok ? "profitable" : "unprofitable", mineral: e.mineral, tick: Game.time, nextCheckTick: next,
