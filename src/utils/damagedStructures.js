@@ -47,16 +47,33 @@ function freshTick() {
     }
 }
 
+// ARK-116: ramparts and walls are almost never at hitsMax, so the list is long and sorting it
+// (tier() per entry) every tick per room was the bulk of builder.opportunistic. The order is
+// computed on the scan ticks of ids() and reused in between - a repaired structure still drops
+// out at once, the order within a tier is at most repair.scanTicks old (the same latency a
+// newly damaged structure already has). Under attack ids() rescans every tick, so it re-sorts.
+const sortedOrder = {};
 function sorted(room) {
     freshTick();
     if (!sortedLists[room.name]) {
-        const live = [];
         const list = ids(room);
-        for (let i = 0; i < list.length; i++) {
-            const s = Game.getObjectById(list[i]);
-            if (s && s.hits < s.hitsMax) live.push(s);
+        const scanTick = scans[room.name].tick;
+        const cached = sortedOrder[room.name];
+        const live = [];
+        if (cached && cached.scanTick === scanTick && cached.ids === list) {
+            for (let i = 0; i < cached.order.length; i++) {
+                const s = Game.getObjectById(cached.order[i]);
+                if (s && s.hits < s.hitsMax) live.push(s);
+            }
+            sortedLists[room.name] = live;
+        } else {
+            for (let i = 0; i < list.length; i++) {
+                const s = Game.getObjectById(list[i]);
+                if (s && s.hits < s.hitsMax) live.push(s);
+            }
+            sortedLists[room.name] = _.sortBy(live, rampartRepair.priorityKey);
+            sortedOrder[room.name] = { scanTick, ids: list, order: sortedLists[room.name].map((s) => s.id) };
         }
-        sortedLists[room.name] = _.sortBy(live, rampartRepair.priorityKey);
     }
     return sortedLists[room.name];
 }
@@ -75,6 +92,7 @@ function critical(room) {
 // Tests build a fresh room per case under the same name.
 function reset() {
     Object.keys(scans).forEach((name) => { delete scans[name]; });
+    Object.keys(sortedOrder).forEach((name) => { delete sortedOrder[name]; });
     listTick = -1;
     sortedLists = {};
     criticalLists = {};

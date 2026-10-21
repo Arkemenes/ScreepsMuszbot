@@ -9834,6 +9834,15 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
         sCrit.hits = sCrit.hitsMax; // repaired meanwhile: drops out at once
         Game.time = 5003; // (the sorted list is memoised per tick)
         assert(dmg.sorted(dmgRoom).map((x) => x.id).join() === "dmg-ok", "damagedStructures: a structure repaired in between leaves the list at once");
+        // ARK-116: between scans the order is reused - no priority/tier recomputation per tick
+        const rr = require(path.join(PROJECT, "src/utils/rampartRepair"));
+        const savedKey = rr.priorityKey;
+        let keyCalls = 0;
+        rr.priorityKey = function () { keyCalls++; return savedKey.apply(this, arguments); };
+        Game.time = 5004;
+        const reused = dmg.sorted(dmgRoom).map((x) => x.id).join();
+        rr.priorityKey = savedKey;
+        assert(reused === "dmg-ok" && keyCalls === 0, "ARK-116: damagedStructures reuses the scan-tick order instead of re-sorting every tick (keys " + keyCalls + ")");
         Game.time = 5005;
         assert(dmg.sorted(dmgRoom).map((x) => x.id).join() === "dmg-late,dmg-ok" && structFinds === 2,
             "damagedStructures: the 5-tick refresh picks the new damage up (scans: " + structFinds + ")");
