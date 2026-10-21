@@ -76,6 +76,18 @@ module.exports = function (project, assert) {
             b.rcl.etaTicks === Math.ceil((10000 - 750) / 50) && storedReads === 4,
             "0154 report blocks: sampleTicks folds ticks into blocks with the same totals and one stored read per block (got " +
             JSON.stringify({ o: b.observedTicks, d: b.storedDelta, i: b.incomeProxyPerTick, reads: storedReads }) + ")");
+        // 0154 T3: each acting creep's WORK lands in its own role, and the per-tick sum is the acting WORK
+        const acting = Object.values(b.utilization).reduce((s, u) => s + u.workActing, 0);
+        assert(acting === 5 && b.utilization.builder.workActing === 2 && b.utilization.upgrader.workActing === 3,
+            "0154 event attribution: acted WORK is attributed to the acting creep's role, once per tick (got " + acting + ")");
+        // bounded hooks: the ring never holds more than windowTicks of samples, however long it runs
+        energyReport.reset();
+        Memory.settings.energyReport.windowTicks = 30;
+        Memory.settings.energyReport.sampleTicks = 1;
+        for (let i = 0; i < 100; i++) { Game.time = 3000 + i; energyReport.observe(); }
+        assert(energyReport.report("ReportRoom", 1000).observedTicks === 30,
+            "0154 bounded hooks: the heap ring is capped at energyReport.windowTicks (got " + energyReport.report("ReportRoom", 1000).observedTicks + ")");
+        delete Memory.settings.energyReport.windowTicks;
         Game.time = 500;
         energyReport.observe();
         assert(energyReport.report("ReportRoom", 10).observedTicks === 1,

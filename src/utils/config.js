@@ -18,6 +18,11 @@ const defaults = {
         energyReserve: 100000,
         minReturnRatio: 0.20,
         continueReturnRatio: 0.10,
+        // ROADMAP 0154 T4 (utils/boostBreakeven): builder compounds whose break-even price is
+        // published per room, and the life / lab-trip delay the projection assumes
+        breakevenCompounds: ["XLH2O", "LH2O", "LH"],
+        breakevenTtl: 1500,
+        breakevenDelayTicks: 50,
     },
     market: {
         // base 60 (Grafana's sampling): the same grid as marketFlip.scanInterval, so both read
