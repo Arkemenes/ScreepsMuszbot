@@ -16385,6 +16385,7 @@ assert(require(path.join(PROJECT, "src/utils/config")).defaults.listingPolicy.en
 require("./listingPolicyCases")(PROJECT, assert);
 require("./energyReportCases")(PROJECT, assert);
 require("./readinessContextCases")(PROJECT, assert);
+require("./labReportCases")(PROJECT, assert);
 require("./listingReuseCases")(PROJECT, assert);
 require("./craftPurchaseCases")(PROJECT, assert);
 require("./craftRecoveryCases")(PROJECT, assert);

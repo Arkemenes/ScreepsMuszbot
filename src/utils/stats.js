@@ -12,6 +12,7 @@ const energyBalancing = require("../rooms/energyBalancing");
 const cpuTier = require("./cpuTier");
 const combat = require("./combat");
 const energyReport = require("./energyReport");
+const labReport = require("./labReport");
 
 // ROADMAP 0162: the bucket band of this tick (bandLevel 0 critical .. 3 full, for Grafana)
 // and how many guard() calls each tier gate skipped this tick
@@ -293,6 +294,7 @@ function exportStats() {
             roomStats.defenderIdle = combat.idleDefenders(roomName);
             // ROADMAP 0154-B: energyReport over its full window (heap samples, rounded here)
             roomStats.energyReport = energyReport.summary(roomName);
+            roomStats.labReport = labReport.summary(roomName); // ROADMAP 0155
         }
     }
 

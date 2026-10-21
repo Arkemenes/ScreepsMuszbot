@@ -15,10 +15,10 @@
 
 ## Implementação futura — não executada
 
-- [ ] **T1 — Definir registro/precedência/denominadores e hook final com labs não alocados.** AC1,5. Verificação futura: `0155 final observation`.
+- [x] **T1 — Definir registro/precedência/denominadores e hook final com labs não alocados.** AC1,5. Feito 2026-10-20 (publicado): `utils/labReport.observe()` sob guard após as estruturas; uma classificação por lab de saída/tick (reacting, cooldown, unavailable, reservation, switch, capacity, input, idle), labs de entrada e não alocados contados à parte. Smoke `0155 final observation` (2). Verificação futura: `0155 final observation`.
 - [ ] **T2 — Vincular execute/confirm à origem, quantidades reais e produto final entregue.** AC2,4. Verificação futura: `0155 origin and final quantity`.
 - [ ] **T3 — Integrar coverage/regime da 0157 e recusar evidência insuficiente.** AC3,6–7. Verificação futura: `0155 representative coverage; 0157 output quality histories`.
-- [ ] **T4 — Implementar relatório/top3/auto-report sem alterar decisão e medir scans.** AC5. Verificação futura: `0155 report observation only`.
+- [ ] **T4 — Implementar relatório/top3/auto-report sem alterar decisão e medir scans.** AC5. Parcial 2026-10-20: console `labReport(sala)`/`labReset(sala)`, `Memory.stats.rooms[sala].labReport` (busy, top 3 esperas, un/t, reactionLimited ≥ 0,85). Contadores cumulativos em `Memory.labReport[sala]`, sobrevivem a reset. Overhead live pendente. Verificação futura: `0155 report observation only`.
 - [ ] **T5 — Após autorização coletar 48h reais da cadeia/abastecimento/venda e overhead.** AC5–7. Verificação futura: `LIVE-0155: regime identificado, cobertura e gargalo marginal`.
 
 ## Definition of done futura

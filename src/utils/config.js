@@ -445,6 +445,12 @@ const defaults = {
         autoTicks: 1500,
         minCoverage: 0.9,
     },
+    labReport: {
+        // ROADMAP 0155 (ARK-134): cumulative lab-utilization counters in Memory.labReport;
+        // busy share at or above reactionLimited reads "reaction-limited" (descriptive)
+        enabled: true,
+        reactionLimited: 0.85,
+    },
     readiness: {
         // ROADMAP 0157-A (ARK-140): safety margin on demand, and the energyReport coverage
         // a room needs before utils/readinessContext lets a plan through
@@ -890,7 +896,7 @@ const defaults = {
         tiers: {
             planStore: 0, memoryCleanup: 0, bootstrapStorage: 0, intel: 0, spawn: 0, defense: 0,
             creep: 0, traffic: 0, rampart: 0, structure: 0, energyLedger: 0, intentMeter: 0, stats: 0,
-            plan: 1, terminalOps: 1, energyBalancing: 1, energyReport: 1, boostLogistics: 1, craftLedger: 1, market: 1,
+            plan: 1, terminalOps: 1, energyBalancing: 1, energyReport: 1, labReport: 1, boostLogistics: 1, craftLedger: 1, market: 1,
             intelRemote: 1,
             craftPlanner: 2, marketFlip: 2, swingTrade: 2, cpuReport: 2, planPreview: 2,
             pixel: 3, raiding: 3, layoutPreview: 3, labRefine: 3,
