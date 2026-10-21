@@ -14,6 +14,15 @@
 // such. Utilization = WORK-ticks with a resolved build/repair/upgrade or accepted harvest
 // intent / WORK-ticks alive, per role - one idle builder and several half-idle ones read differently.
 // context(room) is the small read-only view later policies (0157/0148/0149) consume.
+//
+// ROADMAP 0157 T3: per-action utilization over the worker roles (energyReport.workerRoles):
+// U_a = (energy spent on action a / e_a) / WORK-ticks of those roles, with e_build = BUILD_POWER (5)
+// and e_repair = e_upgrade = 1 energy per WORK per tick; occupancy = WORK-ticks that did anything /
+// WORK-ticks (a union per worker: build + upgrade can both be 1 while occupancy is 1). Energy is the
+// ledger's estimate (kind "estimated"); a zero denominator reads null.
+// ROADMAP 0157 T1: subwindowRates(room) - net stored-energy rate of each of the
+// readiness.incomeWindowTicks / readiness.subwindowTicks (600 / 100) subwindows, with coverage, so
+// the readiness supply is the slowest complete subwindow, never the window mean.
 const config = require("./config");
 const census = require("./census");
 const roomCache = require("./roomCache");
@@ -55,6 +64,16 @@ function storedEnergy(room) {
     return energy;
 }
 
+let workerTick = -1, workerSet = null;
+function workerRoles() {
+    if (workerTick !== Game.time) {
+        workerTick = Game.time;
+        const roles = config.get("energyReport.workerRoles", ["builder", "upgrader"]);
+        workerSet = new Set(Array.isArray(roles) ? roles : []);
+    }
+    return workerSet;
+}
+
 function observe() {
     if (config.get("energyReport.enabled", true) === false) return;
     if (lastTick === Game.time) return;
@@ -67,6 +86,8 @@ function observe() {
     for (const room of Game.myRooms || []) {
         const name = room.name;
         const roles = {};
+        let workers = 0, workersActing = 0;
+        const workerSet = workerRoles();
         mark = Game.cpu.getUsed();
         const byRole = census.rolesInRoom(name);
         for (const role in byRole) {
@@ -81,13 +102,14 @@ function observe() {
                 if (acted.has(creep.id)) acting += work;
             }
             if (alive) roles[role] = [alive, acting];
+            if (workerSet.has(role)) { workers += alive; workersActing += acting; }
         }
         const between = Game.cpu.getUsed();
         creepsCpu += between - mark;
         const ring = rings[name] || (rings[name] = []);
         let sample = ring[ring.length - 1];
         if (!sample || Game.time - sample.t >= block) {
-            sample = { t: Game.time, n: 0, spend: {}, roles: {}, stored: storedEnergy(room),
+            sample = { t: Game.time, n: 0, spend: {}, roles: {}, workers: 0, workersActing: 0, stored: storedEnergy(room),
                 level: room.controller && room.controller.level,
                 progress: room.controller && room.controller.progress,
                 progressTotal: room.controller && room.controller.progressTotal };
@@ -95,6 +117,8 @@ function observe() {
             while (ring[0].t <= Game.time - keep) ring.shift();
         }
         sample.n++;
+        sample.workers += workers;
+        sample.workersActing += workersActing;
         const spend = energyLedger.tickCategories(name);
         for (const category in spend) sample.spend[category] = (sample.spend[category] || 0) + spend[category];
         for (const role in roles) {
@@ -123,11 +147,13 @@ function report(roomName, n) {
         coverage: observed / want, fromTick: samples.length ? samples[0].t : null,
         toTick: samples.length ? samples[samples.length - 1].t : null,
         spend: {}, spendPerTick: 0, utilization: {}, storedDelta: null, incomeProxyPerTick: null,
-        rcl: null, kind: "estimated" };
+        rcl: null, kind: "estimated", actions: null };
     if (!samples.length) return out;
-    let spend = 0;
+    let spend = 0, workers = 0, workersActing = 0;
     const work = {};
     for (const s of samples) {
+        workers += s.workers || 0;
+        workersActing += s.workersActing || 0;
         for (const [category, amount] of Object.entries(s.spend || {})) {
             out.spend[category] = (out.spend[category] || 0) + amount;
             spend += amount;
@@ -142,6 +168,11 @@ function report(roomName, n) {
     for (const [role, [alive, acting]] of Object.entries(work)) {
         out.utilization[role] = { workAlive: alive / ticks, workActing: acting / ticks, ratio: alive ? acting / alive : 0 };
     }
+    const buildPower = typeof BUILD_POWER === "number" ? BUILD_POWER : 5;
+    const repairEnergy = (out.spend.repairNormal || 0) + (out.spend.repairRampart || 0) + (out.spend.repairWall || 0);
+    const per = (energy, e) => (workers > 0 ? (energy || 0) / e / workers : null);
+    out.actions = { workerWorkTicks: workers, build: per(out.spend.build, buildPower), repair: per(repairEnergy, 1),
+        upgrade: per(out.spend.upgrade, 1), occupancy: workers > 0 ? workersActing / workers : null };
     const first = samples[0], last = samples[samples.length - 1];
     if (last.t > first.t) {
         out.storedDelta = last.stored - first.stored;
@@ -172,6 +203,24 @@ function line(r) {
         (r.rcl && r.rcl.etaTicks ? "; RCL" + (r.rcl.level + 1) + " em ~" + r.rcl.etaTicks + "t" : "");
 }
 
+// 0157 T1: net stored-energy rate per subwindow of the last incomeWindowTicks, oldest first:
+// [{ fromTick, toTick, observedTicks, coverage, rate }] - rate is null without two blocks in it.
+function subwindowRates(roomName, windowT, subT) {
+    const win = Math.max(1, Math.floor(Number(windowT || config.get("readiness.incomeWindowTicks", 600))));
+    const sub = Math.max(1, Math.floor(Number(subT || config.get("readiness.subwindowTicks", 100))));
+    const ring = rings[roomName] || [];
+    const out = [];
+    for (let start = Game.time - win; start < Game.time; start += sub) {
+        const end = Math.min(Game.time, start + sub);
+        const samples = ring.filter((s) => s.t > start && s.t <= end);
+        const observed = samples.reduce((sum, s) => sum + s.n, 0);
+        const first = samples[0], last = samples[samples.length - 1];
+        out.push({ fromTick: start + 1, toTick: end, observedTicks: observed, coverage: observed / (end - start),
+            rate: samples.length > 1 && last.t > first.t ? (last.stored - first.stored) / (last.t - first.t) : null });
+    }
+    return out;
+}
+
 // Read-only view for policies: null until the window holds enough coverage to judge.
 function context(roomName, n) {
     const r = report(roomName, n);
@@ -192,9 +241,11 @@ function summary(roomName, n) {
     for (const [role, u] of Object.entries(r.utilization)) utilization[role] = { ratio: round(u.ratio), work: round(u.workAlive, 1) };
     return { ticks: r.observedTicks, coverage: round(r.coverage), spendPerTick: round(r.spendPerTick),
         incomeProxyPerTick: round(r.incomeProxyPerTick), storedDelta: r.storedDelta, utilization,
-        rclEtaTicks: r.rcl ? r.rcl.etaTicks : null };
+        rclEtaTicks: r.rcl ? r.rcl.etaTicks : null,
+        actions: r.actions ? { build: round(r.actions.build, 3), repair: round(r.actions.repair, 3), upgrade: round(r.actions.upgrade, 3),
+            occupancy: round(r.actions.occupancy, 3), workerWork: round(r.actions.workerWorkTicks / Math.max(1, r.observedTicks), 1) } : null };
 }
 
 function reset() { for (const name of Object.keys(rings)) delete rings[name]; lastTick = -1; lastAuto = -1; workCache.clear(); }
 
-module.exports = { observe, report, summary, context, reset };
+module.exports = { observe, report, summary, context, subwindowRates, reset };

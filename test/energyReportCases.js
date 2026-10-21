@@ -43,6 +43,15 @@ module.exports = function (project, assert) {
             "0154 report: income proxy = (stored delta + spend inside the interval) / ticks (got " + r.incomeProxyPerTick + ")");
         assert(r.rcl && r.rcl.etaTicks === Math.ceil((10000 - 450) / 50),
             "0154 report: RCL ETA from the controller progress rate (got " + JSON.stringify(r.rcl) + ")");
+        // 0157 T3: worker WORK-ticks = (2 + 2 + 3) x 10 = 70, acting (b1 + u1) = 50
+        assert(r.actions.workerWorkTicks === 70 && Math.abs(r.actions.build - 20 / 5 / 70) < 1e-9 &&
+            Math.abs(r.actions.upgrade - 30 / 70) < 1e-9 && r.actions.repair === 0 && Math.abs(r.actions.occupancy - 50 / 70) < 1e-9,
+            "0157 action utilization: U_a = energy / e_a over the worker WORK-ticks (e_build 5, e_upgrade 1), occupancy is the union per worker (got " +
+            JSON.stringify(r.actions) + ")");
+        const subs = energyReport.subwindowRates("ReportRoom", 10, 5);
+        assert(subs.length === 2 && subs.every((s) => s.coverage === 1 && s.rate === 10),
+            "0157 affine continuous supply: subwindowRates gives each subwindow's net stored rate and coverage (got " + JSON.stringify(subs) + ")");
+        assert(energyReport.report("NoRoom", 10).actions === null, "0157 action utilization: no samples, no utilization (null, never 0)");
         assert(bodyReads === 3, "0154 report: WORK parts are counted once per creep id, not once per tick (got " + bodyReads + " body reads)");
         const sum = energyReport.summary("ReportRoom", 10);
         assert(sum.ticks === 10 && sum.coverage === 1 && sum.utilization.builder.ratio === 0.5 && sum.incomeProxyPerTick === 15,

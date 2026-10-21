@@ -2,7 +2,7 @@
 
 > **Decisão posterior — 16/10/2026:** implementação local autorizada passo a passo no [plano de execução incremental](../../../docs/plano-execucao-incremental-2026-10-16.md). Histórico persistente sofisticado adiado até necessidade demonstrada; cobertura inicial no heap, com lacunas explícitas. Gates operacionais continuam válidos.
 
-- **Status:** in-progress — núcleo puro de envelope/prefixos local; coleta/admissão compartilhada e demais métricas pendentes.
+- **Status:** done (core) — contexto vivo, oferta pelo menor ritmo das subjanelas, compromissos por owner, validateAndSpend e utilização por ação publicados em 2026-10-20/21; T4 e bundles multi-recurso em ARK-206.
 - **Issue:** ARK-140. Consolidação: ARK-141.
 - **Created:** 2026-10-16.
 - **Autorização:** implementação local incremental; publicação/ativação e gastos seguem os gates do plano de execução.

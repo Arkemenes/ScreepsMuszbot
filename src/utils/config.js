@@ -458,6 +458,11 @@ const defaults = {
         // a room needs before utils/readinessContext lets a plan through
         margin: 0.20,
         minCoverage: 0.9,
+        // 0157 T1: future supply = the slowest net rate among the incomeWindowTicks /
+        // subwindowTicks subwindows, each needing minCoverageFraction of its ticks observed
+        incomeWindowTicks: 600,
+        subwindowTicks: 100,
+        minCoverageFraction: 0.95,
     },
     listingPolicy: {
         // ROADMAP 0153 (ARK-138): on by default since 2026-10-20 (user decision);
