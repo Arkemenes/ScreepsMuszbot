@@ -4661,13 +4661,15 @@
                     "hidden": false,
                     "query": {
                       "datasource": {
-                        "name": "__expr__"
+                        "name": "${DS_PROMETHEUS}"
                       },
-                      "group": "__expr__",
+                      "group": "prometheus",
                       "kind": "DataQuery",
                       "spec": {
-                        "expression": "$A - $D",
-                        "type": "math"
+                        "editorMode": "code",
+                        "expr": "(screeps_cpu_limit - deriv(screeps_cpu_bucket[30m]) / deriv(screeps_game_time[30m])\nand on() max_over_time(screeps_cpu_bucket[30m]) < 9950)\n- ignoring(path, room, mineral, compound, category, direction, span) avg_over_time(screeps_stat_value{path=\"cpu.meter.used\"}[30m])",
+                        "legendFormat": "Fora do script (serialização da Memory, motor)",
+                        "range": true
                       },
                       "version": "v0"
                     },
@@ -4679,7 +4681,7 @@
               "transformations": []
             }
           },
-          "description": "CPU real = limite − ganho do bucket por tick, pela tendência dos últimos 30 min (deriv(bucket) / deriv(tick)). Não depende do heap do script, então um deploy (global reset) vira um degrau pequeno em vez de reiniciar a média. Inclui tudo o que o bucket paga: script, serialização da Memory e motor. Sem valor enquanto o bucket encostou em 10000 nos últimos 30 min (cheio, o bucket não registra o consumo). Um generatePixel derruba o bucket em 10000 e distorce a janela que o contém.\n\nScript: média de Game.cpu.getUsed() no fim do loop, janela de 60 ticks (cpu.meter.used). Operações base: cada ação que o jogo aceita (harvest, move, transfer, repair, runReaction, spawn...) custa 0,2 CPU fixo; contadas por utils/intentMeter (cpu.meter.intentCpu, detalhe por ação em cpu.meter.intents). Só caem com menos creeps/estruturas ou menos ações por creep. Lógica do script = script − base: o que otimizar código reduz. Fora do script = CPU real − script: serialização da Memory e custo do motor após o loop.",
+          "description": "CPU real = limite − ganho do bucket por tick, pela tendência dos últimos 30 min (deriv(bucket) / deriv(tick)). Não depende do heap do script, então um deploy (global reset) vira um degrau pequeno em vez de reiniciar a média. Inclui tudo o que o bucket paga: script, serialização da Memory e motor. Sem valor enquanto o bucket encostou em 10000 nos últimos 30 min (cheio, o bucket não registra o consumo). Um generatePixel derruba o bucket em 10000 e distorce a janela que o contém.\n\nScript: média de Game.cpu.getUsed() no fim do loop, janela de 60 ticks (cpu.meter.used). Operações base: cada ação que o jogo aceita (harvest, move, transfer, repair, runReaction, spawn...) custa 0,2 CPU fixo; contadas por utils/intentMeter (cpu.meter.intentCpu, detalhe por ação em cpu.meter.intents). Só caem com menos creeps/estruturas ou menos ações por creep. Lógica do script = script − base: o que otimizar código reduz. Fora do script = CPU real − média do script nos mesmos 30 min: o que o bucket paga depois do loop, sobretudo o JSON.stringify da Memory feito pelo motor (RawMemory._parsed). Intents NÃO entram aqui: são cobradas na chamada, dentro do script. Deploys dentro da janela também inflam este valor.",
           "id": 7,
           "links": [],
           "title": "CPU pelo bucket e script vs limite",
@@ -4792,14 +4794,10 @@
                   {
                     "matcher": {
                       "id": "byName",
-                      "options": "G",
+                      "options": "Fora do script (serialização da Memory, motor)",
                       "scope": "series"
                     },
                     "properties": [
-                      {
-                        "id": "displayName",
-                        "value": "Fora do script (serialização, motor)"
-                      },
                       {
                         "id": "custom.lineStyle",
                         "value": {
