@@ -68,11 +68,24 @@ function nextPower(pc) {
     return null;
 }
 
+// home room and gate are re-read every power.operator.checkTicks (100): both come from labReport
+// summaries of every room, too dear for every tick while nothing changes
+let planCache = null; // { tick, home, open }
+function plan() {
+    const every = Number(config.get("power.operator.checkTicks", 100));
+    if (!planCache || Game.time - planCache.tick >= every || Game.time < planCache.tick) {
+        const home = homeRoom();
+        planCache = { tick: Game.time, home: home ? home.name : null, open: !!home && gateOpen(home.name) };
+    }
+    return planCache;
+}
+
 function manage() {
     if (config.get("power.operator.autoCreate", true) === false) return runAll();
-    const home = homeRoom();
     const managed = Object.keys(mem()).filter((n) => mem()[n].managed && Game.powerCreeps && Game.powerCreeps[n]);
-    if (home && freeLevels() >= 1 && gateOpen(home.name)) {
+    const p = freeLevels() >= 1 ? plan() : null;
+    const home = p && p.home ? Game.rooms[p.home] : null;
+    if (home && p.open) {
         if (!managed.length && typeof PowerCreep !== "undefined" && PowerCreep.create) {
             const name = "operator-" + Game.time.toString(36);
             const status = PowerCreep.create(name, typeof POWER_CLASS !== "undefined" ? POWER_CLASS.OPERATOR : "operator");
@@ -191,4 +204,6 @@ function status() {
 
 global.powerOperator = () => JSON.stringify({ freeLevels: freeLevels(), home: (homeRoom() || {}).name || null, operators: status() });
 
-module.exports = { manage, run, nextPower, freeLevels, homeRoom, status };
+function resetPlan() { planCache = null; }
+
+module.exports = { manage, run, nextPower, freeLevels, homeRoom, status, resetPlan };

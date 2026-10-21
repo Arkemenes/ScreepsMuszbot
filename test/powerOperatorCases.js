@@ -35,6 +35,9 @@ module.exports = function (project, assert) {
         assert(!created.length, "0150 operator safe lifecycle: without 48h of bounded lab evidence no operator is created");
         gate = "bounded";
         op.manage();
+        assert(!created.length, "0150 operator safe lifecycle: the gate is cached for power.operator.checkTicks (no re-read every tick)");
+        op.resetPlan();
+        op.manage();
         const name = created.length && created[0][0];
         assert(created.length === 1 && created[0][1] === "operator" && Memory.powerCreeps[name].managed && Memory.powerCreeps[name].home === "PR",
             "0150 operator safe lifecycle: a free GPL level and the open gate create one managed operator at home");
