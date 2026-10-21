@@ -437,7 +437,9 @@ const defaults = {
         creditReserve: 100000,
     },
     listingPolicy: {
-        enabled: false,
+        // ROADMAP 0153 (ARK-138): on by default since 2026-10-20 (user decision);
+        // Memory.settings.listingPolicy.enabled = false turns it off
+        enabled: true,
         cancelFinished: true,
         lifetimeMs: 7 * 24 * 60 * 60 * 1000,
         descent: false,

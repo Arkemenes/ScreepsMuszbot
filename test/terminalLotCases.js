@@ -71,7 +71,9 @@ module.exports = function (project, assert) {
     try {
         Game.rooms = { [room.name]: room }; Game.myRooms = [room]; Game.creeps = {}; Memory.rooms = {};
         Game.getObjectById = (id) => id === room.storage.id ? room.storage : id === room.terminal.id ? room.terminal : null;
-        Memory.settings = { terminalOps: { tickInterval: 1 }, terminalFuel: { enabled: false }, stockPolicy: { enabled: true, targets: { energy: 0 }, creditReserve: 0 }, swing: { enabled: false } };
+        Memory.settings = { terminalOps: { tickInterval: 1 }, terminalFuel: { enabled: false }, stockPolicy: { enabled: true, targets: { energy: 0 }, creditReserve: 0 }, swing: { enabled: false },
+            // 0132 listing lots predate the 0153 policy (on by default since 2026-10-20)
+            listingPolicy: { enabled: false } };
         RESOURCES_ALL = saved.resources.concat(["O"]);
         market.snapshot = () => ({ tick: Game.time, resources: { O: { buyPrice: 100, sellPrice: 20, fairPrice: 30, currentBuy: 100, currentSell: 20 }, energy: { buyPrice: 30, sellPrice: 30, fairPrice: 30 } } });
         market.samples = () => Array.from({ length: 32 }, (_, i) => ({ tick: Game.time - i, buyPrice: 100, sellPrice: 20 })); market.historyReady = () => true;

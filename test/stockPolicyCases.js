@@ -37,7 +37,9 @@ module.exports = function (project, assert) {
     try {
         Game.time = 180000000;
         Game.rooms = { PolicyRoom: room }; Game.myRooms = [room]; Game.creeps = {};
-        Memory.settings = { terminalFuel: { enabled: false }, stockPolicy: { enabled: true }, swing: { test: true, scanInterval: 1 }, terminalOps: { tickInterval: 1 }, logistics: { terminalReserveRatio: 0.1 } };
+        Memory.settings = { terminalFuel: { enabled: false }, stockPolicy: { enabled: true }, swing: { test: true, scanInterval: 1 }, terminalOps: { tickInterval: 1 }, logistics: { terminalReserveRatio: 0.1 },
+            // these cases cover the listing paths without the 0153 policy (on by default since 2026-10-20)
+            listingPolicy: { enabled: false } };
         Memory.rooms = {};
         RESOURCES_ALL = saved.resources.concat(["O", "Z", "widgetA"]);
         market.samples = (r) => refs[r] ? Array.from({ length: samples }, (_, i) => ({ tick: Game.time - age - (samples - i - 1) * 3600,
