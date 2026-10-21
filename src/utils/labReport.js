@@ -37,6 +37,7 @@ const roomCache = require("./roomCache");
 const labReactions = require("./labReactions");
 const labReservations = require("./labReservations");
 const reactionAmount = require("./labReactionAmount");
+const cpuMeter = require("./cpuMeter");
 
 const STATES = ["reacting", "cooldown", "unavailable", "reservation", "capacity", "switch", "input", "idle"];
 let ranTick = -1;
@@ -107,7 +108,7 @@ function classify(roomName, lab, reaction) {
 function observe() {
     if (config.get("labReport.enabled", true) === false || lastTick === Game.time) return;
     lastTick = Game.time;
-    confirm();
+    cpuMeter.span("labReport.confirm", confirm);
     const ms = clock.now();
     const consecutive = !!lastObserve && lastObserve.tick === Game.time - 1;
     const elapsed = consecutive ? Math.max(0, Math.min(ms - lastObserve.ms, Number(config.get("labReport.maxGapMs", 10000)))) : 0;

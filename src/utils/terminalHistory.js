@@ -29,7 +29,12 @@ function prune(mem) {
     for (let i = 0; i < queue.length && i < ids.length; i++) protect(ops[queue[i]].parentId);
     ids.forEach((id) => {
         if (!keep.has(id)) delete ops[id];
-        else owners.add(claims.owner(ops[id]));
+        else {
+            owners.add(claims.owner(ops[id]));
+            // ARK-116: a finished operation kept for its owner's accounting no longer needs the
+            // live-decision diagnostics (read only while active); Memory is serialized every tick
+            if (final(ops[id])) { delete ops[id].noCandidate; delete ops[id].fuelQuote; delete ops[id].lastDealObservation; }
+        }
     });
     const ownerList = Array.from(owners).filter(Boolean);
     Object.entries(mem.lotTargets || {}).forEach(([key, target]) => {

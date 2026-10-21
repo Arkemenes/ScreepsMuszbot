@@ -248,14 +248,15 @@ function exportStats() {
                 result.currentBuy === null &&
                 result.currentSell === null
             )) continue;
+            // ARK-116: Memory is serialized every tick - prices rounded to 3 decimals and the
+            // sample diagnostics (sampleCount / windowCoverageTicks, read by no panel) left in the heap
+            const r3 = (v) => (typeof v === "number" ? Math.round(v * 1000) / 1000 : v);
             fairPrice[resourceType] = {
-                fairPrice: result.fairPrice,
-                buyPrice: result.buyPrice,
-                sellPrice: result.sellPrice,
-                currentBuy: result.currentBuy,
-                currentSell: result.currentSell,
-                sampleCount: result.sampleCount,
-                windowCoverageTicks: result.windowCoverageTicks,
+                fairPrice: r3(result.fairPrice),
+                buyPrice: r3(result.buyPrice),
+                sellPrice: r3(result.sellPrice),
+                currentBuy: r3(result.currentBuy),
+                currentSell: r3(result.currentSell),
                 confidence: result.confidence,
             };
         }

@@ -910,7 +910,7 @@ function listResidual(op, target) {
     // a live order inside its reprice window needs nothing from it.
     const liveOrder = op.marketOrderId && Game.market.orders && Game.market.orders[op.marketOrderId];
     if (op.listingPolicyManaged) {
-        const state = listingLifecycle.enroll(op, liveOrder, Date.now());
+        const state = cpuMeter.span("terminalOps.listed.enroll", () => listingLifecycle.enroll(op, liveOrder, Date.now()));
         if (!config.get("listingPolicy.enabled", false) || state.halted || state.pending) return;
         // Pixel automation is a separate opt-in delivery; never create a second order here.
         if (op.resourceType === "pixel") { op.error = "automação de listing de pixel ainda não habilitada"; return; }
@@ -941,7 +941,8 @@ function listResidual(op, target) {
     if (op.kind === "sell" && extended > 0 && !op.pendingExtension) {
         const exposed = orderAmount(liveOrder);
         const free = op.marketOnly ? extended : Math.max(0, claims.physicalFree(target, target.terminal, op.resourceType, op.id) - exposed);
-        const quote = candidateOrders(op).find((item) => item.quantity > 0);
+        // ARK-116 measurement: the direct-deal check of a partly listed sale scans the book
+        const quote = cpuMeter.span("terminalOps.listed.dealScan", () => candidateOrders(op).find((item) => item.quantity > 0));
         if (quote && free > 0) {
             const quantity = Math.min(extended, free, quote.quantity);
             const freight = dealFreight(op, quantity, quote.order.roomName);
