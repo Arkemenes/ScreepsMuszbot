@@ -947,8 +947,15 @@ function listResidualNow(op, target) {
     if (op.kind === "sell" && extended > 0 && !op.pendingExtension) {
         const exposed = orderAmount(liveOrder);
         const free = op.marketOnly ? extended : Math.max(0, claims.physicalFree(target, target.terminal, op.resourceType, op.id) - exposed);
-        // ARK-116 measurement: the direct-deal check of a partly listed sale scans the book
-        const quote = cpuMeter.span("terminalOps.listed.dealScan", () => candidateOrders(op).find((item) => item.quantity > 0));
+        // ARK-116: the direct-deal check of a partly listed sale scans the book (0.14 CPU/tick for
+        // four listings). After a scan that found nothing for the same unlisted amount, the next one
+        // waits terminalOps.listedDealScanTicks (25): the order stays listed and keeps selling. New
+        // cargo (a different extended amount) scans at once - it may take a bid before paying to extend.
+        const every = config.get("terminalOps.listedDealScanTicks", 25), empty = op.dealScanEmpty;
+        const key = op.remaining + ":" + extended; // new cargo changes the operation's remaining
+        const skip = !!empty && empty.key === key && Game.time >= empty.tick && Game.time - empty.tick < every;
+        const quote = skip ? null : cpuMeter.span("terminalOps.listed.dealScan", () => candidateOrders(op).find((item) => item.quantity > 0));
+        if (!skip) { if (quote) delete op.dealScanEmpty; else op.dealScanEmpty = { tick: Game.time, key }; }
         if (quote && free > 0) {
             const quantity = Math.min(extended, free, quote.quantity);
             const freight = dealFreight(op, quantity, quote.order.roomName);
