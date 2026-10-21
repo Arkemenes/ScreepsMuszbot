@@ -5,6 +5,7 @@ const config = require("./config");
 const cadence = require("./cadence");
 const marketPrices = require("./market");
 const roomCache = require("./roomCache");
+const terminalReport = require("./terminalReport");
 const stockPolicy = require("./resourcePolicy");
 const marketAccounting = require("./marketAccounting");
 const cpuMeter = require("./cpuMeter");
@@ -371,7 +372,8 @@ function activeForRoom(roomName) { return activeIds().map(operation).filter((op)
 // separate so a transfer's two rooms don't collapse into one another and a
 // market deal keeps which resource actually traded (ROADMAP 0079 follow-up:
 // the dashboard's "Mercado"/"Terminal Network" panels need both).
-function record(op, value, credits, energy, fees = 0) { require("./craftLedger").record(op, value, credits, energy); memory().events.push({ tick: Game.time, operationId: op.id, owner: claims.owner(op), room: op.sourceRoom || op.targetRoom, from: op.sourceRoom || null, to: op.targetRoom || null, kind: op.kind, resourceType: op.resourceType, amount: value || 0, credits: credits || 0, transactionEnergy: energy || 0, marketFees: fees }); }
+// ROADMAP 0163: freight is paid by the terminal that sends or deals (op.sourceRoom)
+function record(op, value, credits, energy, fees = 0) { require("./craftLedger").record(op, value, credits, energy); terminalReport.freight(op.sourceRoom, energy, value); memory().events.push({ tick: Game.time, operationId: op.id, owner: claims.owner(op), room: op.sourceRoom || op.targetRoom, from: op.sourceRoom || null, to: op.targetRoom || null, kind: op.kind, resourceType: op.resourceType, amount: value || 0, credits: credits || 0, transactionEnergy: energy || 0, marketFees: fees }); }
 
 function findHauler(roomName) { return census.creepsByRole(roomName, "hauler").find((creep) => !creep.memory.terminalJob && creep.store.getUsedCapacity() === 0); }
 function assign(op, home, direction, from, to, value, resourceType) {
@@ -611,7 +613,7 @@ function executeDeal(op, target, selected) {
         touch(op, op.createListing ? "listing" : "waiting"); return;
     }
     delete op.noCandidate;
-    if (!op.marketOnly && target.terminal.cooldown) { op.error = "terminal em cooldown"; touch(op, "waiting"); return; }
+    if (!op.marketOnly && target.terminal.cooldown) { terminalReport.blocked(target.name); op.error = "terminal em cooldown"; touch(op, "waiting"); return; }
     const fuel = require("./terminalFuel");
     if (candidate && op.policy === "swing" && op.kind === "sell" && !fuel.optionalAllowed(target, candidate.cost)) {
         op.policyBlock = "scarce-energy";
@@ -1544,7 +1546,7 @@ function settleRelaySend(op, source) {
 }
 function startRelaySend(op, source, phaseName, quantity, resourceType, freight) {
     if (terminalBusy(source.name)) { op.error = "terminal já usado neste tick"; touch(op, "waiting"); return false; }
-    if (source.terminal.cooldown) { op.error = "terminal em cooldown"; touch(op, phaseName === "funding" ? "fundingConfirmed" : "atTerminal"); return false; }
+    if (source.terminal.cooldown) { terminalReport.blocked(source.name); op.error = "terminal em cooldown"; touch(op, phaseName === "funding" ? "fundingConfirmed" : "atTerminal"); return false; }
     const description = relayDescription(op, phaseName);
     if (!description) { op.error = "relay key, username or description invalid"; touch(op, "held"); return false; }
     const required = freight + (resourceType === RESOURCE_ENERGY ? quantity : 0);
@@ -1695,7 +1697,7 @@ function tickRelayTransfer(op, source, target) {
         relayAlert(op, "funding window elapsed after payment; cargo was not sent");
         return;
     }
-    if (source.terminal.cooldown) return;
+    if (source.terminal.cooldown) { terminalReport.blocked(source.name); return; }
     const requiredExtraFunding = op.routingQuote.fundingAmount + op.routingQuote.fundingFreight;
     if ((op.relay.fundingSentAmount || 0) < op.routingQuote.fundingAmount || (op.relay.fundingCost || 0) < op.routingQuote.fundingFreight) {
         op.relay.phase = "fundingUncertain";
@@ -1724,7 +1726,7 @@ function tickTransfer(op, source, target) {
     if (op.state === "atTerminal") {
         if (op.loadedAmount < transferLoadTarget(op)) { touch(op, "queued"); return; }
         if (terminalBusy(source.name)) { op.error = "terminal já usado neste tick"; touch(op, "waiting"); return; }
-        if (source.terminal.cooldown) { op.error = "terminal em cooldown"; touch(op, "waiting"); return; }
+        if (source.terminal.cooldown) { terminalReport.blocked(source.name); op.error = "terminal em cooldown"; touch(op, "waiting"); return; }
         if (storeValue(source.terminal.store, op.resourceType) < op.loadedAmount) {
             op.error = "carga ainda não está no terminal";
             op.stallStartedTick = op.stallStartedTick || Game.time;

@@ -23,7 +23,7 @@ Prioridade de 17/10: compatibilidade T5/T6 e T10 antes de habilitar operador; T1
 - [ ] **T4 — Medir fase 0 somente com autorização própria, preservando trabalho útil.** AC3,8. Verificação futura: `LIVE-0150-0: energia/GPL/custos reais`.
 - [x] **T5 — Integrar reactionAmount no modelo/runtime/executor/reservas/ledger e confirmação.** AC6,9. Verificação futura: `0150 operated levels and shared inputs`.
 - [ ] **T6 — Implementar quota strict/boundedSurplus, custo propagado, término e stall guard.** AC6,9. Verificação futura: `0150 quota 10 amount 7; 0150 chain termination; 0150 shared quota key`.
-- [ ] **T7 — Validar cobertura/ops/logística e retorno por poder antes da decisão de operador: reação/reagentes/venda quando aplicável ao lab; frete próprio evitado/fluxo útil/cooldown no terminal.** AC7–8. Verificação futura: `0150 coverage rejects; LIVE-0150-base: 48h reais`.
+- [ ] **T7 — Validar cobertura/ops/logística e retorno por poder antes da decisão de operador: reação/reagentes/venda quando aplicável ao lab; frete próprio evitado/fluxo útil/cooldown no terminal.** AC7–8. Verificação futura: `0150 coverage rejects; LIVE-0150-base: 48h reais`. Medição: lab = [0155 labReport](../0155-lab-utilization/spec.md); terminal = [0163 terminalReport](../0163-terminal-utilization/spec.md) (cooldown, espera por cooldown, frete próprio e economia estimada por nível), publicado em 2026-10-21.
 - [ ] **T8 — Implementar lifecycle/managed/safe, reset/morte/cooldown/target manual.** AC5,7–8. Verificação futura: `0150 operator safe lifecycle`.
 - [ ] **T9 — Após autorização separada medir operador e revalidar regime antes de expansão.** AC7–9. Verificação futura: `LIVE-0150-2: contribuição final, vendas e CPU`.
 
