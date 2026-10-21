@@ -904,7 +904,13 @@ function automaticSellQuote(resource, limit) {
     return listingPolicy.sellQuote({ orders: book.orders, covered: book.covered, own: Game.market.orders || {},
         resource, limit, basis: limit > 0 ? "existing-policy-limit" : null, step: config.get("terminalOps.marketPriceStep", 0.001) });
 }
+// ARK-116: the listed-sale pass costs ~0.7 CPU; split it into spans to find where
 function listResidual(op, target) {
+    const t0 = Game.cpu.getUsed();
+    try { return listResidualNow(op, target); }
+    finally { cpuMeter.record("spans", "terminalOps.listed.total", Game.cpu.getUsed() - t0); }
+}
+function listResidualNow(op, target) {
     if (!Game.market || typeof Game.market.createOrder !== "function") { op.error = "mercado indisponível"; touch(op, "waiting"); return; }
     // Cheap interval check first: competitivePrice() scans the order book, and
     // a live order inside its reprice window needs nothing from it.
@@ -931,7 +937,7 @@ function listResidual(op, target) {
         touch(op, "listing"); return;
     }
     if (op.policy === "swing") {
-        const ref = require("./swingTrade").reference(op.resourceType, op.kind);
+        const ref = cpuMeter.span("terminalOps.listed.swingRef", () => require("./swingTrade").reference(op.resourceType, op.kind));
         if (!ref.reason) {
             op.limit = ref.price * (1 + (op.kind === "buy" ? -1 : 1) * config.get("swing.margin", 0.01));
             op.referencePrice = ref.price; op.energyFairPrice = ref.energy;
@@ -967,10 +973,10 @@ function listResidual(op, target) {
         }
     }
     if (liveOrder && extended > 0 && (op.kind !== "sell" || liveOrder.price >= op.limit / 0.95)) {
-        if (op.listingPolicyManaged && !listingPolicy.extension(automaticSellQuote(op.resourceType, op.limit), liveOrder.price)) {
+        if (op.listingPolicyManaged && !cpuMeter.span("terminalOps.listed.extensionQuote", () => listingPolicy.extension(automaticSellQuote(op.resourceType, op.limit), liveOrder.price))) {
             op.error = "listing não competitiva para extensão"; touch(op, "listed"); return;
         }
-        if (op.kind === "sell" && claims.physicalFree(target, target.terminal, op.resourceType, op.id) < op.remaining) { op.error = "aguardando lastro integral da listing"; touch(op, "listed"); return; }
+        if (op.kind === "sell" && cpuMeter.span("terminalOps.listed.backing", () => claims.physicalFree(target, target.terminal, op.resourceType, op.id)) < op.remaining) { op.error = "aguardando lastro integral da listing"; touch(op, "listed"); return; }
         const fee = op.listingPolicyManaged ? listingPolicy.incrementalFee("extend", liveOrder.price, extended) : liveOrder.price * extended * 0.05;
         if (Game.market.credits < fee || fee > marketAccounting.available(op.id)) { op.error = "orçamento insuficiente para estender listing"; touch(op, "listed"); return; }
         if (op.kind === "buy" && liveOrder.price + ((op.orderFeesRemaining || 0) + (op.cancelledListingFees || 0) + fee) /
