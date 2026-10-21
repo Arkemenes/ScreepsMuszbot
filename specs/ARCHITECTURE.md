@@ -488,7 +488,13 @@ functions are restored by `main.js`): before 0113 they stayed wrapped until
 the next global reset. `exporter.py` turns the keys under `cpu.meter.*` into
 the `span` label of `screeps_stat_value`, and the "CPU por módulo / role /
 função" dashboard row (`specs/features/0079-.../screeps-dashboard.json`)
-charts them.
+charts them. ARK-201: the keys under `rooms.<sala>.energyReport.utilization`
+become the `role` label and those under `rooms.<sala>.labReport.top` the
+`state` label (an empty label is the same series in Prometheus, so existing
+series keep their identity); the "Energia e labs" row of `grafana.json` charts
+utilization, WORK alive, spend vs income proxy, Δ stock, coverage, RCL ETA, lab
+busy/assigned share, lab states, lab output and the instrumentation cost. Both
+`exporter.py` and the dashboard are applied manually by the user.
 
 `reconcileClaims()` (called from `scanTerminalBalances()`) is the opposite
 check: what target-side claims (receipts and already-sent transfers) still owe

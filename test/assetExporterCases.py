@@ -58,9 +58,31 @@ env["update_generic_metrics"]({"cpu": {"accounting": {"used": None, "validTicks"
 assert all(dict(key)["path"] != "cpu.accounting.used" for key in values.values)
 dashboard = json.loads(Path(sys.argv[1], "grafana.json").read_text(encoding="utf-8"))
 queries = dashboard["spec"]["elements"]["panel-7"]["spec"]["data"]["spec"]["queries"]
-assert queries[0]["spec"]["query"]["spec"]["expr"] == 'screeps_stat_value{path="cpu.accounting.used"}'
-assert next(q for q in queries if q["spec"]["refId"] == "D")["spec"]["query"]["spec"]["expr"] == 'screeps_stat_value{path="cpu.accounting.scriptUsed"}'
+# ARK-116 (745c5d0) moved panel-7 to the cpuMeter window: script vs base intents
+expr_of = lambda ref: next(q for q in queries if q["spec"]["refId"] == ref)["spec"]["query"]["spec"]["expr"]
+assert expr_of("D") == 'screeps_stat_value{path="cpu.meter.used"}'
+assert expr_of("E") == 'screeps_stat_value{path="cpu.meter.intentCpu"}'
 print("CPU accounting exporter/dashboard checks passed")
+
+# ARK-201: energyReport utilization roles and labReport states become labels, not path segments.
+env["update_generic_metrics"]({"rooms": {"W1N1": {
+    "energyReport": {"spendPerTick": 5, "utilization": {"miner": {"ratio": 0.9, "work": 10}, "builder": {"ratio": 0.2, "work": 4}}},
+    "labReport": {"busy": 0.98, "top": {"waitInput": 0.05}}}}})
+rows = [(dict(key), value) for key, value in values.values.items()]
+pick = lambda path, **want: [v for k, v in rows if k["path"] == path and all(k[n] == w for n, w in want.items())]
+assert pick("rooms.energyReport.utilization.ratio", room="W1N1", role="miner") == [0.9]
+assert pick("rooms.energyReport.utilization.work", room="W1N1", role="builder") == [4]
+assert pick("rooms.energyReport.spendPerTick", room="W1N1", role="", state="") == [5]
+assert pick("rooms.labReport.top", room="W1N1", state="waitInput") == [0.05]
+assert pick("rooms.labReport.busy", room="W1N1") == [0.98]
+row = next(r["spec"] for r in dashboard["spec"]["layout"]["spec"]["rows"] if r["spec"]["title"].startswith("Energia e labs"))
+names = [it["spec"]["element"]["name"] for it in row["layout"]["spec"]["items"]]
+exprs = [q["spec"]["query"]["spec"]["expr"] for n in names for q in dashboard["spec"]["elements"][n]["spec"]["data"]["spec"]["queries"]]
+for path in ("rooms.energyReport.utilization.ratio", "rooms.energyReport.incomeProxyPerTick", "rooms.energyReport.coverage",
+             "rooms.labReport.busy", "rooms.labReport.top"):
+    assert any('path="' + path + '"' in e for e in exprs), "energy/lab row must chart " + path
+assert all(e.count("screeps_stat_value{") >= 1 for e in exprs)
+print("energyReport/labReport labels and dashboard row checks passed")
 
 # Resource discovery must work before both sides have historical samples.
 import re

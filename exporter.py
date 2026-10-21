@@ -60,12 +60,12 @@ collection_repeated = Gauge('screeps_collection_repeated', '1 se a coleta repeti
 generic_stat_value = Gauge(
     'screeps_stat_value',
     'Numeric scalar discovered in Memory.stats',
-    ['path', 'room', 'mineral', 'compound', 'category', 'direction', 'span'],
+    ['path', 'room', 'mineral', 'compound', 'category', 'direction', 'span', 'role', 'state'],
 )
 generic_stat_info = Gauge(
     'screeps_stat_info',
     'Text scalar discovered in Memory.stats',
-    ['path', 'room', 'mineral', 'compound', 'category', 'direction', 'span', 'value'],
+    ['path', 'room', 'mineral', 'compound', 'category', 'direction', 'span', 'role', 'state', 'value'],
 )
 
 
@@ -128,6 +128,14 @@ def _generic_stats(value, path=(), labels=None):
             elif path and path[-1] == "energySpent" and "category" not in labels:
                 child_labels["category"] = str(key)
                 child_path = path
+            elif path[-2:] == ("energyReport", "utilization") and "role" not in labels:
+                # energyReport (ROADMAP 0154-B): WORK utilization per creep role
+                child_labels["role"] = str(key)
+                child_path = path
+            elif path[-2:] == ("labReport", "top") and "state" not in labels:
+                # labReport (ROADMAP 0155): share of lab-ticks per wait/busy state
+                child_labels["state"] = str(key)
+                child_path = path
             elif (
                 path and path[-1] == "transactions" and
                 key in ("bought", "sold") and "direction" not in labels
@@ -175,6 +183,8 @@ def update_generic_metrics(stats):
             "category": labels.get("category", ""),
             "direction": labels.get("direction", ""),
             "span": labels.get("span", ""),
+            "role": labels.get("role", ""),
+            "state": labels.get("state", ""),
         }
         if kind == "value":
             generic_stat_value.labels(**metric_labels).set(value)
