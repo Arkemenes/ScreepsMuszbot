@@ -415,6 +415,8 @@ module.exports.loop = function () {
                 }
             }
             guard("energyLedger", () => energyLedger.finalize());
+            // ROADMAP 0154-B: one compact sample per owned room for energyReport()
+            guard("energyReport", () => require("./utils/energyReport").observe());
             // ROADMAP 0045, old_1 parity: a full CPU bucket is wasted if it
             // just sits there - convert it into a Pixel every tick it stays
             // full. Off switch: Memory.settings.pixel.enabled = false.

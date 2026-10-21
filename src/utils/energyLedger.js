@@ -198,6 +198,9 @@ function resolvedWork(includeEvents = false) {
 
 function finalize() { ensureTick(); resolvedWork(); finalized = true; }
 
+// This tick's spend by category for one room (ROADMAP 0154-B energyReport), a copy.
+function tickCategories(roomName) { ensureTick(); return currentRoom(roomName); }
+
 function events() { ensureTick(); return resolvedWork(true).events.map(event => Object.assign({}, event)); }
 
 function snapshotInfo(roomName) {
@@ -291,4 +294,5 @@ module.exports = {
     installHooks,
     finalize,
     events,
+    tickCategories,
 };

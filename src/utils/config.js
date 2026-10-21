@@ -436,6 +436,14 @@ const defaults = {
         terminalFreeRatio: 0.15,
         creditReserve: 100000,
     },
+    energyReport: {
+        // ROADMAP 0154-B (ARK-133): heap window of per-room samples, console line per room
+        // every autoTicks (0 = off), and the coverage context() needs before it answers
+        enabled: true,
+        windowTicks: 600,
+        autoTicks: 1500,
+        minCoverage: 0.9,
+    },
     listingPolicy: {
         // ROADMAP 0153 (ARK-138): on by default since 2026-10-20 (user decision);
         // Memory.settings.listingPolicy.enabled = false turns it off
@@ -875,7 +883,7 @@ const defaults = {
         tiers: {
             planStore: 0, memoryCleanup: 0, bootstrapStorage: 0, intel: 0, spawn: 0, defense: 0,
             creep: 0, traffic: 0, rampart: 0, structure: 0, energyLedger: 0, intentMeter: 0, stats: 0,
-            plan: 1, terminalOps: 1, energyBalancing: 1, boostLogistics: 1, craftLedger: 1, market: 1,
+            plan: 1, terminalOps: 1, energyBalancing: 1, energyReport: 1, boostLogistics: 1, craftLedger: 1, market: 1,
             intelRemote: 1,
             craftPlanner: 2, marketFlip: 2, swingTrade: 2, cpuReport: 2, planPreview: 2,
             pixel: 3, raiding: 3, layoutPreview: 3, labRefine: 3,

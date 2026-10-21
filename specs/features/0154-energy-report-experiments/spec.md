@@ -2,7 +2,7 @@
 
 > **Decisão posterior — 16/10/2026:** implementação local autorizada passo a passo no [plano de execução incremental](../../../docs/plano-execucao-incremental-2026-10-16.md). Histórico persistente sofisticado adiado até necessidade demonstrada; cobertura inicial no heap, com lacunas explícitas. Gates operacionais continuam válidos.
 
-- **Status:** in-progress — etapa 2/T1–T2 implementada localmente; coleta ampliada, relatórios/experimentos e aceite live pendentes.
+- **Status:** in-progress — T1–T2 publicados; energyReport (0154-B: gasto, utilização de WORK, renda proxy, ETA, cobertura) publicado em 2026-10-20; experimentos (T5–T6) e consumo de 0157 pendentes.
 - **Issue:** ARK-133 (filha de ARK-128); pacote T1/T2: ARK-143 (filha de ARK-133).
 - **Created / revisão documental:** 2026-10-15.
 - **Contrato integrado e aceite:** [planejamento vigente](../../../docs/planejamento-integrado-2026-10-16.md); análises anteriores são históricas.

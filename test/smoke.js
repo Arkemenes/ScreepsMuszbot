@@ -16383,6 +16383,7 @@ require("./terminalLotCases")(PROJECT, assert);
 assert(require(path.join(PROJECT, "src/utils/config")).defaults.listingPolicy.enabled === true,
     "0153: listingPolicy is on by default (ARK-138, 2026-10-20)");
 require("./listingPolicyCases")(PROJECT, assert);
+require("./energyReportCases")(PROJECT, assert);
 require("./listingReuseCases")(PROJECT, assert);
 require("./craftPurchaseCases")(PROJECT, assert);
 require("./craftRecoveryCases")(PROJECT, assert);
