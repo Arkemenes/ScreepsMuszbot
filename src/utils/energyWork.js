@@ -117,7 +117,8 @@ function create(tick) {
     }
     function resolve(includeEvents = false) {
         if (cacheRevision === revision && (!includeEvents || cacheHasEvents)) return cached;
-        const rooms = {}, events = [], usedTargets = new Map(), usage = new Map();
+        // acted: WORK creeps with a resolved build/repair/upgrade or an accepted harvest this tick
+        const rooms = {}, events = [], acted = new Set(), usedTargets = new Map(), usage = new Map();
         for (const state of states) {
             for (const method of workMethods) {
                 const slot = state.slots[method];
@@ -141,11 +142,13 @@ function create(tick) {
                     else energy = Math.min(state.capacity, energy + flow.amount);
                 }
             }
+            if (slots.harvest) acted.add(state.id);
             const blocked = slots.heal || slots.rangedHeal || slots.dismantle || slots.attackController;
             if (slots.dismantle || slots.harvest && !slots.build && !slots.repair) reasons.push("unmodeled-resource-action");
             for (const method of workMethods) {
                 const slot = slots[method];
                 if (!slot || method !== "upgradeController" && (blocked || method === "build" && slots.repair)) continue;
+                acted.add(state.id);
                 const action = slot.action, target = slot.target, localReasons = reasons.slice();
                 if (usage.get(target.key) > 1) localReasons.push("shared-target-order");
                 if (externalTargets.has(target.key)) localReasons.push("external-target-action");
@@ -194,7 +197,7 @@ function create(tick) {
                 }
             }
         }
-        cached = { rooms, events };
+        cached = { rooms, events, acted };
         cacheRevision = revision;
         cacheHasEvents = includeEvents;
         return cached;

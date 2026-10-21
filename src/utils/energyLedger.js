@@ -32,7 +32,7 @@ const history = {}; // roomName -> [{tick, categories}], oldest first
 let work = null, finalized = false, observeWork = true, observerErrors = 0;
 let startedTick = -1;
 let resolutionFailed = false;
-const emptyWork = { rooms: {}, events: [] };
+const emptyWork = { rooms: {}, events: [], acted: new Set() };
 const qualityHistory = []; // Only faults/off/gaps within the same existing heap window.
 const hooked = Symbol("energyLedgerHook");
 const auxiliaryActions = ["drop", "transfer", "withdraw", "pickup", "cancelOrder",
@@ -203,6 +203,10 @@ function tickCategories(roomName) { ensureTick(); return currentRoom(roomName); 
 
 function events() { ensureTick(); return resolvedWork(true).events.map(event => Object.assign({}, event)); }
 
+// Ids of WORK creeps that acted this tick (resolved build/repair/upgrade or accepted harvest).
+// Read-only and shared with the resolve cache: no event objects are built or copied.
+function actedIds() { ensureTick(); return resolvedWork().acted; }
+
 function snapshotInfo(roomName) {
     ensureTick();
     trim(roomName, tick - windowTicks() + 1);
@@ -294,5 +298,6 @@ module.exports = {
     installHooks,
     finalize,
     events,
+    actedIds,
     tickCategories,
 };

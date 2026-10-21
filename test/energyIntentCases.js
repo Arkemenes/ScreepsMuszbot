@@ -190,6 +190,16 @@ module.exports = function (project, assert) {
             "0154 bounded hooks: one body observation per entity/tick, no Memory writes or duplicate snapshots");
         const copy = ledger.events(); copy[0].energyEstimate = 999;
         assert(ledger.events()[0].energyEstimate === 10, "0154 bounded hooks: event callers cannot mutate the ledger");
+
+        next();
+        const miner = observed(5, 0), idle = observed(), refused = observed(), builds = observed();
+        miner.harvest({ id: "acted-source" });
+        refused.harvest({ id: "far-source", reject: true });
+        ledger.invoke(builds, "build", site);
+        const acted = ledger.actedIds();
+        assert(acted.has(miner.id) && acted.has(builds.id) && !acted.has(idle.id) && !acted.has(refused.id) &&
+            ledger.actedIds() === acted && total().build === 10,
+            "0154 acted ids: accepted harvest and resolved build count as acting, idle/refused do not, no copy per call");
         const thrown = new Error("native failure"); let caught;
         try { ledger.invoke(bounded, "build", { throwError: thrown }); } catch (e) { caught = e; }
         assert(caught === thrown && total().build === 10,

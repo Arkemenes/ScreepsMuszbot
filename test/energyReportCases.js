@@ -5,7 +5,7 @@ module.exports = function (project, assert) {
     const src = (n) => path.join(project, "src/utils", n);
     const saved = { game: global.Game, memory: global.Memory };
     const ledger = require(src("energyLedger"));
-    const original = { events: ledger.events, tickCategories: ledger.tickCategories };
+    const original = { actedIds: ledger.actedIds, tickCategories: ledger.tickCategories };
     try {
         global.Memory = { settings: { energyReport: { autoTicks: 0 } }, rooms: {} };
         let stored = 1000, progress = 0;
@@ -20,7 +20,7 @@ module.exports = function (project, assert) {
         const creep = (id, role, work) => ({ id, name: id, room, memory: { role }, body: body(work) });
         global.Game = Object.assign({}, saved.game, { time: 1000, myRooms: [room],
             creeps: { b1: creep("b1", "builder", 2), b2: creep("b2", "builder", 2), u1: creep("u1", "upgrader", 3) } });
-        ledger.events = () => [{ entityId: "b1", action: "build" }, { entityId: "u1", action: "upgrade" }];
+        ledger.actedIds = () => new Set(["b1", "u1"]);
         ledger.tickCategories = () => ({ build: 2, upgrade: 3 });
         delete require.cache[require.resolve(src("energyReport"))];
         const energyReport = require(src("energyReport"));
@@ -58,7 +58,7 @@ module.exports = function (project, assert) {
         assert(typeof global.energyReport === "function" && /ReportRoom/.test(global.energyReport("ReportRoom", 10)),
             "0154 report: console energyReport(room, n) prints the room line");
     } finally {
-        ledger.events = original.events;
+        ledger.actedIds = original.actedIds;
         ledger.tickCategories = original.tickCategories;
         global.Game = saved.game;
         global.Memory = saved.memory;

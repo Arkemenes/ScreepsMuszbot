@@ -10,8 +10,8 @@
 //
 // report(room, n) aggregates the last n ticks. "income" is a PROXY (delta of stored energy
 // plus estimated spend): it ignores transfers, purchases and sales, and is labelled as
-// such. Utilization = WORK-ticks with a resolved build/repair/upgrade intent / WORK-ticks
-// alive, per role - one idle builder and several half-idle ones read differently.
+// such. Utilization = WORK-ticks with a resolved build/repair/upgrade or accepted harvest
+// intent / WORK-ticks alive, per role - one idle builder and several half-idle ones read differently.
 // context(room) is the small read-only view later policies (0157/0148/0149) consume.
 const config = require("./config");
 const census = require("./census");
@@ -51,8 +51,7 @@ function observe() {
     if (lastTick === Game.time) return;
     if (Game.time < lastTick) for (const name of Object.keys(rings)) delete rings[name];
     lastTick = Game.time;
-    const acted = new Set();
-    for (const event of energyLedger.events()) acted.add(event.entityId);
+    const acted = energyLedger.actedIds();
     const keep = windowTicks();
     const live = new Set();
     for (const room of Game.myRooms || []) {
