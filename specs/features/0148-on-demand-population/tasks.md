@@ -15,7 +15,7 @@
 
 ## Implementação futura — não executada
 
-- [ ] **T1 — Modelar demanda, capacidade de torre e previsão de reposição.** AC1–4. Verificação futura: `0148 demand preservation; 0148 precedence`.
+- [x] **T1 — Modelar demanda, capacidade de torre e previsão de reposição.** AC1–4. Feito 2026-10-21 (local, sem consumidor): `utils/builderDemand.evaluate(sala)` → `{useful, reasons, lead, idleSince}`. Demanda = obra; upgrade abaixo do RCL8; repair critical (piso); repair defensivo liberado pelos gates de storage; repair normal só sem cobertura de torre (sem torre, alguma abaixo de `tower.satisfactoryRepairEnergyRatio`, defesa/hostis, economia critical). No RCL8 a faixa de 99% (0103) não é demanda: o piso de downgrade é do upgrader. Prazo de reposição = partes × spawn + `population.onDemand.travelTicks` (50) + `marginTicks` (100); `idleSince` = início da sequência sem demanda (tolerância `gapTicks` 20). Smoke `0148 demand preservation` (14). `0148 precedence` vai para a T2.
 - [ ] **T2 — Compor target após autoscale e deduplicar vivos/spawning/fila.** AC1,4,7. Verificação futura: `0148 emergency after death`.
 - [ ] **T3 — Integrar overlay/guardas e recuperação off/reset/manual, invalidando needs.** AC5,7. Verificação futura: `0148 recovery ownership`.
 - [ ] **T4 — Preservar fallback de todo WORK e explicar nenhuma sala elegível.** AC8–9. Verificação futura: `0148 fallback; 0148 no eligible room`.

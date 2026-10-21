@@ -180,6 +180,7 @@ function towerMayRepair(structure, tower) {
 module.exports = {
     tier,
     isCritical,
+    isDefensive,
     priority,
     priorityKey,
     builderMayRepair,
