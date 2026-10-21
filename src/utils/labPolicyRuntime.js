@@ -7,6 +7,7 @@ const labSlots = require("./labSlots");
 const labReactions = require("./labReactions");
 const census = require("./census");
 const cpuMeter = require("./cpuMeter");
+const cpuTier = require("./cpuTier");
 const labReservations = require("./labReservations");
 const reactionAmount = require("./labReactionAmount");
 const layoutCache = new Map();
@@ -365,7 +366,11 @@ function tick(room, chain, item) {
     }
     const plan = cpuMeter.span("labPolicy.plan", () => policy.planFor(state.planId, item, resolved.built));
     if (!plan) { clear(room); state.planId = null; state.evalKey = null; return false; }
-    if (state.evalKey) {
+    // Once a plan runs, searching for a better one is optional work: it only spends
+    // the policy budget in a band that allows cpu.tiers.labRefine (full by default),
+    // otherwise it would burn craft.policyCpuPerTick every tick until the search ends.
+    if (state.evalKey && !cpuTier.allows("labRefine")) cpuTier.skip("labRefine");
+    else if (state.evalKey) {
         const evaluation = cpuMeter.span("labPolicy.poll", () => policy.poll(state.evalKey));
         if (evaluation) {
             state.evaluation = evaluation.status;

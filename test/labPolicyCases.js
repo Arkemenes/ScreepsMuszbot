@@ -388,7 +388,15 @@ module.exports = function labPolicyCases(PROJECT, assert) {
         const originalPoll = policy.poll;
         try {
             w.item.run.evalKey = "completed-later"; w.item.run.estimate = 50000; w.item.run.selectedTick = Game.time - 1;
-            policy.poll = () => ({ best: { id: "better-candidate", ticks: 1 }, status: "complete" });
+            let polls = 0;
+            policy.poll = () => { polls++; return { best: { id: "better-candidate", ticks: 1 }, status: "complete" }; };
+            // normal bucket band: refining a running plan is tier 3 (labRefine), so it is skipped
+            const bucket = Game.cpu.bucket;
+            Game.cpu.bucket = 5000; Game.time++;
+            runtime.tick(w.room, w.chain, w.item);
+            assert(polls === 0 && w.item.run.planId === "wide-live" && w.item.run.evalKey === "completed-later",
+                "ARK-116: in the normal band a running plan is not refined (no policy poll, plan kept)");
+            Game.cpu.bucket = bucket;
             Game.time++;
             runtime.tick(w.room, w.chain, w.item);
             assert(completed === 5 && w.item.run.produced.LH === 5 && w.item.run.planId === null,

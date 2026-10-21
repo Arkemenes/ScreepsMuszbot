@@ -876,7 +876,7 @@ const defaults = {
             plan: 1, terminalOps: 1, energyBalancing: 1, boostLogistics: 1, craftLedger: 1, market: 1,
             intelRemote: 1,
             craftPlanner: 2, marketFlip: 2, swingTrade: 2, cpuReport: 2, planPreview: 2,
-            pixel: 3, raiding: 3, layoutPreview: 3,
+            pixel: 3, raiding: 3, layoutPreview: 3, labRefine: 3,
         },
         // full band only: existing intervals divided / budgets multiplied by factor
         boost: {

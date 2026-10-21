@@ -54,7 +54,10 @@ orçamentos maiores). Os limiares e a tabela de tiers ficam em
   - **T2 otimização:** `craftPlanner`, `marketFlip`, `swingTrade`,
     `plan` (preview visual), `cpuReport`.
   - **T3 luxo:** `pixel` (quando religado), prévias de layout de salas não
-    próprias, `raiding.autoRaid`, scans adiantados com `boost()`.
+    próprias, `raiding.autoRaid`, scans adiantados com `boost()`, e
+    `labRefine` (ARK-116, 2026-10-20): a busca de um plano de labs melhor depois
+    que um plano já roda. Fora de `full` ela consumia `craft.policyCpuPerTick`
+    (~1 CPU) todo tick; a seleção inicial do plano continua em T2.
 - `boost()` (faixa `full`) só encurta intervalos/aumenta orçamentos que já
   existem, cada um com seu multiplicador lido do tier: `observer.exploreInterval`
   10→1 (observação todo tick, pedido do usuário), `craft.scanInterval` 300→150,

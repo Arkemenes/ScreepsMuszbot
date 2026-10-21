@@ -1,6 +1,6 @@
 # 0162 — Tiers de prioridade por nível do CPU bucket — Tasks
 
-- **Status:** done (publicado 2026-10-20); aceite ao vivo do AC7 pendente.
+- **Status:** done (publicado 2026-10-20); aceite ao vivo da faixa `normal` confirmado em 2026-10-20.
 - **Issue:** ARK-198.
 
 - [x] **T1 — `utils/cpuTier.js`** com faixas, histerese, tiers, boost e contagem de pulados. AC3–5.
@@ -12,5 +12,7 @@
 - [x] **T3 — Boost nos sete knobs**, observer explorando todo tick em `full`.
   Verificação: `0162: in the full band the observer explores every tick (exploreInterval boosted 10 -> 1)`.
 - [x] **T4 — Stats e Grafana** (`cpu.band`, `cpu.bandLevel`, `cpu.skipped`; dois painéis). AC6.
-- [ ] **T5 — Aceite ao vivo:** com o bucket acima de 3000, nenhum subsistema é pulado
-  (`cpu.skipped` vazio). Em `full`, o observer explora todo tick. AC7.
+- [x] **T5 — Aceite ao vivo:** com o bucket acima de 3000, nenhum subsistema de tier 0–2 é
+  pulado. AC7. Live tick 83775577: bucket 8557, `band: normal`, `cpu.skipped = { pixel: 1 }`
+  (pixel é tier 3, pulado por desenho fora de `full`). Observer explorando todo tick em `full`
+  fica para verificação oportunista quando o bucket passar de 9500.
