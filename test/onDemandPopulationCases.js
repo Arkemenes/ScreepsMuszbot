@@ -20,7 +20,8 @@ module.exports = function (project, assert) {
         demand.evaluate = () => result;
         report.context = () => ctx;
         let economy = "stable";
-        tiers.getEconomySnapshot = () => ({ state: economy, reason: "none", criticalConsumers: 0 });
+        let economyReason = "none";
+        tiers.getEconomySnapshot = () => ({ state: economy, reason: economyReason, criticalConsumers: 0 });
         global.Memory = { settings: { population: { onDemand: { rooms: ["Pilot"] } } }, rooms: { Pilot: {}, Other: {} } };
         global.Game = Object.assign({}, saved.game, { time: 1100 });
         repair.resetLimits();
@@ -70,8 +71,13 @@ module.exports = function (project, assert) {
             "0148 no eligible room: hostiles in the room keep it out of the pilot, reason threat (got " + JSON.stringify(policy.status("Pilot")) + ")");
         delete Memory.rooms.Pilot.enemies;
         economy = "critical";
-        assert(run(pilot) === 1 && policy.status("Pilot").reasons[0] === "economy-critical",
+        assert(run(pilot) === 1 && policy.status("Pilot").reasons[0] === "economy-critical:none",
             "0148 no eligible room: a critical economy is no stable supply, reason economy-critical");
+        economyReason = "spawn";
+        assert(policy.status("Pilot") && run(pilot) !== undefined && policy.status("Pilot").mode !== "ineligible",
+            "0148 no eligible room: spawns being refilled (critical / spawn) is routine, not a supply shortfall - the room stays eligible");
+        economyReason = "none";
+        run(pilot); // back to the critical (non-spawn) decision for the status check below
         run(other);
         assert(policy.status("Other").mode === "off" && policy.status("Other").reasons[0] === "not-opted-in",
             "0148 no eligible room: a room outside population.onDemand.rooms reports not-opted-in");

@@ -44,7 +44,7 @@ const GUARDS = {
     economy: (exp) => {
         const room = Game.rooms[exp.room];
         if (!room) return "room-not-visible";
-        return resourceTiers.getEconomySnapshot(room).state === "critical" ? "economy-critical" : null;
+        return resourceTiers.supplyShortfall(room);
     },
     bucket: (exp, params) => (Game.cpu.bucket < Number(params.minBucket || 2000) ? "bucket" : null),
 };

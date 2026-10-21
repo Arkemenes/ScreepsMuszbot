@@ -331,6 +331,9 @@ function exportStats() {
     Memory.stats.cpu.accounting = cpuMeter.accounting();
     const meter = cpuMeter.snapshot() || previousMeter;
     if (meter) Memory.stats.cpu.meter = meter;
+    // ROADMAP 0147/0156: decision-cache probes - share of calls that repeated the previous inputs
+    const probes = require("./probe").snapshot();
+    if (probes.names.length) Memory.stats.cpu.probes = Object.fromEntries(probes.names.map((p) => [p.name, { rate: p.rate, calls: p.calls }]));
 }
 
 module.exports = exportStats;

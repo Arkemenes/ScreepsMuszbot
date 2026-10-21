@@ -6,8 +6,10 @@
 //      finds no useful work - entering needs the room idle for max(lead, minIdleTicks) AND
 //      energyReport evidence (window coverage, builders at or below maxBuilderUtilization);
 //      once active it holds on "no demand" alone, so a global reset does not force a respawn
-//      a room is eligible only with no threat (defenseActive / enemies) and an economy that is
-//      not "critical" (T4, AC9); losing eligibility ends an active pilot like demand does
+//      a room is eligible only with no threat (defenseActive / enemies) and no supply shortfall
+//      (resourceTiers.supplyShortfall: critical for a reason other than refilling spawns, or
+//      storage under its reserve floor) (T4, AC9); losing eligibility ends an active pilot like
+//      demand does - a spawn refill after a big spawn is routine, never a reason to respawn
 //   4. emergency floor, every room, policy on or off: no builder alive or spawning and a
 //      critical repair or a rescue mark (container / road ratio) -> exactly one builder
 // Never recycles a living builder: the pilot only stops the next respawn.
@@ -46,8 +48,7 @@ function enabledFor(roomName) { return !optOut(roomName); }
 // null when the room may run the pilot (spec: no threat, stable supply), else why not
 function ineligible(room, mem) {
     if (mem.defenseActive || mem.enemies > 0) return "threat";
-    if (resourceTiers.getEconomySnapshot(room).state === "critical") return "economy-critical";
-    return null;
+    return resourceTiers.supplyShortfall(room);
 }
 
 function rescueNeeded(room) {

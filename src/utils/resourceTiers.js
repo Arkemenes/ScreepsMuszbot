@@ -210,6 +210,18 @@ function getEconomyState(room) {
     return getEconomySnapshot(room).state;
 }
 
+// Is the room short of SUPPLY (not just busy refilling)? A "critical" economy whose reason is
+// "spawn" only means spawn/extensions are being refilled - routine after every big spawn and
+// right after a reset - so it is no shortfall; defense has its own (threat) check. Short:
+// critical for any other reason (controller), or storage at/under its reserve floor.
+// Returns the reason or null. Used by the 0148 pilot eligibility and the 0154 economy guard.
+function supplyShortfall(room) {
+    const e = module.exports.getEconomySnapshot(room); // through exports: callers' test stubs apply
+    if (e.state === "critical" && e.reason !== "spawn" && e.reason !== "defense") return "economy-critical:" + e.reason;
+    if (room.storage && (room.storage.store[RESOURCE_ENERGY] || 0) <= reserveFloor(room)) return "reserve";
+    return null;
+}
+
 module.exports = {
     spawnsAndExtensionsFull,
     reserveFloor,
@@ -222,4 +234,5 @@ module.exports = {
     getCriticalConsumers,
     getEconomyReason,
     getEconomyState,
+    supplyShortfall,
 };
