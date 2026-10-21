@@ -22,21 +22,23 @@ const cpuMeter = require("./cpuMeter");
 const rings = {}; // roomName -> [sample], oldest first
 let lastTick = -1;
 let lastAuto = -1;
-const workCache = new Map(); // creep id -> { body, work } (WORK parts, counted once per body)
+const workCache = new Map(); // creep id -> WORK parts (a creep's part types never change)
 
 function windowTicks() {
     const value = Number(config.get("energyReport.windowTicks", 1500));
     return Number.isFinite(value) && value > 0 ? Math.floor(value) : 1500;
 }
 
+// Keyed by id only: the engine rebuilds game objects every tick, so a body-identity check
+// would never hit live.
 function workParts(creep) {
+    const hit = workCache.get(creep.id);
+    if (hit !== undefined) return hit;
     const body = creep.body;
     if (!body) return 0;
-    const hit = workCache.get(creep.id);
-    if (hit && hit.body === body) return hit.work;
     let work = 0;
     for (let i = 0; i < body.length; i++) if (body[i].type === WORK) work++;
-    workCache.set(creep.id, { body, work });
+    workCache.set(creep.id, work);
     return work;
 }
 
@@ -60,13 +62,19 @@ function observe() {
         const name = room.name;
         const roles = {};
         mark = Game.cpu.getUsed();
-        for (const creep of census.allInRoom(name)) {
-            live.add(creep.id);
-            const work = workParts(creep);
-            if (!work || !creep.memory || !creep.memory.role) continue;
-            const slot = roles[creep.memory.role] || (roles[creep.memory.role] = [0, 0]);
-            slot[0] += work;
-            if (acted.has(creep.id)) slot[1] += work;
+        const byRole = census.rolesInRoom(name);
+        for (const role in byRole) {
+            const creeps = byRole[role];
+            let alive = 0, acting = 0;
+            for (let i = 0; i < creeps.length; i++) {
+                const creep = creeps[i];
+                live.add(creep.id);
+                const work = workParts(creep);
+                if (!work) continue;
+                alive += work;
+                if (acted.has(creep.id)) acting += work;
+            }
+            if (alive) roles[role] = [alive, acting];
         }
         const between = Game.cpu.getUsed();
         creepsCpu += between - mark;

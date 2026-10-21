@@ -86,4 +86,11 @@ global.findCreeps = function (role) {
     return list.map((creep) => ({ name: creep.name, room: creep.room.name }));
 };
 
-module.exports = { creepsByRole, allInRoom, allOwned, count, all, total, build };
+// The per-role buckets of `roomName` ({ role: [creep] }), shared and read-only - lets a
+// caller walk every role without allInRoom's flattening copy.
+function rolesInRoom(roomName) {
+    ensure();
+    return byRoomRole[roomName] || {};
+}
+
+module.exports = { creepsByRole, allInRoom, rolesInRoom, allOwned, count, all, total, build };

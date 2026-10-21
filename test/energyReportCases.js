@@ -17,7 +17,9 @@ module.exports = function (project, assert) {
             find: () => [],
         };
         const body = (n) => Array.from({ length: n }, () => ({ type: WORK })).concat([{ type: CARRY }, { type: MOVE }]);
-        const creep = (id, role, work) => ({ id, name: id, room, memory: { role }, body: body(work) });
+        // body is rebuilt on every read, like the live engine's per-tick game objects
+        let bodyReads = 0;
+        const creep = (id, role, work) => ({ id, name: id, room, memory: { role }, get body() { bodyReads++; return body(work); } });
         global.Game = Object.assign({}, saved.game, { time: 1000, myRooms: [room],
             creeps: { b1: creep("b1", "builder", 2), b2: creep("b2", "builder", 2), u1: creep("u1", "upgrader", 3) } });
         ledger.actedIds = () => new Set(["b1", "u1"]);
@@ -41,6 +43,7 @@ module.exports = function (project, assert) {
             "0154 report: income proxy = (stored delta + spend inside the interval) / ticks (got " + r.incomeProxyPerTick + ")");
         assert(r.rcl && r.rcl.etaTicks === Math.ceil((10000 - 450) / 50),
             "0154 report: RCL ETA from the controller progress rate (got " + JSON.stringify(r.rcl) + ")");
+        assert(bodyReads === 3, "0154 report: WORK parts are counted once per creep id, not once per tick (got " + bodyReads + " body reads)");
         const sum = energyReport.summary("ReportRoom", 10);
         assert(sum.ticks === 10 && sum.coverage === 1 && sum.utilization.builder.ratio === 0.5 && sum.incomeProxyPerTick === 15,
             "0154 report: summary() gives Memory.stats the rounded window numbers");
