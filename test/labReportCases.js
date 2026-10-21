@@ -39,6 +39,14 @@ module.exports = function (project, assert) {
         for (let i = 0; i < 95; i++) { Game.time++; labReport.recordRun(labs.out, 5); labReport.observe(); }
         assert(labReport.report("LabRoom").reactionLimited && labReport.summary("LabRoom").busy >= 0.85,
             "0155 report: a lab reacting nearly every tick reads reaction-limited (OPERATE_LAB candidate)");
+        // 100 ticks with the reaction, then 100 without any: gaps between chains are their own share
+        const plan = Memory.rooms.LabRoom.labReaction;
+        delete Memory.rooms.LabRoom.labReaction;
+        for (let i = 0; i < 100; i++) { Game.time++; labReport.observe(); }
+        const gap = labReport.summary("LabRoom");
+        assert(gap.noReaction === 0.5 && gap.outputLabsRunning === 1 && gap.outputLabs === 0.5,
+            "0155 report: ticks without any reaction split from labs a running plan leaves out (got " + JSON.stringify(gap) + ")");
+        Memory.rooms.LabRoom.labReaction = plan;
         assert(/LabRoom/.test(global.labReport("LabRoom")) && global.labReset("LabRoom") === 1 && !Memory.labReport.LabRoom,
             "0155 report: console labReport prints, labReset starts a new epoch");
     } finally {

@@ -14,6 +14,9 @@
 //     idle         none of the above and it did not react (planning, quota, executor gates)
 //   input labs of a running reaction: counted as inputTicks (assigned, not classified)
 //   any other lab: unassigned (counts toward physical availability only)
+// c.gap {ticks, none, outputTicks} counts room-ticks with no reaction assigned at all (gaps
+// between chains) in its own sub-epoch (older epochs predate it), so "labs unused" splits into between-chain gaps and labs a running plan leaves out (a
+// waves step keeps one output lab so its product stays in place for the next step).
 // busy = (reacting + cooldown) / output lab-ticks; >= labReport.reactionLimited (0.85) reads
 // "reaction-limited". The rule is descriptive: it does not by itself approve OPERATE_LAB.
 //
@@ -70,7 +73,11 @@ function observe() {
         c.ticks++;
         c.labTicks += labs.length;
         const outputs = new Map(), inputs = new Set();
-        for (const reaction of labReactions.list(room.name)) {
+        const reactions = labReactions.list(room.name);
+        const gap = c.gap || (c.gap = { since: Game.time, ticks: 0, none: 0, outputTicks: 0 });
+        gap.ticks++;
+        if (!reactions.length) gap.none++;
+        for (const reaction of reactions) {
             for (const id of labReactions.outputsOf(reaction)) outputs.set(id, reaction);
             inputs.add(reaction.input1); inputs.add(reaction.input2);
         }
@@ -79,6 +86,7 @@ function observe() {
             if (!reaction) { if (inputs.has(lab.id)) c.inputTicks = (c.inputTicks || 0) + 1; else c.unassigned++; continue; }
             const state = classify(room.name, lab, reaction);
             c.outputTicks++;
+            gap.outputTicks++;
             c.states[state] = (c.states[state] || 0) + 1;
             if (state === "reacting") { c.reactions++; c.amount += ran.get(lab.id) || 0; }
         }
@@ -93,8 +101,10 @@ function report(roomName) {
     const limit = Number(config.get("labReport.reactionLimited", 0.85));
     const waits = STATES.filter((s) => s !== "reacting" && s !== "cooldown" && c.states[s])
         .map((s) => [s, c.states[s] / Math.max(1, out)]).sort((a, b) => b[1] - a[1]);
+    const gap = c.gap || { ticks: 0, none: 0, outputTicks: 0 }, running = gap.ticks - gap.none;
     return { room: roomName, since: c.since, ticks: c.ticks, labs: c.labTicks / c.ticks,
-        outputLabs: out / c.ticks, assignedShare: c.labTicks ? (out + (c.inputTicks || 0)) / c.labTicks : 0, busy,
+        outputLabs: out / c.ticks, noReaction: gap.ticks ? gap.none / gap.ticks : 0,
+        outputLabsRunning: running > 0 ? gap.outputTicks / running : 0, assignedShare: c.labTicks ? (out + (c.inputTicks || 0)) / c.labTicks : 0, busy,
         reactionLimited: out > 0 && busy >= limit, top: waits.slice(0, 3),
         amountPerTick: c.amount / c.ticks, reactions: c.reactions };
 }
@@ -103,7 +113,8 @@ function line(r) {
     if (!r) return "";
     const pct = (v) => Math.round(v * 100) + "%";
     return "[labReport] " + r.room + " " + r.ticks + "t desde " + r.since + ": " + r.labs.toFixed(1) + " labs, " +
-        r.outputLabs.toFixed(1) + " de saída (" + pct(r.assignedShare) + " dos labs em uso); ocupadas " + pct(r.busy) +
+        r.outputLabs.toFixed(1) + " de saída (" + pct(r.assignedShare) + " dos labs em uso; " + r.outputLabsRunning.toFixed(1) +
+        " de saída com reação; sem reação " + pct(r.noReaction) + "); ocupadas " + pct(r.busy) +
         (r.reactionLimited ? " (limitado pela reação)" : "") + "; " + r.amountPerTick.toFixed(2) + " un/t; espera: " +
         (r.top.map(([s, v]) => s + " " + pct(v)).join(", ") || "-");
 }
@@ -114,6 +125,7 @@ function summary(roomName) {
     if (!r) return null;
     const round = (v) => Math.round(v * 1000) / 1000;
     return { ticks: r.ticks, busy: round(r.busy), outputLabs: round(r.outputLabs), assignedShare: round(r.assignedShare),
+        noReaction: round(r.noReaction), outputLabsRunning: round(r.outputLabsRunning),
         amountPerTick: round(r.amountPerTick), reactionLimited: r.reactionLimited,
         top: Object.fromEntries(r.top.map(([s, v]) => [s, round(v)])) };
 }

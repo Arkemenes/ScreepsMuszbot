@@ -6335,13 +6335,32 @@
                     },
                     "refId": "B"
                   }
+                },
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "hidden": false,
+                    "query": {
+                      "datasource": {
+                        "name": "${DS_PROMETHEUS}"
+                      },
+                      "group": "prometheus",
+                      "kind": "DataQuery",
+                      "spec": {
+                        "expr": "100 * screeps_stat_value{path=\"rooms.labReport.noReaction\", room=~\"$room\"}",
+                        "legendFormat": "sem reação {{room}}"
+                      },
+                      "version": "v0"
+                    },
+                    "refId": "C"
+                  }
                 }
               ],
               "queryOptions": {},
               "transformations": []
             }
           },
-          "description": "labReport (0155): parcela de lab-ticks reagindo; ≥ labReport.reactionLimited (85%) lê como limitado pela reação. Inclui a parcela de labs atribuídos.",
+          "description": "labReport (0155): ocupado = (reagindo + cooldown) ÷ lab-ticks de saída; ≥ 85% lê como limitado pela reação, mas só olha labs atribuídos. Atribuídos = labs em uso ÷ labs; sem reação = ticks sem cadeia (intervalo entre cadeias).",
           "id": 337,
           "links": [],
           "title": "Labs ocupados por sala (%)",
@@ -6590,13 +6609,32 @@
                     },
                     "refId": "B"
                   }
+                },
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "hidden": false,
+                    "query": {
+                      "datasource": {
+                        "name": "${DS_PROMETHEUS}"
+                      },
+                      "group": "prometheus",
+                      "kind": "DataQuery",
+                      "spec": {
+                        "expr": "screeps_stat_value{path=\"rooms.labReport.outputLabsRunning\", room=~\"$room\"}",
+                        "legendFormat": "saídas com reação {{room}}"
+                      },
+                      "version": "v0"
+                    },
+                    "refId": "C"
+                  }
                 }
               ],
               "queryOptions": {},
               "transformations": []
             }
           },
-          "description": "labReport: quantidade produzida por tick e labs de saída.",
+          "description": "labReport: produção por tick, labs de saída (média) e labs de saída enquanto há reação (abaixo do máximo = passos waves com uma saída).",
           "id": 339,
           "links": [],
           "title": "Produção dos labs por sala (unidades/tick)",
