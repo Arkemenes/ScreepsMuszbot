@@ -603,6 +603,17 @@ const defaults = {
             rescueRoadRatio: 0.3,
         },
     },
+    // ROADMAP 0154 T5-T6 (utils/experiments): temporary heap overlays on allowlisted settings
+    experiments: {
+        // off: reconcile still closes every running experiment (reason "off"), start refuses
+        enabled: true,
+        // a global reset closes running experiments (spec: reset removes the overlay); false
+        // re-applies them from Memory.experiments on the first tick instead
+        abortOnReset: true,
+        // longest run start() accepts, and the closed records kept for experiment.status()
+        maxTicks: 20000,
+        keepClosed: 10,
+    },
     miner: {
         // fraction of capacity the miner keeps its adjacent source-defense
         // tower topped up to (unconditional priority - see roles/miner.js)
@@ -1015,7 +1026,56 @@ function walk(node, segments) {
 // used to split the same few dozen strings on every call.
 const segmentCache = {};
 
-function get(path, fallback) {
+// ROADMAP 0154 T5: experiment overlays, heap only - path -> { global: entry, rooms: { name: entry } },
+// entry = { value, owner, generation }. utils/experiments is the only writer; Memory.settings
+// (the base) is never written by an overlay. A room-scoped overlay applies only when the reader
+// passes that room as get()'s third argument.
+const overlays = {};
+let overlayCount = 0;
+
+function setOverlay(path, roomName, entry) {
+    const slot = overlays[path] || (overlays[path] = { global: null, rooms: {} });
+    const had = roomName ? !!slot.rooms[roomName] : !!slot.global;
+    if (roomName) slot.rooms[roomName] = entry;
+    else slot.global = entry;
+    if (!had) overlayCount++;
+}
+
+// removes the overlay only when owner and generation still match; true when it did
+function clearOverlay(path, roomName, owner, generation) {
+    const slot = overlays[path];
+    const entry = slot && (roomName ? slot.rooms[roomName] : slot.global);
+    if (!entry || entry.owner !== owner || entry.generation !== generation) return false;
+    if (roomName) delete slot.rooms[roomName];
+    else slot.global = null;
+    if (!slot.global && !Object.keys(slot.rooms).length) delete overlays[path];
+    overlayCount--;
+    return true;
+}
+
+function overlayOf(path, roomName) {
+    const slot = overlays[path];
+    if (!slot) return null;
+    return (roomName && slot.rooms[roomName]) || slot.global || null;
+}
+
+// every live overlay as { path, room (null = global), entry }; [] without any
+function overlayEntries() {
+    if (!overlayCount) return [];
+    const out = [];
+    for (const path of Object.keys(overlays)) {
+        const slot = overlays[path];
+        if (slot.global) out.push({ path, room: null, entry: slot.global });
+        for (const room of Object.keys(slot.rooms)) out.push({ path, room, entry: slot.rooms[room] });
+    }
+    return out;
+}
+
+function get(path, fallback, roomName) {
+    if (overlayCount) {
+        const entry = overlayOf(path, roomName);
+        if (entry) return entry.value;
+    }
     const segments = segmentCache[path] || (segmentCache[path] = path.split("."));
     const override = walk(Memory.settings, segments);
     if (override !== undefined) return override;
@@ -1024,4 +1084,13 @@ function get(path, fallback) {
     return fallback;
 }
 
-module.exports = { get, defaults };
+// the base value (Memory.settings, else defaults) - what get() returns without any overlay
+function base(path, fallback) {
+    const segments = segmentCache[path] || (segmentCache[path] = path.split("."));
+    const override = walk(Memory.settings, segments);
+    if (override !== undefined) return override;
+    const def = walk(defaults, segments);
+    return def !== undefined ? def : fallback;
+}
+
+module.exports = { get, defaults, base, setOverlay, clearOverlay, overlayOf, overlayEntries };

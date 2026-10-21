@@ -205,6 +205,10 @@ function exportStats() {
     // 2,048,000 byte cap is a dashboard-side constant, not collected here.
     Memory.stats.memory.used = RawMemory.get().length;
 
+    // ROADMAP 0154 T5: running experiments and how the last one ended (absent until the first)
+    const experiments = require("./experiments").stats();
+    if (experiments) Memory.stats.experiments = experiments;
+
     // ROADMAP 0079: cpu.heap - only the 3 fields the dashboard actually
     // reads (total_heap_size/heap_size_limit/used_heap_size); isolated-VM
     // only, guarded for runtimes that don't support it (constitution §3).
@@ -303,6 +307,9 @@ function exportStats() {
                     idleFor: onDemand.idleFor === undefined ? null : onDemand.idleFor, lead: onDemand.lead === undefined ? null : onDemand.lead,
                     active: onDemand.mode === "active" ? 1 : 0, floor: onDemand.floor ? 1 : 0,
                     reason: onDemand.reasons.length ? String(onDemand.reasons[0]) : "" };
+                // T3: ticks from the pilot's end to a builder alive or spawning again
+                const lastRecovery = Memory.rooms[roomName] && Memory.rooms[roomName].onDemandLast;
+                if (lastRecovery) roomStats.onDemand.recoveryTicks = lastRecovery.recoveryTicks;
             }
         }
     }

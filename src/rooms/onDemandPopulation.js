@@ -14,8 +14,10 @@
 //
 // Memory.rooms[r].onDemand = { state, since, detectionTick?, reasons? } is the only
 // persistent state (pilot ownership): "active" while the policy holds builder 0,
-// "recovering" from the tick demand came back until a builder exists again. Gone when the
-// room leaves the policy. Last decision per room in the heap for onDemandStatus(); every
+// "recovering" from the tick demand came back (or the room left the policy / lost eligibility
+// while active) until a builder exists again; that recovery time lands in
+// Memory.rooms[r].onDemandLast { detectionTick, builderTick, recoveryTicks, reasons } (T3).
+// Dropped when the room leaves the policy while not active. Last decision per room in the heap for onDemandStatus(); every
 // mode but "active" carries the reason (off: not-opted-in / flag-off / manual-override).
 const config = require("../utils/config");
 const census = require("../utils/census");
@@ -27,9 +29,14 @@ const resourceTiers = require("../utils/resourceTiers");
 
 const last = {}; // roomName -> last decision
 
-// null when the policy covers the room, else why not
+// null when the policy covers the room, else why not. population.onDemand.pilot (per room,
+// read with the room so a 0154 experiment overlay applies) wins over the rooms list:
+// true opts the room in, false out, unset leaves it to the list.
 function optOut(roomName) {
     if (config.get("population.onDemand.enabled", true) === false) return "flag-off";
+    const pilot = config.get("population.onDemand.pilot", undefined, roomName);
+    if (pilot === true) return null;
+    if (pilot === false) return "not-opted-in";
     const rooms = config.get("population.onDemand.rooms", []);
     return rooms === "all" || (Array.isArray(rooms) && rooms.indexOf(roomName) >= 0) ? null : "not-opted-in";
 }
@@ -61,8 +68,25 @@ function evidenceGap(roomName) {
     const ctx = energyReport.context(roomName);
     if (!ctx) return "energyReport-coverage";
     const util = ctx.utilization && ctx.utilization.builder;
-    if (util && util.ratio > Number(config.get("population.onDemand.maxBuilderUtilization", 0.1))) return "builder-busy";
+    if (util && util.ratio > Number(config.get("population.onDemand.maxBuilderUtilization", 0.1, roomName))) return "builder-busy";
     return null;
+}
+
+// an active pilot ends: legacy count again, timed until a builder exists (T3, AC5/AC7)
+function endPilot(mem, reasons) {
+    mem.onDemand = { state: "recovering", since: mem.onDemand.since, detectionTick: Game.time, reasons };
+}
+
+// recovering closes once a builder is alive or spawning (census) - the time from detection
+// is kept in Memory.rooms[r].onDemandLast - or at once when the final target wants none
+function closeRecovery(name, mem, wanted) {
+    const pilot = mem.onDemand;
+    if (!pilot || pilot.state !== "recovering") return;
+    const arrived = census.count(name, "builder", 0) > 0;
+    if (!arrived && wanted.builder >= 1) return;
+    mem.onDemandLast = { detectionTick: pilot.detectionTick, builderTick: arrived ? Game.time : null,
+        recoveryTicks: arrived ? Game.time - pilot.detectionTick : null, reasons: pilot.reasons };
+    delete mem.onDemand;
 }
 
 function apply(room, wanted, mem) {
@@ -71,7 +95,13 @@ function apply(room, wanted, mem) {
     const manual = mem.wantedOverride && typeof mem.wantedOverride.builder === "number";
     const out = manual ? null : optOut(name);
     if (manual) { decision.mode = "manual"; decision.reasons = ["manual-override"]; }
-    else if (out) { delete mem.onDemand; decision.reasons = [out]; }
+    else if (out) {
+        // leaving the policy (flag off, room off the list, an experiment overlay closed): an
+        // active pilot still records its recovery, anything else is dropped
+        if (mem.onDemand && mem.onDemand.state === "active") endPilot(mem, [out]);
+        else if (mem.onDemand && mem.onDemand.state !== "recovering") delete mem.onDemand;
+        decision.reasons = [out];
+    }
     else {
         const demand = builderDemand.evaluate(room);
         const pilot = mem.onDemand;
@@ -80,12 +110,10 @@ function apply(room, wanted, mem) {
         if (why || demand.useful) {
             decision.mode = why ? "ineligible" : "demand";
             decision.reasons = why ? [why] : demand.reasons;
-            if (pilot && pilot.state === "active") {
-                mem.onDemand = { state: "recovering", since: pilot.since, detectionTick: Game.time, reasons: decision.reasons };
-            }
+            if (pilot && pilot.state === "active") endPilot(mem, decision.reasons);
         } else {
             const idleFor = Game.time - demand.idleSince;
-            const needed = Math.max(demand.lead, Number(config.get("population.onDemand.minIdleTicks", 300)));
+            const needed = Math.max(demand.lead, Number(config.get("population.onDemand.minIdleTicks", 300, name)));
             decision.idleFor = idleFor;
             if (pilot && pilot.state === "active") decision.mode = "active";
             else if (idleFor < needed) { decision.mode = "candidate"; decision.reasons = ["idle " + idleFor + "/" + needed]; }
@@ -96,12 +124,12 @@ function apply(room, wanted, mem) {
             }
             if (decision.mode === "active") wanted.builder = 0;
         }
-        if (mem.onDemand && mem.onDemand.state === "recovering" && census.count(name, "builder", 0) > 0) delete mem.onDemand;
     }
     if (!(wanted.builder >= 1) && census.count(name, "builder", 0) === 0) {
         const mark = rescueNeeded(room);
         if (mark) { wanted.builder = 1; decision.floor = mark; }
     }
+    if (!manual) closeRecovery(name, mem, wanted);
     decision.builder = wanted.builder;
     last[name] = decision;
     return wanted;

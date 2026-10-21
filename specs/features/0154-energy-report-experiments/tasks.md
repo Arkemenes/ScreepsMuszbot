@@ -2,7 +2,7 @@
 
 > **Decisão posterior — 16/10/2026:** implementação local autorizada passo a passo no [plano de execução incremental](../../../docs/plano-execucao-incremental-2026-10-16.md). Histórico persistente sofisticado adiado até necessidade demonstrada; cobertura inicial no heap, com lacunas explícitas. Gates operacionais continuam válidos.
 
-- **Status:** in-progress — etapa 2/T1–T2 implementada localmente; coleta ampliada, relatórios/experimentos e aceite live pendentes.
+- **Status:** in-progress — T1–T2 e T5–T6 (experimentos) publicados; energyReport parcial (T4); T3, T7 e aceite live pendentes.
 - **Issue:** ARK-133; pacote T1/T2 em ARK-143; consolidação ARK-141.
 - **Revisão documental:** 2026-10-16.
 - **Autorização:** implementação local incremental; publicação/ativação e gastos seguem os gates do plano de execução.
@@ -19,8 +19,8 @@
 - [x] **T2 — Limitar controller/tick e testar dois creeps/boost/efeito/tick seguinte.** AC1,9 offline. Verificação: `0154 shared RCL8 next tick`.
 - [ ] **T3 — Completar fluxos/waits/atribuição e qualidade necessários aos consumidores futuros.** Parcial: eventos WORK e qualidade mínima no heap entregues em T1/T2; persistência sofisticada adiada. AC2,4,7. Verificação futura: `0154 event attribution; 0154 bounded hooks`.
 - [ ] **T4 — Consumir 0157 em energyReport com utilização/ocupação/RCL/ETA/break-even.** AC3–5. Parcial 2026-10-20 (0154-B, publicado): `utils/energyReport.js` com gasto/categoria, utilização de WORK por role, renda proxy, ETA de RCL, cobertura e `context()`; smoke `0154 report denominators` + 7 assertions `0154 report:`. 2026-10-21: utilização conta harvest aceito (miners deixam de ler 0%) e lê `energyLedger.actedIds()` em vez de copiar eventos (custo live ~0,25 CPU/tick); smoke `0154 acted ids`. Faltam consumo de 0157 e break-even de compostos. Verificação futura: `0154 report denominators`.
-- [ ] **T5 — Adicionar overlay/registry serializável e acesso central dos settings permitidos.** AC6. Verificação futura: `0154 experiment overlay`.
-- [ ] **T6 — Integrar recuperação antes de spawn, off/reset/manual/ABA e invalidação needs.** AC6. Verificação futura: `0154 experiment recovery`.
+- [x] **T5 — Adicionar overlay/registry serializável e acesso central dos settings permitidos.** AC6. Feito 2026-10-21 (publicado): overlay no heap em `utils/config` (`get(path, fallback, sala)`; sem overlay ativo o custo é uma comparação), allowlist em `utils/experiments.SETTINGS` (`population.onDemand.pilot`, `minIdleTicks`, `maxBuilderUtilization`, escopo sala; leitores de `rooms/onDemandPopulation` migrados para passar a sala). `Memory.experiments` com registros serializáveis; guardas/métricas por id registrado. Um por sala e por caminho qualificado; start recusa allowlist/tipo/conflito/guarda já falhando. Smoke `0154 experiment overlay` (10).
+- [x] **T6 — Integrar recuperação antes de spawn, off/reset/manual/ABA e invalidação needs.** AC6. Feito 2026-10-21 (publicado): `reconcile()` sob guard logo após `memoryCleanup`, antes de needs/spawn, mesmo com a feature off: prazo → closed; guarda/off/reset (`experiments.abortOnReset`)/`setSetting` (revisão por path)/edição direta observável → aborted com motivo; remove só overlay do owner+geração; órfão removido; invalidação de needs em toda mudança. ABA direto não detectável (documentado). Smoke `0154 experiment recovery` (11). Console `experiment.*`, `setSetting`; stats `experiments` + painel Grafana.
 - [ ] **T7 — Medir overhead real e qualidade de atribuição após autorização.** AC5,7. Verificação futura: `LIVE-0154: coleta e relatório antes de endTick`.
 
 ## Definition of done futura

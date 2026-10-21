@@ -85,10 +85,41 @@ module.exports = function (project, assert) {
             "0148 no eligible room: a threat while active ends the pilot (recovering, reason threat)");
         delete Memory.rooms.Pilot.defenseActive;
         Memory.settings.population.onDemand.enabled = false;
-        assert(run(pilot) === 1 && !Memory.rooms.Pilot.onDemand && policy.status("Pilot").reasons[0] === "flag-off",
-            "0148 no eligible room: the global flag off reports flag-off and drops the pilot state");
+        assert(run(pilot) === 1 && Memory.rooms.Pilot.onDemand.state === "recovering" && policy.status("Pilot").reasons[0] === "flag-off",
+            "0148 no eligible room: the global flag off reports flag-off; a recovery under way keeps timing");
+        builders = 1;
+        assert(run(pilot) === 1 && !Memory.rooms.Pilot.onDemand && Memory.rooms.Pilot.onDemandLast.reasons[0] === "threat",
+            "0148 no eligible room: with the flag off the recovery still closes once the builder exists");
+        delete Memory.rooms.Pilot.onDemandLast;
         delete Memory.settings.population.onDemand.enabled;
         Memory.settings.population.onDemand.rooms = [];
+
+        // T3 (AC5/AC7): an experiment overlay opts a room in; closing it mid-pilot hands the room
+        // back to legacy in the same tick (needs invalidated) and times the respawn
+        const experiments = require(src("utils/experiments"));
+        const config = require(src("utils/config"));
+        Game.rooms = { Other: { name: "Other", controller: { my: true, level: 8 } } };
+        Game.time = 2000; builders = 0;
+        result = { useful: false, reasons: [], lead: 294, idleSince: 1000 }; ctx = { utilization: { builder: { ratio: 0.02 } } };
+        assert(run(other) === 1 && policy.status("Other").reasons[0] === "not-opted-in", "0148 recovery ownership: before the experiment Other is legacy");
+        const started = experiments.start({ name: "pilot-other", room: "Other", setting: "population.onDemand.pilot", value: true, ticks: 500, metrics: ["onDemand"] });
+        assert(started.ok && run(other) === 0 && Memory.rooms.Other.onDemand.state === "active",
+            "0148 recovery ownership: the pilot overlay opts Other in and the idle room enters the pilot (got " + JSON.stringify(started) + ")");
+        Game.time = 2010;
+        experiments.stop(started.id);
+        assert(run(other) === 1 && Memory.rooms.Other.onDemand.state === "recovering" && Memory.rooms.Other.onDemand.detectionTick === 2010 &&
+            Memory.rooms.Other.onDemand.reasons[0] === "not-opted-in",
+            "0148 recovery ownership: stopping the experiment mid-pilot asks for the legacy builder at once and starts the recovery clock");
+        builders = 1; Game.time = 2013;
+        run(other);
+        assert(!Memory.rooms.Other.onDemand && Memory.rooms.Other.onDemandLast.recoveryTicks === 3 && Memory.rooms.Other.onDemandLast.builderTick === 2013,
+            "0148 emergency after death: the time from the pilot's end to a builder alive/spawning is recorded (got " + JSON.stringify(Memory.rooms.Other.onDemandLast) + ")");
+        Memory.rooms.Other.onDemand = { state: "recovering", since: 1, detectionTick: 2013, reasons: ["build"] }; builders = 0;
+        run(other, 0);
+        assert(!Memory.rooms.Other.onDemand && Memory.rooms.Other.onDemandLast.recoveryTicks === null,
+            "0148 recovery ownership: recovering with a final target of 0 builders closes at once, without a recovery time");
+        delete Memory.rooms.Other.onDemandLast;
+        assert(config.overlayEntries().length === 0, "0148 recovery ownership: no overlay left behind by the experiment");
 
         builders = 0;
         list = [{ structureType: STRUCTURE_ROAD, hits: 100, hitsMax: 5000 }];

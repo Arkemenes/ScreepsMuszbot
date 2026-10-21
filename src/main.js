@@ -305,6 +305,8 @@ module.exports.loop = function () {
             guard("planStore", () => utils.planStore.activate());
             // ROADMAP 0146: one pass per global that drops dead/derived fields from Memory.rooms
             guard("memoryCleanup", () => require("./utils/memoryCleanup").run());
+            // ROADMAP 0154 T6: close/re-apply experiment overlays before needs and spawn read settings
+            guard("experiments", () => require("./utils/experiments").reconcile());
             // Resolve the central warehouse before any economy/role reads it.
             _.forEach(Game.myRooms, (r) =>
                 guard("bootstrapStorage:" + r.name, () => require("./utils/bootstrapStorage").prepareRoom(r))

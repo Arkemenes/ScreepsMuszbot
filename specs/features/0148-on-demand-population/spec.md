@@ -2,7 +2,7 @@
 
 > **Decisão posterior — 16/10/2026:** implementação local autorizada passo a passo no [plano de execução incremental](../../../docs/plano-execucao-incremental-2026-10-16.md). Histórico persistente sofisticado adiado até necessidade demonstrada; cobertura inicial no heap, com lacunas explícitas. Gates operacionais continuam válidos.
 
-- **Status:** in-progress — T1 (builderDemand) e T2 (precedência + piso emergencial) publicados em 2026-10-21; piloto W7N49 ligado por padrão (decisão do usuário: features novas ligadas, conciliada com o opt-in por sala da spec); T4 (elegibilidade sem ameaça/economia estável, motivo por sala, fallback §9 no smoke) publicado no mesmo dia; T3 e T5 pendentes.
+- **Status:** in-progress — T1 (builderDemand) e T2 (precedência + piso emergencial) publicados em 2026-10-21; piloto W7N49 ligado por padrão (decisão do usuário: features novas ligadas, conciliada com o opt-in por sala da spec); T4 (elegibilidade sem ameaça/economia estável, motivo por sala, fallback §9 no smoke) e T3 (setting por sala `pilot` sob overlay de experimento da 0154, recuperação cronometrada em `onDemandLast`) publicados no mesmo dia; T5 (piloto live) pendente.
 - **Issue:** ARK-135 (filha de ARK-128).
 - **Created / revisão documental:** 2026-10-15.
 - **Contrato integrado e aceite:** [planejamento vigente](../../../docs/planejamento-integrado-2026-10-16.md); análises anteriores são históricas.
