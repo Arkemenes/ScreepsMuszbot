@@ -41,6 +41,9 @@ module.exports = function (project, assert) {
             "0154 report: income proxy = (stored delta + spend inside the interval) / ticks (got " + r.incomeProxyPerTick + ")");
         assert(r.rcl && r.rcl.etaTicks === Math.ceil((10000 - 450) / 50),
             "0154 report: RCL ETA from the controller progress rate (got " + JSON.stringify(r.rcl) + ")");
+        const sum = energyReport.summary("ReportRoom", 10);
+        assert(sum.ticks === 10 && sum.coverage === 1 && sum.utilization.builder.ratio === 0.5 && sum.incomeProxyPerTick === 15,
+            "0154 report: summary() gives Memory.stats the rounded window numbers");
         const partial = energyReport.report("ReportRoom", 20);
         assert(partial.coverage === 0.5 && energyReport.context("ReportRoom", 20) === null && energyReport.context("ReportRoom", 10) !== null,
             "0154 report: missing ticks lower coverage and context() refuses to answer below energyReport.minCoverage");

@@ -149,6 +149,17 @@ global.energyReport = function (roomName, n) {
     return names.map((name) => line(report(name, n))).join("\n");
 };
 
+// Compact numbers for Memory.stats (Grafana / live checks): rounded, no per-tick series.
+function summary(roomName, n) {
+    const r = report(roomName, n);
+    const round = (v, d = 2) => v === null || v === undefined ? null : Math.round(v * 10 ** d) / 10 ** d;
+    const utilization = {};
+    for (const [role, u] of Object.entries(r.utilization)) utilization[role] = { ratio: round(u.ratio), work: round(u.workAlive, 1) };
+    return { ticks: r.observedTicks, coverage: round(r.coverage), spendPerTick: round(r.spendPerTick),
+        incomeProxyPerTick: round(r.incomeProxyPerTick), storedDelta: r.storedDelta, utilization,
+        rclEtaTicks: r.rcl ? r.rcl.etaTicks : null };
+}
+
 function reset() { for (const name of Object.keys(rings)) delete rings[name]; lastTick = -1; lastAuto = -1; workCache.clear(); }
 
-module.exports = { observe, report, context, reset };
+module.exports = { observe, report, summary, context, reset };
