@@ -12,6 +12,8 @@ const powerSpawn = {
     run(structure) {
         if (!config.get("powerSpawn.enabled", true)) return;
         if ((structure.store[RESOURCE_POWER] || 0) < 1) return;
+        // ROADMAP 0150 T1: only while the GPL it buys pays back within power.maxPaybackDays
+        if (!require("../utils/powerEconomics").allows(structure.room)) return;
 
         structure.processPower();
     },

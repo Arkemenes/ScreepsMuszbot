@@ -329,6 +329,7 @@ function exportStats() {
     Memory.stats.gcl.level = Game.gcl.level;
     // ROADMAP 0150: GPL and what the power spawns hold, for the processing decision
     if (Game.gpl) Memory.stats.gpl = { level: Game.gpl.level, progress: Game.gpl.progress, progressTotal: Game.gpl.progressTotal };
+    Memory.stats.power = require("./powerEconomics").summary();
 
     // Collect CPU stats
     Memory.stats.cpu.bucket = Game.cpu.bucket;

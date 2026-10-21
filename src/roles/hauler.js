@@ -1118,6 +1118,8 @@ function powerFeedJob(room) {
     const powerSpawn = roomCache.structuresByType(room, STRUCTURE_POWER_SPAWN)[0];
     if (!powerSpawn) return null;
     if (powerSpawn.store.getFreeCapacity(RESOURCE_POWER) <= 0) return null;
+    // ROADMAP 0150 T1: no feeding while processing is paused (payback / supply)
+    if (!require("../utils/powerEconomics").allows(room)) return null;
     const from = mineralWithdrawSource(room, RESOURCE_POWER);
     if (!from) return null;
     return {

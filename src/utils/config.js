@@ -1000,8 +1000,19 @@ const defaults = {
     },
     powerSpawn: {
         // structures/powerSpawn.js (ROADMAP 0051): off switch - processPower()
-        // is otherwise unconditional whenever any Power sits in the store
+        // otherwise runs whenever Power sits in the store and utils/powerEconomics allows it
         enabled: true,
+    },
+    // ROADMAP 0150 T1 (utils/powerEconomics): process power into GPL while it pays back
+    power: {
+        economicGate: true,
+        // first useful operator (GENERATE_OPS + OPERATE_LAB); a milestone, not a cap
+        targetLevel: 3,
+        // user decision 2026-10-21: up to 90 days
+        maxPaybackDays: 90,
+        operatedLabs: 2,
+        ticksPerDay: 25000,
+        checkTicks: 500,
     },
     // ROADMAP 0145: optional live comparison of a pure reference decision with the
     // candidate that actually acts. Off by default; capped per tick (utils/shadowBudget.js).

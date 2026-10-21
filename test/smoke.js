@@ -16425,6 +16425,7 @@ require("./terminalReportCases")(PROJECT, assert);
 require("./extractorEconomicsCases")(PROJECT, assert);
 require("./boostBreakevenCases")(PROJECT, assert);
 require("./boostExecutorCases")(PROJECT, assert);
+require("./powerEconomicsCases")(PROJECT, assert);
 require("./listingReuseCases")(PROJECT, assert);
 require("./craftPurchaseCases")(PROJECT, assert);
 require("./craftRecoveryCases")(PROJECT, assert);
