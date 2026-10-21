@@ -3055,7 +3055,7 @@
                       "kind": "DataQuery",
                       "spec": {
                         "editorMode": "code",
-                        "expr": "10000 / clamp_min(deriv(screeps_cpu_bucket[5m]), 0.0001)",
+                        "expr": "(10000 - screeps_cpu_bucket) / clamp_min(deriv(screeps_cpu_bucket[30m]), 0.0001)",
                         "legendFormat": "Tempo até próximo GCL",
                         "range": true
                       },
@@ -3069,7 +3069,7 @@
               "transformations": []
             }
           },
-          "description": "",
+          "description": "Tempo até o bucket encher: o que falta (10000 − bucket) dividido pelo ganho por segundo nos últimos 30 min. Valor enorme = bucket parado ou caindo.",
           "id": 257,
           "links": [],
           "title": "Fill Bucket",
@@ -4440,8 +4440,8 @@
                       "kind": "DataQuery",
                       "spec": {
                         "editorMode": "code",
-                        "expr": "screeps_stat_value{path=\"cpu.accounting.used\"}",
-                        "legendFormat": "CPU usado",
+                        "expr": "screeps_cpu_limit - deriv(screeps_cpu_bucket[30m]) / deriv(screeps_game_time[30m])\nand on() max_over_time(screeps_cpu_bucket[30m]) < 9950",
+                        "legendFormat": "CPU real",
                         "range": true
                       },
                       "version": "v0"
@@ -4454,7 +4454,7 @@
               "transformations": []
             }
           },
-          "description": "CPU inferida pelo balanço do bucket em ticks consecutivos válidos, janela móvel padrão600ticks. Inclui custos após o fechamento do script. Script observado usa os mesmos ticks pareados. Fronteiras0/10000, gaps e mudança de limite são excluídos; veja cpu.accounting.validTicks/skippedTicks/missingEndTicks. Residual não identifica GC ou serialização isoladamente.",
+          "description": "CPU real = limite − ganho do bucket por tick, pela tendência dos últimos 30 min (deriv(bucket) / deriv(tick)). Não depende do heap do script, então um deploy (global reset) vira um degrau pequeno em vez de reiniciar a média. Inclui tudo o que o bucket paga: script, serialização da Memory e motor. Sem valor enquanto o bucket encostou em 10000 nos últimos 30 min (cheio, o bucket não registra o consumo). Um generatePixel derruba o bucket em 10000 e distorce a janela que o contém.",
           "id": 5,
           "links": [],
           "title": "CPU pelo bucket",
@@ -4505,7 +4505,7 @@
                 "orientation": "auto",
                 "reduceOptions": {
                   "calcs": [
-                    "median"
+                    "lastNotNull"
                   ],
                   "fields": "",
                   "values": false
@@ -4542,8 +4542,10 @@
                       "group": "prometheus",
                       "kind": "DataQuery",
                       "spec": {
-                        "expr": "screeps_stat_value{path=\"cpu.accounting.used\"}",
-                        "legendFormat": "CPU pelo bucket (média)"
+                        "editorMode": "code",
+                        "expr": "screeps_cpu_limit - deriv(screeps_cpu_bucket[30m]) / deriv(screeps_game_time[30m])\nand on() max_over_time(screeps_cpu_bucket[30m]) < 9950",
+                        "legendFormat": "CPU real (tendência do bucket, 30 min)",
+                        "range": true
                       },
                       "version": "v0"
                     },
@@ -4601,8 +4603,10 @@
                       "group": "prometheus",
                       "kind": "DataQuery",
                       "spec": {
-                        "expr": "screeps_stat_value{path=\"cpu.accounting.scriptUsed\"}",
-                        "legendFormat": "Script observado (pares da janela)"
+                        "editorMode": "code",
+                        "expr": "screeps_stat_value{path=\"cpu.meter.used\"}",
+                        "legendFormat": "Script (janela de 60 ticks)",
+                        "range": true
                       },
                       "version": "v0"
                     },
@@ -4620,12 +4624,54 @@
                       "group": "prometheus",
                       "kind": "DataQuery",
                       "spec": {
-                        "expr": "screeps_stat_value{path=\"cpu.accounting.warmUsed\"}",
-                        "legendFormat": "CPU aquecida (sem o tick frio do deploy)"
+                        "editorMode": "code",
+                        "expr": "screeps_stat_value{path=\"cpu.meter.intentCpu\"}",
+                        "legendFormat": "Operações base (intents × 0,2)",
+                        "range": true
                       },
                       "version": "v0"
                     },
                     "refId": "E"
+                  }
+                },
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "hidden": false,
+                    "query": {
+                      "datasource": {
+                        "name": "${DS_PROMETHEUS}"
+                      },
+                      "group": "prometheus",
+                      "kind": "DataQuery",
+                      "spec": {
+                        "editorMode": "code",
+                        "expr": "screeps_stat_value{path=\"cpu.meter.used\"} - ignoring(path) screeps_stat_value{path=\"cpu.meter.intentCpu\"}",
+                        "legendFormat": "Lógica do script (script − base)",
+                        "range": true
+                      },
+                      "version": "v0"
+                    },
+                    "refId": "F"
+                  }
+                },
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "hidden": false,
+                    "query": {
+                      "datasource": {
+                        "name": "__expr__"
+                      },
+                      "group": "__expr__",
+                      "kind": "DataQuery",
+                      "spec": {
+                        "expression": "$A - $D",
+                        "type": "math"
+                      },
+                      "version": "v0"
+                    },
+                    "refId": "G"
                   }
                 }
               ],
@@ -4633,7 +4679,7 @@
               "transformations": []
             }
           },
-          "description": "CPU inferida pelo balanço do bucket em ticks consecutivos válidos, janela móvel padrão600ticks. Inclui custos após o fechamento do script. Script observado usa os mesmos ticks pareados. Fronteiras0/10000, gaps e mudança de limite são excluídos; veja cpu.accounting.validTicks/skippedTicks/missingEndTicks. Residual não identifica GC ou serialização isoladamente. A série CPU aquecida (warmUsed) exclui o tick frio do último deploy (167–197 CPU), que infla a média da janela por ~600 ticks.",
+          "description": "CPU real = limite − ganho do bucket por tick, pela tendência dos últimos 30 min (deriv(bucket) / deriv(tick)). Não depende do heap do script, então um deploy (global reset) vira um degrau pequeno em vez de reiniciar a média. Inclui tudo o que o bucket paga: script, serialização da Memory e motor. Sem valor enquanto o bucket encostou em 10000 nos últimos 30 min (cheio, o bucket não registra o consumo). Um generatePixel derruba o bucket em 10000 e distorce a janela que o contém.\n\nScript: média de Game.cpu.getUsed() no fim do loop, janela de 60 ticks (cpu.meter.used). Operações base: cada ação que o jogo aceita (harvest, move, transfer, repair, runReaction, spawn...) custa 0,2 CPU fixo; contadas por utils/intentMeter (cpu.meter.intentCpu, detalhe por ação em cpu.meter.intents). Só caem com menos creeps/estruturas ou menos ações por creep. Lógica do script = script − base: o que otimizar código reduz. Fora do script = CPU real − script: serialização da Memory e custo do motor após o loop.",
           "id": 7,
           "links": [],
           "title": "CPU pelo bucket e script vs limite",
@@ -4742,6 +4788,93 @@
                         "value": "Percentage"
                       }
                     ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "G",
+                      "scope": "series"
+                    },
+                    "properties": [
+                      {
+                        "id": "displayName",
+                        "value": "Fora do script (serialização, motor)"
+                      },
+                      {
+                        "id": "custom.lineStyle",
+                        "value": {
+                          "dash": [
+                            6,
+                            4
+                          ],
+                          "fill": "dash"
+                        }
+                      },
+                      {
+                        "id": "custom.fillOpacity",
+                        "value": 0
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Operações base (intents × 0,2)",
+                      "scope": "series"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.fillOpacity",
+                        "value": 35
+                      },
+                      {
+                        "id": "color",
+                        "value": {
+                          "fixedColor": "orange",
+                          "mode": "fixed"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Lógica do script (script − base)",
+                      "scope": "series"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.fillOpacity",
+                        "value": 0
+                      },
+                      {
+                        "id": "color",
+                        "value": {
+                          "fixedColor": "blue",
+                          "mode": "fixed"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "CPU real (tendência do bucket, 30 min)",
+                      "scope": "series"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.lineWidth",
+                        "value": 3
+                      },
+                      {
+                        "id": "color",
+                        "value": {
+                          "fixedColor": "green",
+                          "mode": "fixed"
+                        }
+                      }
+                    ]
                   }
                 ]
               },
@@ -4749,6 +4882,7 @@
                 "legend": {
                   "calcs": [
                     "mean",
+                    "lastNotNull",
                     "max"
                   ],
                   "displayMode": "table",
@@ -5746,10 +5880,10 @@
         "1d"
       ],
       "fiscalYearStartMonth": 0,
-      "from": "now-6h",
+      "from": "2026-10-20T23:18:21.033Z",
       "hideTimepicker": false,
       "timezone": "browser",
-      "to": "now"
+      "to": "2026-10-21T00:18:21.033Z"
     },
     "title": "Screeps - shard3",
     "variables": [
@@ -5814,17 +5948,9 @@
         "spec": {
           "allowCustomValue": true,
           "current": {
-            "text": [
-              "H",
-              "O",
-              "power",
-              "energy"
-            ],
+            "text": "All",
             "value": [
-              "H",
-              "O",
-              "power",
-              "energy"
+              "$__all"
             ]
           },
           "definition": "query_result(screeps_stat_value{path=~\"market[.]fairPrice[.][^.]+[.](fairPrice|sellPrice|buyPrice|currentSell|currentBuy)\"})",

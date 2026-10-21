@@ -6,6 +6,9 @@ let roomLogic = require("./rooms");
 let prototypes = require("./prototypes");
 let utils = require("./utils");
 let config = require("./utils/config");
+// ARK-116: count successful game actions (0.2 CPU each) - after ./prototypes replaced move/moveTo
+const intentMeter = require("./utils/intentMeter");
+intentMeter.install();
 
 // Profiler wraps every prototype method, which is not free even when idle -
 // only pay for it when explicitly switched on from the console:
@@ -187,7 +190,7 @@ function printCpuTop(n, reportBalance) {
         "; measured since meter reset " + current.totalTicks + "), script avg " + live.used.toFixed(2) + "/tick (before engine finalization), guarded " + (guarded / ticks).toFixed(2) + ", unguarded " + (live.used - guarded / ticks).toFixed(2) +
         (closed ? " (closed window at tick " + live.at + ")" : "") +
         "; boot " + live.bootTick + (live.includesReset ? " includesReset(cold start in window)" : "") +
-        ", max tick " + live.maxTick.toFixed(2));
+        ", max tick " + live.maxTick.toFixed(2) + ", base operations (intents x0.2) " + (live.intentCpu || 0).toFixed(2));
     const balance = reportBalance || cpuMeter.accounting();
     if (balance.validTicks) console.log("[cpuBalance] bucket balance " + balance.validTicks + "/" + balance.ticks +
         " intervals (" + balance.fromTick + ".." + balance.toTick + "): inferred " + balance.used +
@@ -417,6 +420,10 @@ module.exports.loop = function () {
                 ) {
                     Game.cpu.generatePixel();
                 }
+            });
+            guard("intentMeter", () => {
+                const counts = intentMeter.drain();
+                Object.keys(counts).forEach((k) => cpuMeter.add("intents", k, counts[k] * intentMeter.INTENT_CPU, counts[k]));
             });
             guard("stats", () => utils.stats());
             cpuMeter.endTick();

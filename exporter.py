@@ -106,7 +106,7 @@ def fetch_stats():
     return decode_data(r.json().get("data"))
 
 
-CPU_METER_GROUPS = ("modules", "roles", "structures", "spans", "fns")
+CPU_METER_GROUPS = ("modules", "roles", "structures", "spans", "fns", "intents")
 
 
 def _generic_stats(value, path=(), labels=None):

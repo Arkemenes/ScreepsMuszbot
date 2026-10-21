@@ -10027,6 +10027,35 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
     Game.cpu.getUsed = saved.used; Memory.settings = saved.settings; Game.time = saved.time;
 }
 
+// ARK-116: base operations - OK actions are counted at 0.2 CPU each and published per tick
+{
+    const intentMeter = require(path.join(PROJECT, "src/utils/intentMeter"));
+    const meter = require(path.join(PROJECT, "src/utils/cpuMeter"));
+    const savedIntent = { settings: Memory.settings, used: Game.cpu.getUsed };
+    function Fake() {}
+    Fake.prototype.harvest = function (code) { return code; };
+    Fake.prototype.spawnCreep = function () { return OK; };
+    intentMeter.wrap(Fake.prototype, "harvest", "fake.harvest");
+    intentMeter.wrap(Fake.prototype, "harvest", "fake.harvest"); // idempotent
+    intentMeter.wrap(Fake.prototype, "spawnCreep", "fake.spawnCreep");
+    intentMeter.drain();
+    const f = new Fake();
+    f.harvest(OK); f.harvest(OK); f.harvest(ERR_NOT_IN_RANGE);
+    f.spawnCreep([MOVE], "x", { dryRun: true }); f.spawnCreep([MOVE], "y");
+    const counted = intentMeter.drain();
+    assert(counted["fake.harvest"] === 2 && counted["fake.spawnCreep"] === 1 && Object.keys(intentMeter.drain()).length === 0,
+        "ARK-116: only OK actions count as intents, wrapping twice counts once, a dry run is not an intent (got " + JSON.stringify(counted) + ")");
+    Memory.settings = Object.assign({}, savedIntent.settings, { stats: { cpuWindowTicks: 2 } });
+    Game.cpu.getUsed = () => 5;
+    meter.reset();
+    for (let i = 0; i < 2; i++) { Game.time++; meter.add("intents", "creep.move", 3 * 0.2, 3); meter.endTick(); }
+    const snap = meter.snapshot();
+    assert(snap && Math.abs(snap.intentCpu - 0.6) < 1e-9 && snap.intents["creep.move"].calls === 3,
+        "ARK-116: the meter publishes intentCpu (base operations per tick) and per-action counts (got " + JSON.stringify(snap && snap.intents) + ")");
+    meter.reset();
+    Memory.settings = savedIntent.settings; Game.cpu.getUsed = savedIntent.used;
+}
+
 // 0113 wiring: the main loop feeds modules / roles / structures / spans and stats publishes the window
 {
     const mainWire = require(path.join(PROJECT, "src/main"));

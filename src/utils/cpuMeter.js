@@ -14,7 +14,10 @@
 const config = require("./config");
 const accounting = require("./cpuAccounting");
 
-const GROUPS = ["modules", "roles", "structures", "spans", "tick"];
+// intents (ARK-116): flat 0.2 CPU per successful game action, from utils/intentMeter -
+// cpu is count * 0.2, calls the action count; not part of the module sums (it is a
+// share of what the modules/roles already measured).
+const GROUPS = ["modules", "roles", "structures", "spans", "tick", "intents"];
 
 function fresh() {
     const groups = {};
@@ -40,6 +43,15 @@ function record(group, key, used) {
     if (used > entry.max) entry.max = used;
 }
 
+// A value already summed over the tick (`calls` events costing `used` in total).
+function add(group, key, used, calls) {
+    const slot = acc.groups[group] || (acc.groups[group] = {});
+    const entry = slot[key] || (slot[key] = { cpu: 0, calls: 0, max: 0 });
+    entry.cpu += used;
+    entry.calls += calls;
+    if (used > entry.max) entry.max = used;
+}
+
 // Measure `fn` as span `key` and hand back its result; an exception still counts
 // and is rethrown, so callers' own handling (guard) is untouched.
 function span(key, fn) {
@@ -60,6 +72,9 @@ function build(source) {
         // that holds this global's cold start.
         maxTick: round(source.maxTick), bootTick: accounting.boot(),
         includesReset: source.fromTick !== null && accounting.boot() !== null && source.fromTick <= accounting.boot() };
+    // ARK-116: base operations - the intent share of `used`
+    const intents = source.groups.intents || {};
+    out.intentCpu = round(Object.keys(intents).reduce((n, k) => n + intents[k].cpu, 0) / ticks);
     Object.keys(source.groups).forEach((group) => {
         out[group] = {};
         Object.keys(source.groups[group]).forEach((key) => {
@@ -127,5 +142,5 @@ function setFns(rows, ticks) {
     if (published) published.fns = fns;
 }
 
-module.exports = { record, span, endTick, snapshot, live, reset, drop, setFns, GROUPS,
+module.exports = { record, add, span, endTick, snapshot, live, reset, drop, setFns, GROUPS,
     beginTick: accounting.begin, accounting: accounting.snapshot, accountingRange: accounting.range };

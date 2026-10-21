@@ -763,6 +763,12 @@ Medição e validação (tudo no heap, nada por tick em Memory):
   global reset, `stats.autoReportIntervals`) imprime `warm`, resíduo, spans e a linha `[probe]`. ReparoARK-145: solicitação no heap em cpuReport.js, n origens novas a partir do próximo tick, fechamento após finalização da última. cpuAccounting.range percorre o ring uma vez ao fechar; rolling stats não é resetado. Cobertura/flags incompatíveis dão incomplete. Tabelas de módulos/roles/spans têm sua própria janela recente explicitada; não representam atribuição exata de n ticks.
 - (O `abTest` foi **removido** em 2026-10-15: A/B intercalado era lento e frágil. A validação é direta em produção, pelo `cpuReport`
   automático e pelos contadores de span, com cada mudança atrás de flag desligável sem deploy.)
+- `utils/intentMeter.js` (ARK-116): envolve uma vez por global os métodos de ação (Creep, PowerCreep, torres, labs,
+  spawn, link, terminal…) e conta os retornos OK. `main.js` soma no grupo `intents` do cpuMeter (0,2 CPU por intent) antes de
+  `endTick`; o snapshot publica `cpu.meter.intentCpu` (operações base por tick) e `cpu.meter.intents.<classe.método>`. É o piso
+  que só cai com menos creeps/estruturas ou menos ações; script − intentCpu = lógica otimizável.
+- Grafana: a "CPU real" vem da tendência do bucket no Prometheus (`limit − deriv(bucket)/deriv(game_time)`, 30 min), não de
+  `cpu.accounting` (janela no heap que recomeça a cada global reset e fica inflada pelo aquecimento pós-deploy).
 - `utils/probe.js`: contador de "mesma entrada que a chamada anterior" (`terminalOps.listResidual`, `labPolicy.assignments`).
 - `utils/shadowBudget.js` e `test/equivalence/compare.js`: sombra live opcional (teto de CPU) e oráculo offline de equivalência.
 - `utils/cpuAudit.js` (`cpuAuditMemory`, `cpuAuditRoomFields`) e `utils/ordersAudit.js` (`ordersAudit`: taxa estimada, idade e distância ao
