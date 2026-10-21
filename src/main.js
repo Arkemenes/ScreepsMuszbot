@@ -386,6 +386,8 @@ module.exports.loop = function () {
             // age the traffic counters down (heap-only, gated internally to
             // once every DECAY_INTERVAL ticks)
             guard("traffic:decay", () => utils.traffic.decay());
+            // ROADMAP 0150 T8: the managed lab operator (create/upgrade behind the 48h lab evidence gate)
+            guard("powerCreeps", () => require("./powerCreeps/operator").manage());
             // free up memory if creep no longer exists
             for (var name in Memory.creeps) {
                 if (!Game.creeps[name]) {

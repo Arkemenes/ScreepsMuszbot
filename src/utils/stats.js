@@ -330,6 +330,10 @@ function exportStats() {
     // ROADMAP 0150: GPL and what the power spawns hold, for the processing decision
     if (Game.gpl) Memory.stats.gpl = { level: Game.gpl.level, progress: Game.gpl.progress, progressTotal: Game.gpl.progressTotal };
     Memory.stats.power = require("./powerEconomics").summary();
+    // ROADMAP 0150 T8: managed operators (state, level, ttl) and the GPL levels still free
+    const operators = require("../powerCreeps/operator");
+    Memory.stats.power.freeLevels = operators.freeLevels();
+    Memory.stats.power.operators = Object.fromEntries(operators.status().map((o) => [o.name, { state: o.state || "", level: o.level, ttl: o.ttl }]));
 
     // Collect CPU stats
     Memory.stats.cpu.bucket = Game.cpu.bucket;

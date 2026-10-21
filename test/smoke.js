@@ -16426,6 +16426,7 @@ require("./extractorEconomicsCases")(PROJECT, assert);
 require("./boostBreakevenCases")(PROJECT, assert);
 require("./boostExecutorCases")(PROJECT, assert);
 require("./powerEconomicsCases")(PROJECT, assert);
+require("./powerOperatorCases")(PROJECT, assert);
 require("./listingReuseCases")(PROJECT, assert);
 require("./craftPurchaseCases")(PROJECT, assert);
 require("./craftRecoveryCases")(PROJECT, assert);
