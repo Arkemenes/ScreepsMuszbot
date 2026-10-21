@@ -247,6 +247,11 @@ var builder = {
     /** @param {Creep} creep **/
     run: function (creep) {
         if (takeCover(creep)) return;
+        // ARK-116: nothing to build, repair or upgrade last time - look again later
+        if (creep.memory.idleUntil) {
+            if (Game.time < creep.memory.idleUntil && creep.memory.idleRoom === creep.room.name) return;
+            delete creep.memory.idleUntil; delete creep.memory.idleRoom;
+        }
 
         if (builderTraceEnabled()) {
             const start = Game.cpu.getUsed();
@@ -421,6 +426,8 @@ var builder = {
                             config.get("upgrader.rcl8SafeRatio", 0.99))
             ) {
                 speak(creep, "zzz");
+                const idle = config.get("builder.idleSpendRecheckTicks", 10);
+                if (idle > 1) { creep.memory.idleUntil = Game.time + idle; creep.memory.idleRoom = creep.room.name; }
                 return;
             }
 

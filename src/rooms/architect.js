@@ -1485,10 +1485,13 @@ function drawPlanPreview(room, plan, redraw) {
         visualizeStructures(plan.buildings, room.name);
         return;
     }
-    // export() holds everything drawn in the room this tick: keep only our part
-    const before = visual.export().length;
+    // export() holds everything drawn in the room this tick (undefined while nothing
+    // has been drawn yet): keep only our part
+    const before = (visual.export() || "").length;
     visualizeStructures(plan.buildings, room.name);
-    planVisualCache[room.name] = { plan, data: visual.export().slice(before) };
+    const data = (visual.export() || "").slice(before);
+    if (data) planVisualCache[room.name] = { plan, data };
+    else delete planVisualCache[room.name];
 }
 
 function visualizeStructures(structures, roomName, showRCL = false) {

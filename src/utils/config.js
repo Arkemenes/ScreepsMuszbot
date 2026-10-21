@@ -541,6 +541,9 @@ const defaults = {
         // ROADMAP 0152: an empty builder that found no pile to take (dry room) searches again only every
         // this many ticks; 1 = every tick (old behaviour)
         idleRecheckTicks: 5,
+        // ARK-116: a builder holding energy with nothing to build/repair/upgrade looks again
+        // only every this many ticks; 1 = every tick (old behaviour)
+        idleSpendRecheckTicks: 10,
         // utils/autoscale.js (ROADMAP 0040): pickableEnergy() thresholds
         // gating the incremental grow/shrink, set at the same boundaries
         // rooms/needs.js's own byEnergy tier already uses (>50000 -> its

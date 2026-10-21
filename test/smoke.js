@@ -883,13 +883,15 @@ assert(planStore.getPlan("Wmig") === null,
     let drawn = 0, imported = [], buffer = "";
     const visual = {
         structure() { drawn++; buffer += "s\n"; return this; },
-        export() { return buffer; },
+        export() { return buffer || undefined; }, // the engine returns undefined for an empty room visual
         import(text) { imported.push(text); buffer += text; return this; },
     };
     const room = { name: "Wvis", visual, find: () => [], controller: { level: 8 } };
     Game.rooms.Wvis = room;
     const plan = { buildings: [{ x: 1, y: 1, structureType: STRUCTURE_ROAD }, { x: 2, y: 2, structureType: STRUCTURE_ROAD }] };
-    buffer = "other\n"; // something else drawn earlier this tick is not captured
+    architect.drawPlanPreview(room, plan, true); // nothing drawn before us: export() starts undefined
+    assert(drawn === 2, "ARK-116: the preview draws when the room visual is still empty (export() undefined)");
+    drawn = 0; buffer = "other\n"; // something else drawn earlier this tick is not captured
     architect.drawPlanPreview(room, plan, true);
     buffer = "";
     architect.drawPlanPreview(room, plan, false);
@@ -4876,6 +4878,35 @@ findMap[FIND_HOSTILE_CREEPS] = [];
         builder.run(oppCreep);
         assert(oppBuilds.length === 1 && oppBuilds[0] === oppSite && oppRepairs.length === 0,
             "ARK-116: a builder already at its Build target issues one build intent, not two (builds " + oppBuilds.length + ")");
+
+        // ARK-116: holding energy with nothing to build/repair/upgrade -> look again only later
+        Memory.rooms.BIdleRoom = {};
+        let idleFinds = 0;
+        const idleController = Object.assign(new RoomObject(), {
+            id: "bidle-ctrl", my: true, level: 8, progress: 0, progressTotal: 1,
+            ticksToDowngrade: CONTROLLER_DOWNGRADE[8], pos: new RoomPosition(25, 25, "BIdleRoom"),
+        });
+        REG[idleController.id] = idleController;
+        const idleCreep = Object.assign(new Creep(), {
+            id: "bidle-creep", name: "BIdle1", pos: new RoomPosition(10, 11, "BIdleRoom"),
+            room: Object.assign(new Room("BIdleRoom"), { controller: idleController, storage: null,
+                find: () => { idleFinds++; return []; } }),
+            store: store(50, 50), memory: {}, hits: 100, hitsMax: 100,
+            body: [{ type: WORK }, { type: CARRY }, { type: MOVE }], owner: { username: "me" },
+            build: noop, repair: noop, upgradeController: noop, harvest: noop, transfer: noop, withdraw: noop,
+            pickup: noop, move: noop, moveTo: noop, moveByPath: noop, drop: noop,
+        });
+        Game.time++;
+        builder.run(idleCreep);
+        const firstFinds = idleFinds, idleUntil = idleCreep.memory.idleUntil;
+        Game.time++;
+        builder.run(idleCreep);
+        assert(idleUntil > Game.time && idleFinds === firstFinds,
+            "ARK-116: an idle builder at a full RCL8 controller skips the next ticks (idleUntil " + idleUntil + ", finds " + firstFinds + "->" + idleFinds + ")");
+        Game.time = idleUntil;
+        builder.run(idleCreep);
+        assert(idleFinds > firstFinds, "ARK-116: ...and looks again once the idle window ends");
+        delete REG[idleController.id];
     }
 
     // --- Fase 2: needs.js alternates solo defender vs a striker+medic
