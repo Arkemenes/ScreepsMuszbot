@@ -55,7 +55,7 @@ module.exports = function (project, assert) {
             "planning diagnostics identify the shared per-tick search limit");
         Game.time++;Game.cpu.bucket=0;used=1;
         Memory.rooms.W7N49={my:true};
-        safety.observeRoom({name:"W7N49"});
+        safety.observeRoom({name:"W7N49",find:()=>[]});
         assert(routing.moveToRoom(deferred,"E1N44",opts)===OK && searches===before+1,
             "unrelated observer intel does not discard a validated route or trigger planning with an empty bucket");
         let lowBucketMove;

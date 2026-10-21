@@ -9851,6 +9851,29 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
         const reused = dmg.sorted(dmgRoom).map((x) => x.id).join();
         rr.priorityKey = savedKey;
         assert(reused === "dmg-ok" && keyCalls === 0, "ARK-116: damagedStructures reuses the scan-tick order instead of re-sorting every tick (keys " + keyCalls + ")");
+        // ARK-116: a tower with no more energy than one that already found nothing skips the walk
+        {
+            const towerLogic = require(path.join(PROJECT, "src/structures/tower"));
+            const savedSorted = dmg.sorted, savedMay = rr.towerMayRepair;
+            const wallList = [mkS("tw-wall", STRUCTURE_WALL, 1000, 300000000)];
+            dmg.sorted = () => wallList;
+            let mayCalls = 0;
+            rr.towerMayRepair = function () { mayCalls++; return false; };
+            const twRoom = { name: "TWS1", find: () => [] };
+            Memory.rooms.TWS1 = {};
+            const mkT = (id, energy) => ({ id, room: twRoom, pos: new RoomPosition(10, 10, "TWS1"), structureType: STRUCTURE_TOWER, my: true,
+                store: { energy, getCapacity: () => 1000 }, repair: () => OK, heal: () => OK, attack: () => OK });
+            Game.time = 6000;
+            towerLogic.run(mkT("tw-a", 600));
+            const afterFirst = mayCalls;
+            towerLogic.run(mkT("tw-b", 400));
+            const afterLower = mayCalls;
+            towerLogic.run(mkT("tw-c", 900));
+            dmg.sorted = savedSorted; rr.towerMayRepair = savedMay;
+            delete Memory.rooms.TWS1;
+            assert(afterFirst > 0 && afterLower === afterFirst && mayCalls > afterLower,
+                "ARK-116: a tower with less energy than one that found nothing to repair skips the search; a fuller one still looks (" + afterFirst + "/" + afterLower + "/" + mayCalls + ")");
+        }
         Game.time = 5005;
         assert(dmg.sorted(dmgRoom).map((x) => x.id).join() === "dmg-late,dmg-ok" && structFinds === 2,
             "damagedStructures: the 5-tick refresh picks the new damage up (scans: " + structFinds + ")");
@@ -9958,6 +9981,33 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
         Game.time += 5; // the window (5 ticks) has passed
         hauler.pickLoad(picker2);
         assert(searches > base2, "pickLoad: after hauler.repickTicks the cascade runs again (" + (searches - base2) + " new searches)");
+
+        // ARK-116: "nothing to load" is reused too, but only while spawn/extensions are full
+        const nullMeter = require(path.join(PROJECT, "src/utils/cpuMeter"));
+        const savedSpan = nullMeter.span;
+        let cascades = 0;
+        nullMeter.span = function (key, fn) { if (key === "hauler.pickLoad") cascades++; return savedSpan.call(this, key, fn); };
+        findMap[FIND_DROPPED_RESOURCES] = [];
+        const picker3 = mkPicker();
+        picker3.name = "HKeepPick3";
+        picker3.pos = withFindLookup(new RoomPosition(20, 20, "W1N1"), { [FIND_DROPPED_RESOURCES]: [] });
+        const savedAvail = picker3.room.energyAvailable, savedCap = picker3.room.energyCapacityAvailable;
+        const savedStorage = picker3.room.storage, savedTerminal = picker3.room.terminal;
+        picker3.room.storage = undefined; picker3.room.terminal = undefined;
+        picker3.room.energyAvailable = 300; picker3.room.energyCapacityAvailable = 300;
+        Game.time += 10;
+        const empty1 = hauler.pickLoad(picker3);
+        Game.time++;
+        const empty2 = hauler.pickLoad(picker3);
+        const fullCascades = cascades;
+        picker3.room.energyAvailable = 100; // the room went hungry
+        Game.time++;
+        hauler.pickLoad(picker3);
+        nullMeter.span = savedSpan;
+        picker3.room.energyAvailable = savedAvail; picker3.room.energyCapacityAvailable = savedCap;
+        picker3.room.storage = savedStorage; picker3.room.terminal = savedTerminal;
+        assert(empty1 === null && empty2 === null && fullCascades === 1 && cascades === 2,
+            "ARK-116: an empty pickLoad is reused while spawns are full and recomputed at once when the room goes hungry (cascades " + fullCascades + "/" + cascades + ")");
         findMap[FIND_DROPPED_RESOURCES] = [];
     }
     {

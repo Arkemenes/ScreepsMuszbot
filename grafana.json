@@ -4440,7 +4440,7 @@
                       "kind": "DataQuery",
                       "spec": {
                         "editorMode": "code",
-                        "expr": "screeps_cpu_limit - deriv(screeps_cpu_bucket[30m]) / deriv(screeps_game_time[30m])\nand on() max_over_time(screeps_cpu_bucket[30m]) < 9950",
+                        "expr": "screeps_cpu_limit - deriv(screeps_cpu_bucket[5m]) / deriv(screeps_game_time[5m])\nand on() max_over_time(screeps_cpu_bucket[5m]) < 9950",
                         "legendFormat": "CPU real",
                         "range": true
                       },
@@ -4543,7 +4543,7 @@
                       "kind": "DataQuery",
                       "spec": {
                         "editorMode": "code",
-                        "expr": "screeps_cpu_limit - deriv(screeps_cpu_bucket[30m]) / deriv(screeps_game_time[30m])\nand on() max_over_time(screeps_cpu_bucket[30m]) < 9950",
+                        "expr": "screeps_cpu_limit - deriv(screeps_cpu_bucket[1m]) / deriv(screeps_game_time[1m])\nand on() max_over_time(screeps_cpu_bucket[1m]) < 9950",
                         "legendFormat": "CPU real (tendência do bucket, 30 min)",
                         "range": true
                       },
@@ -5878,10 +5878,10 @@
         "1d"
       ],
       "fiscalYearStartMonth": 0,
-      "from": "2026-10-20T23:18:21.033Z",
+      "from": "now-15m",
       "hideTimepicker": false,
       "timezone": "browser",
-      "to": "2026-10-21T00:18:21.033Z"
+      "to": "now"
     },
     "title": "Screeps - shard3",
     "variables": [

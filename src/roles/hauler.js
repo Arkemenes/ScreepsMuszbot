@@ -462,6 +462,10 @@ let loadPicksGc = 0;
 function energyHeld(target) {
     return target.store ? target.store[RESOURCE_ENERGY] || 0 : target.amount || 0;
 }
+function spawnExtFull(room) {
+    return typeof room.energyAvailable === "number" && room.energyAvailable >= room.energyCapacityAvailable;
+}
+
 function pickLoad(creep) {
     const room = creep.room;
     const last = loadPicks[creep.name];
@@ -472,11 +476,18 @@ function pickLoad(creep) {
         Game.time - last.tick < config.get("hauler.repickTicks", 5) &&
         biggestEnergyDrop(room) <= config.get("hauler.bigDropLoad", 500)
     ) {
-        const target = Game.getObjectById(last.src.id);
-        if (target && energyHeld(target) >= 50 && (last.src.act !== "pickup" || !dropUnderContainer(room, target))) return last.src;
+        // ARK-116: "nothing to load" is kept too (a hauler walking to a mineral job asked every
+        // tick), but only while spawn/extensions are full - a hungry room asks again at once
+        if (last.src === null) {
+            if (spawnExtFull(room)) return null;
+        } else {
+            const target = Game.getObjectById(last.src.id);
+            if (target && energyHeld(target) >= 50 && (last.src.act !== "pickup" || !dropUnderContainer(room, target))) return last.src;
+        }
     }
     const src = cpuMeter.span("hauler.pickLoad", () => pickLoadNow(creep));
     if (src && src.amount === undefined) loadPicks[creep.name] = { tick: Game.time, room: room.name, src };
+    else if (!src && spawnExtFull(room)) loadPicks[creep.name] = { tick: Game.time, room: room.name, src: null };
     else delete loadPicks[creep.name];
     if (Game.time - loadPicksGc >= 300 || Game.time < loadPicksGc) {
         loadPicksGc = Game.time;

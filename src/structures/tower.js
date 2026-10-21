@@ -7,6 +7,8 @@ let hostileTargets = {};
 let repairLists = {};
 let claimedRepairTargets = {};
 let healingTargets = {};
+// ARK-116: highest tower energy ratio per room that found nothing to repair this tick
+let noRepairAt = {};
 
 const hostilePartPriority = {
     [HEAL]: 0,
@@ -55,6 +57,7 @@ function resetCache() {
         repairLists = {};
         claimedRepairTargets = {};
         healingTargets = {};
+        noRepairAt = {};
     }
 }
 
@@ -172,6 +175,12 @@ function findRepairTarget(tower) {
     resetCache();
     const candidates = computeRepairCandidates(tower.room);
     if (!candidates.length) return null;
+    // ARK-116: towerMayRepair only widens with the tower's energy ratio and the claimed set only
+    // grows within a tick, so a tower with no more energy than one that already found nothing
+    // here cannot find anything either - skip its walk over the room's damaged list
+    const ratio = tower.store.energy / tower.store.getCapacity(RESOURCE_ENERGY);
+    const failedAt = noRepairAt[tower.room.name];
+    if (failedAt !== undefined && ratio <= failedAt) return null;
 
     const claimed =
         claimedRepairTargets[tower.room.name] ||
@@ -200,6 +209,7 @@ function findRepairTarget(tower) {
     }
 
     if (target) claimed.add(target.id);
+    else noRepairAt[tower.room.name] = Math.max(ratio, failedAt === undefined ? -Infinity : failedAt);
     return target;
 }
 
