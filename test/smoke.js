@@ -16387,6 +16387,7 @@ require("./energyReportCases")(PROJECT, assert);
 require("./readinessContextCases")(PROJECT, assert);
 require("./labReportCases")(PROJECT, assert);
 require("./builderDemandCases")(PROJECT, assert);
+require("./onDemandPopulationCases")(PROJECT, assert);
 require("./listingReuseCases")(PROJECT, assert);
 require("./craftPurchaseCases")(PROJECT, assert);
 require("./craftRecoveryCases")(PROJECT, assert);

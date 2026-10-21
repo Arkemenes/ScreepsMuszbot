@@ -583,6 +583,26 @@ const defaults = {
         // not just the autoscale delta on top of it.
         autoscaleMaxCount: 2,
     },
+    population: {
+        // ROADMAP 0148 (ARK-135): on-demand builder. Opt-in per room (the spec's one-room
+        // pilot, on by default for W7N49 only); every room keeps the emergency floor.
+        onDemand: {
+            enabled: true,
+            rooms: ["W7N49"],
+            // the room must stay without builder demand at least max(lead, minIdleTicks)
+            minIdleTicks: 300,
+            travelTicks: 50,
+            marginTicks: 100,
+            // needs is cached a few ticks: evaluations further apart than this break the idle run
+            gapTicks: 20,
+            // entering the pilot needs energyReport evidence: builders at or below this share
+            maxBuilderUtilization: 0.1,
+            // emergency floor marks (any room, policy on or off): with no builder alive or
+            // spawning, a critical repair or one of these marks wants exactly one builder
+            rescueContainerRatio: 0.4,
+            rescueRoadRatio: 0.3,
+        },
+    },
     miner: {
         // fraction of capacity the miner keeps its adjacent source-defense
         // tower topped up to (unconditional priority - see roles/miner.js)

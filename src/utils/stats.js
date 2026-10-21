@@ -12,6 +12,7 @@ const energyBalancing = require("../rooms/energyBalancing");
 const cpuTier = require("./cpuTier");
 const combat = require("./combat");
 const energyReport = require("./energyReport");
+const onDemandPopulation = require("../rooms/onDemandPopulation");
 const labReport = require("./labReport");
 
 // ROADMAP 0162: the bucket band of this tick (bandLevel 0 critical .. 3 full, for Grafana)
@@ -295,6 +296,13 @@ function exportStats() {
             // ROADMAP 0154-B: energyReport over its full window (heap samples, rounded here)
             roomStats.energyReport = energyReport.summary(roomName);
             roomStats.labReport = labReport.summary(roomName); // ROADMAP 0155
+            // ROADMAP 0148: last on-demand builder decision (mode is exported as an info label)
+            const onDemand = onDemandPopulation.status(roomName);
+            if (onDemand) {
+                roomStats.onDemand = { mode: onDemand.mode, builder: onDemand.builder, legacy: onDemand.legacy,
+                    idleFor: onDemand.idleFor === undefined ? null : onDemand.idleFor, lead: onDemand.lead === undefined ? null : onDemand.lead,
+                    active: onDemand.mode === "active" ? 1 : 0, floor: onDemand.floor ? 1 : 0 };
+            }
         }
     }
 

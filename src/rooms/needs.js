@@ -13,6 +13,7 @@ const observer = require("../utils/observer");
 const pioneering = require("./pioneering");
 const autoscale = require("../utils/autoscale");
 const nonEnergyLogistics = require("../utils/nonEnergyLogistics");
+const onDemandPopulation = require("./onDemandPopulation");
 
 let builtTick = -1;
 let cache = {};
@@ -606,6 +607,8 @@ function compute(room) {
     // the meantime.
     applyOverride(name, wanted);
     if (rcl >= 8) wanted.upgrader = Math.min(wanted.upgrader, 1);
+    // ROADMAP 0148: on-demand builder after autoscale/override, then the emergency floor
+    if (ctrl && ctrl.my) onDemandPopulation.apply(room, wanted, Memory.rooms[name] || (Memory.rooms[name] = {}));
 
     // Apply the conversion deduction after autoscale/clamps so it affects the
     // final desired upgrader population without persisting a stale counter.
