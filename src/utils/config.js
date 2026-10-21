@@ -953,6 +953,15 @@ const defaults = {
         maxWork: 12,
         lifeBudget: 1400,
     },
+    // ROADMAP 0164 (utils/extractorEconomics): spawn a mineralMiner only while the deposit's value
+    // beats the energy its team costs (energy and mineral at market fairPrice)
+    extractorEconomics: {
+        enabled: true,
+        // verdict cache per room (also re-evaluated when the mineral type changes)
+        checkTicks: 1000,
+        // admitted when profit (credits) is above this
+        minProfit: 0,
+    },
     mineralHauler: {
         // roles/hauler.js (ROADMAP 0051/0095): minimum reagent stock to
         // keep topped up in a lab reaction's input labs before another trip

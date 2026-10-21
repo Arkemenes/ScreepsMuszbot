@@ -301,6 +301,7 @@ function exportStats() {
             roomStats.energyReport = energyReport.summary(roomName);
             roomStats.labReport = labReport.summary(roomName); // ROADMAP 0155
             roomStats.terminalReport = require("./terminalReport").summary(roomName); // ROADMAP 0163
+            roomStats.extractorEconomics = require("./extractorEconomics").summary(roomName); // ROADMAP 0164
             // ROADMAP 0148: last on-demand builder decision (mode is exported as an info label)
             const onDemand = onDemandPopulation.status(roomName);
             if (onDemand) {

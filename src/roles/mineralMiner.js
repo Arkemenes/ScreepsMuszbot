@@ -78,6 +78,8 @@ const mineralMiner = {
         // A creep already on the deposit finishes it - this only gates a spawn.
         if (mineral.mineralAmount < config.get("mineralMiner.minAmount", 2000)) return 0;
         if (container.store.getFreeCapacity() === 0) return 0;
+        // ROADMAP 0164: the team's energy must be worth less than the mineral it extracts
+        if (!require("../utils/extractorEconomics").admitted(room)) return 0;
         return 1;
     },
 

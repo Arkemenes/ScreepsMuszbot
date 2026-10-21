@@ -146,7 +146,18 @@ function mineralOperationActive(room) {
     if (!mineral || mineral.mineralAmount <= 0) return false;
     const extractor = roomCache.structuresNear(room, mineral.pos, STRUCTURE_EXTRACTOR, 0)[0];
     if (!extractor) return false;
-    return roomCache.structuresNear(room, mineral.pos, STRUCTURE_CONTAINER, 1).length > 0;
+    if (!roomCache.structuresNear(room, mineral.pos, STRUCTURE_CONTAINER, 1).length) return false;
+    // ROADMAP 0164: a deposit blocked as unprofitable with no miner on it is no operation - the
+    // room must not keep paying for the extra hauler
+    return census.count(room.name, "mineralMiner", 0) > 0 || require("../utils/extractorEconomics").admitted(room);
+}
+
+// ROADMAP 0164: haulers the mineral floor adds over what the room would run anyway (last
+// compute, heap); before the first compute, the whole floor (conservative for the economics)
+const mineralMarginal = {};
+function mineralHaulerMarginal(room) {
+    const known = mineralMarginal[room.name];
+    return known !== undefined ? known : config.get("hauler.minCountWithMineral", 2);
 }
 
 function pressuredOutputHaulerFloor(room, currentHaulers) {
@@ -380,6 +391,7 @@ function compute(room) {
     // still a real trip) - floor the count at 2 while there's a deposit
     // worth hauling and somewhere (storage) to put it, so mineral hauling
     // doesn't come entirely out of the room's own energy throughput.
+    if (room.storage) mineralMarginal[name] = Math.max(0, config.get("hauler.minCountWithMineral", 2) - hauler);
     if (room.storage && mineralOperationActive(room)) {
         hauler = Math.max(hauler, config.get("hauler.minCountWithMineral", 2));
     }
@@ -644,4 +656,4 @@ function invalidate(roomName) {
     delete cache[roomName];
 }
 
-module.exports = { roomNeeds, pressuredOutputHaulerFloor, invalidate };
+module.exports = { roomNeeds, pressuredOutputHaulerFloor, invalidate, mineralHaulerMarginal, mineralOperationActive };
