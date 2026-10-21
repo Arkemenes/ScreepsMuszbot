@@ -421,6 +421,13 @@ var miner = {
     /** @param {Creep} creep **/
     run: function (creep) {
         if (takeCover(creep)) return;
+        // ARK-116: a full-size miner empties its source in ~100 of the 300 regeneration
+        // ticks and then has nothing to do - sleep until the source refills instead of
+        // running the seat/deposit/distribute checks every tick (~0.1 CPU per miner)
+        if (creep.memory.sleepUntil) {
+            if (Game.time < creep.memory.sleepUntil) return;
+            delete creep.memory.sleepUntil;
+        }
 
         if (!creep.memory.target) {
             const roomMiners = census.creepsByRole(creep.room.name, "miner");
@@ -512,6 +519,11 @@ var miner = {
         // --- distribute what we mined -----------------------------------
         // ROADMAP 0117: nothing left to harvest -> empty the container and the store
         distribute(creep, near, !!source && source.energy === 0);
+        if (source && source.energy === 0 && !seekingSeat && config.get("miner.sleepWhenDry", true)) {
+            const container = creep.memory.onContainer ? containerUnder(creep) : null;
+            if (creep.store.getUsedCapacity() === 0 && !(container && container.store.getUsedCapacity(RESOURCE_ENERGY) > 0) &&
+                source.ticksToRegeneration > 1) creep.memory.sleepUntil = Game.time + source.ticksToRegeneration;
+        }
     },
     bodyForBudget: bodyForBudget,
     // rough headcount for the population heuristic; the real per-source timing

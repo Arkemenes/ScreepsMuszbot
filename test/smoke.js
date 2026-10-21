@@ -3183,8 +3183,12 @@ assert(seatedMiner(100, true, false) === "mlink",
         c.pos.lookFor = () => [mContainer];
         minerNear(o.near || [mContainer, mLink]);
         mSource.energy = o.sourceEnergy === undefined ? 0 : o.sourceEnergy;
+        if (o.sleepUntil) c.memory.sleepUntil = o.sleepUntil;
+        mSource.ticksToRegeneration = o.regen;
         miner.run(c);
         mSource.energy = 3000;
+        delete mSource.ticksToRegeneration;
+        c.actions.creep = c;
         return c.actions;
     }
     assert(drainMiner(10).join() === "transfer:mlink",
@@ -3201,6 +3205,17 @@ assert(seatedMiner(100, true, false) === "mlink",
         "0117: source empty but no link/tower to receive -> container is not touched");
     assert(drainMiner(10, { near: [mContainer] }).join() === "transfer:mcont",
         "0117: source empty, no link -> the carried load still goes to the container");
+    // ARK-116: a dry source with nothing left to empty puts the miner to sleep until it regenerates
+    const slept = drainMiner(0, { regen: 150 }).creep.memory.sleepUntil;
+    assert(slept === Game.time + 150,
+        "ARK-116: dry source, empty store and container -> the miner sleeps until the source regenerates (got " + slept + ", now " + Game.time + ")");
+    assert(!drainMiner(0, { containerEnergy: 100, regen: 150 }).creep.memory.sleepUntil,
+        "ARK-116: ...but not while the container still has energy to drain");
+    assert(!drainMiner(10, { sourceEnergy: 3000, regen: 150 }).creep.memory.sleepUntil,
+        "ARK-116: ...and never while the source has energy");
+    const wake = Game.time + 5, asleep = drainMiner(10, { sleepUntil: wake, regen: 150 });
+    assert(asleep.length === 0 && asleep.creep.memory.sleepUntil === wake,
+        "ARK-116: a sleeping miner takes no action until its wake tick");
     const both = drainMiner(10, { containerEnergy: 100 });
     assert(both.join() === "withdraw:mcont,transfer:mlink",
         "0117: source empty -> pull the container and flush the store in the same tick (" + both.join() + ")");

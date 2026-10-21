@@ -565,6 +565,8 @@ const defaults = {
         batchTransfer: true,
         // container energy at which the miner also drains it into its store for the link
         pullBacklog: 500,
+        // ARK-116: with the source dry, the store and the container empty, sleep until it regenerates
+        sleepWhenDry: true,
     },
     combat: {
         // tiles a non-combat creep wants to stay from any armed hostile
