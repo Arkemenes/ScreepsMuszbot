@@ -109,6 +109,11 @@ function close(exp, state, reason) {
     const keep = Math.max(0, Number(config.get("experiments.keepClosed", 10)));
     while (mem.closed.length > keep) mem.closed.shift();
     invalidateFor(exp);
+    // an end the user chose or the plan reached: autoStart does not run this name again
+    if (state === "closed" || reason === "manual-edit" || reason === "manual-setting") {
+        if (!mem.done) mem.done = {};
+        mem.done[exp.name] = { reason, tick: Game.time };
+    }
     console.log("[experiment] " + exp.id + " (" + exp.name + ", " + exp.room + " " + exp.setting + ") " + state + ": " + reason);
     return true;
 }
@@ -233,6 +238,30 @@ function reconcile() {
             else for (const name of Object.keys(Game.rooms)) needs.invalidate(name);
             console.log("[experiment] overlay órfão removido: " + o.path + (o.room ? " " + o.room : ""));
         }
+    }
+    autoStart();
+}
+
+// experiments.autoStart: experiments the code runs by default (the API token is read-only, so
+// the first live run cannot come from the console). An entry is (re)started whenever it is not
+// running - after a reset or a guard abort too - until it ends for good: deadline, a stop or a
+// manual base change (Memory.experiments.done[name]). A refused start waits autoStartRetryTicks.
+const autoRetry = {}; // name -> { tick, error } (heap)
+function autoStart() {
+    if (config.get("experiments.enabled", true) === false) return;
+    const list = config.get("experiments.autoStart", []);
+    if (!Array.isArray(list) || !list.length) return;
+    const mem = Memory.experiments;
+    for (const entry of list) {
+        if (!entry || typeof entry.name !== "string") continue;
+        if (mem && mem.done && mem.done[entry.name]) continue;
+        if (mem && mem.running && Object.values(mem.running).some((e) => e.name === entry.name)) continue;
+        const wait = autoRetry[entry.name];
+        if (wait && Game.time >= wait.from && Game.time < wait.tick) continue;
+        const r = start(entry);
+        if (r.ok) { delete autoRetry[entry.name]; continue; }
+        if (!wait || wait.error !== r.error) console.log("[experiment] autoStart " + entry.name + " adiado: " + r.error);
+        autoRetry[entry.name] = { from: Game.time, tick: Game.time + Number(config.get("experiments.autoStartRetryTicks", 100)), error: r.error };
     }
 }
 

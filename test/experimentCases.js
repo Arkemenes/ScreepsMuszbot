@@ -116,6 +116,27 @@ module.exports = function (project, assert) {
         assert(config.get("population.onDemand.pilot", undefined, "B") === undefined && config.overlayEntries().length === 0 && policy.enabledFor("B") === false,
             "0154 experiment recovery: an overlay without its record is removed as an orphan");
         delete Memory.settings.experiments;
+
+        // autoStart: the code runs an experiment by default; reset restarts it, the deadline ends it for good
+        Memory.settings.experiments = { autoStart: [{ name: "auto", room: "A", setting: P, value: 77, ticks: 50, metrics: ["cpu"] }] };
+        Game.time++;
+        exp.reconcile();
+        const autoId = Object.keys(Memory.experiments.running)[0];
+        assert(autoId && Memory.experiments.running[autoId].name === "auto" && config.get(P, 300, "A") === 77,
+            "0154 experiment autoStart: a default experiment starts without any console command");
+        exp.resetHeap(); Game.time++;
+        exp.reconcile();
+        const again = Object.keys(Memory.experiments.running)[0];
+        assert(again && again !== autoId && Memory.experiments.closed.slice(-1)[0].reason === "reset" && config.get(P, 300, "A") === 77,
+            "0154 experiment autoStart: a reset closes the run and the default experiment starts again");
+        Game.time += 60;
+        exp.reconcile(); Game.time++; exp.reconcile();
+        assert(!Object.keys(Memory.experiments.running).length && Memory.experiments.done.auto.reason === "deadline" && config.get(P, 300, "A") === 450,
+            "0154 experiment autoStart: past its deadline the experiment is done and not started again");
+        Memory.settings.experiments = { autoStart: [{ name: "nowhere", room: "Z9", setting: P, value: 1, ticks: 50 }] };
+        Game.time++; exp.reconcile();
+        assert(!Object.keys(Memory.experiments.running).length, "0154 experiment autoStart: a refused entry (room not owned) starts nothing");
+        delete Memory.settings.experiments;
     } finally {
         for (const o of config.overlayEntries()) config.clearOverlay(o.path, o.room, o.entry.owner, o.entry.generation);
         needs.invalidate = original.invalidate;

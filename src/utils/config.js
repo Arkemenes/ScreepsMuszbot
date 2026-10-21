@@ -613,6 +613,14 @@ const defaults = {
         // longest run start() accepts, and the closed records kept for experiment.status()
         maxTicks: 20000,
         keepClosed: 10,
+        // experiments the code starts by default (utils/experiments autoStart); a refused start
+        // is retried after autoStartRetryTicks. Stop one for good with experiment.stop(id)
+        autoStart: [
+            // 0148 pilot in a second room: E1N47 builders worked 13% of their WORK-ticks (2026-10-21)
+            { name: "pilot-E1N47", room: "E1N47", setting: "population.onDemand.pilot", value: true, ticks: 6000,
+                metrics: ["onDemand", "energyReport", "cpu"] },
+        ],
+        autoStartRetryTicks: 100,
     },
     miner: {
         // fraction of capacity the miner keeps its adjacent source-defense
@@ -957,8 +965,9 @@ const defaults = {
     // beats the energy its team costs (energy and mineral at market fairPrice)
     extractorEconomics: {
         enabled: true,
-        // verdict cache per room (also re-evaluated when the mineral type changes)
-        checkTicks: 1000,
+        // verdict cache per room (also re-evaluated when the mineral type changes); short because
+        // energy and mineral prices move a lot - the evaluation itself is a handful of lookups
+        checkTicks: 100,
         // an unpriced verdict (market history still warming after a reset) is retried sooner
         unknownRecheckTicks: 100,
         // admitted when profit (credits) is above this

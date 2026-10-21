@@ -30,18 +30,18 @@ module.exports = function (project, assert) {
         assert(z.priced && z.work === 12 && z.lives === 9 && z.energy === 9 * (12 * 100 + 3 * 50 + 1 * 2400) && z.profit < 0,
             "0164 cost: 12 WORK miner, full lives to deplete, one marginal 16x(CCM) hauler per life (got " + JSON.stringify(z) + ")");
         assert(econ.admitted(room) === false && Memory.rooms.MinRoom.extractorEconomics.reason === "unprofitable" &&
-            Memory.rooms.MinRoom.extractorEconomics.nextCheckTick === 21000 && Memory.rooms.MinRoom.extractorEconomics.breakeven > 13 &&
+            Memory.rooms.MinRoom.extractorEconomics.nextCheckTick === 20100 && Memory.rooms.MinRoom.extractorEconomics.breakeven > 13 &&
             Memory.rooms.MinRoom.extractorEconomics.deficit > 0,
             "0164 unprofitable: Z at 13 cr vs energy at 33 is blocked until the next check, with breakeven and deficit (got " + JSON.stringify(Memory.rooms.MinRoom.extractorEconomics) + ")");
-        snap.resources.Z.fairPrice = 400; Game.time = 20500;
+        snap.resources.Z.fairPrice = 400; Game.time = 20050;
         assert(econ.admitted(room) === false, "0164 cache: the verdict holds until nextCheckTick even if the price moves");
-        Game.time = 21000;
+        Game.time = 20100;
         assert(econ.admitted(room) === true && Memory.rooms.MinRoom.extractorEconomics.reason === "profitable",
             "0164 profitable: re-evaluated at nextCheckTick, a deposit worth more than its team's energy is admitted");
-        mineral = { id: "min2", mineralType: "H", mineralAmount: 30000, pos: {} }; snap.resources.Z.fairPrice = 13; Game.time = 21010;
+        mineral = { id: "min2", mineralType: "H", mineralAmount: 30000, pos: {} }; snap.resources.Z.fairPrice = 13; Game.time = 20110;
         assert(econ.admitted(room) === true && Memory.rooms.MinRoom.extractorEconomics.mineral === "H",
             "0164 cache: a different mineral type is re-evaluated at once");
-        mineral = { id: "min1", mineralType: "Z", mineralAmount: 30000, pos: {} }; Game.time = 21020;
+        mineral = { id: "min1", mineralType: "Z", mineralAmount: 30000, pos: {} }; Game.time = 20120;
         econ.admitted(room); // Z unprofitable again
         used = true; snap.resources.Z.sellPrice = 60;
         assert(econ.evaluate(room).price === 60 && econ.evaluate(room).ownUse === true,
