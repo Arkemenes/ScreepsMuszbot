@@ -17,6 +17,7 @@ const config = require("./config");
 const census = require("./census");
 const roomCache = require("./roomCache");
 const energyLedger = require("./energyLedger");
+const cpuMeter = require("./cpuMeter");
 
 const rings = {}; // roomName -> [sample], oldest first
 let lastTick = -1;
@@ -51,12 +52,14 @@ function observe() {
     if (lastTick === Game.time) return;
     if (Game.time < lastTick) for (const name of Object.keys(rings)) delete rings[name];
     lastTick = Game.time;
-    const acted = energyLedger.actedIds();
+    const acted = cpuMeter.span("energyReport.acted", () => energyLedger.actedIds());
     const keep = windowTicks();
     const live = new Set();
+    let creepsCpu = 0, sampleCpu = 0, mark;
     for (const room of Game.myRooms || []) {
         const name = room.name;
         const roles = {};
+        mark = Game.cpu.getUsed();
         for (const creep of census.allInRoom(name)) {
             live.add(creep.id);
             const work = workParts(creep);
@@ -65,13 +68,18 @@ function observe() {
             slot[0] += work;
             if (acted.has(creep.id)) slot[1] += work;
         }
+        const between = Game.cpu.getUsed();
+        creepsCpu += between - mark;
         const ring = rings[name] || (rings[name] = []);
         ring.push({ t: Game.time, spend: energyLedger.tickCategories(name), roles,
             stored: storedEnergy(room), level: room.controller && room.controller.level,
             progress: room.controller && room.controller.progress,
             progressTotal: room.controller && room.controller.progressTotal });
         while (ring.length && ring[0].t <= Game.time - keep) ring.shift();
+        sampleCpu += Game.cpu.getUsed() - between;
     }
+    cpuMeter.add("spans", "energyReport.creeps", creepsCpu, 1);
+    cpuMeter.add("spans", "energyReport.sample", sampleCpu, 1);
     if (Game.time % 100 === 0) for (const id of workCache.keys()) if (!live.has(id)) workCache.delete(id);
     const every = Number(config.get("energyReport.autoTicks", 1500));
     if (every > 0 && (lastAuto < 0 || Game.time - lastAuto >= every || Game.time < lastAuto)) {
