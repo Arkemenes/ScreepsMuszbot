@@ -169,7 +169,7 @@ profiler.wrap →
     GC de Memory.creeps dos mortos
     para cada estrutura própria: guard → structureLogic[type].run(structure)
     GC de Memory.structures das mortas
-    guard → pixel (Game.cpu.bucket cheio → Game.cpu.generatePixel(), ROADMAP 0045)
+    guard → pixel (Game.cpu.bucket cheio → Game.cpu.generatePixel(), ROADMAP 0045; off por padrão desde ARK-197, `pixel.enabled`)
     guard → market (scan throttled de histórico/book, ROADMAP 0096)
     guard → utils.stats()
 ```

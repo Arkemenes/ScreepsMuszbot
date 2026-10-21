@@ -9346,9 +9346,17 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
     Game.cpu.generatePixel = () => { pixelCalls++; };
 
     const savedPixelSettings = Memory.settings;
+    // ARK-197: pixel generation is off by default - a full bucket stays a full bucket
     Memory.settings = Object.assign({}, savedPixelSettings, { pixel: { headroomGate: false } });
     Game.cpu.bucket = 10000;
     let before = pixelCalls;
+    console.log = (...a) => { logs.push(a.join(" ")); };
+    mainForPixel.loop();
+    console.log = origLog;
+    assert(pixelCalls === before, "ARK-197: generatePixel() is off by default (pixel.enabled false)");
+    Memory.settings = Object.assign({}, savedPixelSettings, { pixel: { enabled: true, headroomGate: false } });
+    Game.cpu.bucket = 10000;
+    before = pixelCalls;
     console.log = (...a) => { logs.push(a.join(" ")); };
     mainForPixel.loop();
     console.log = origLog;
@@ -9362,7 +9370,7 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
     assert(pixelCalls === before, "generatePixel() is not called below the bucket threshold");
 
     // headroom gate: a pixel zeroes the bucket, so it needs a published average with room under the limit
-    Memory.settings = Object.assign({}, savedPixelSettings, { stats: { cpuWindowTicks: 1 } });
+    Memory.settings = Object.assign({}, savedPixelSettings, { stats: { cpuWindowTicks: 1 }, pixel: { enabled: true } });
     const pixelMeter = require(path.join(PROJECT, "src/utils/cpuMeter"));
     const pixelSavedUsed = Game.cpu.getUsed, pixelSavedLimit = Game.cpu.limit;
     Game.cpu.limit = 20;

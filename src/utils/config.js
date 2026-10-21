@@ -845,8 +845,9 @@ const defaults = {
     pixel: {
         // main.js (ROADMAP 0045): converts a full CPU bucket into a Pixel
         // resource every tick it stays full - off switch for a shard/season
-        // where Pixel doesn't matter
-        enabled: true,
+        // where Pixel doesn't matter. ARK-197 (2026-10-20): off by default while the pixel
+        // logic is redesigned; Memory.settings.pixel.enabled = true turns the old behaviour back on
+        enabled: false,
         bucketThreshold: 10000,
         // generatePixel() zeroes the bucket, and with a bucket at 0 any tick over the
         // limit is terminated ("CPU bucket is empty"). So a pixel is only made while the
