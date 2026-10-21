@@ -10,6 +10,7 @@ const market = require("./market");
 const terminalOps = require("./terminalOps");
 const energyBalancing = require("../rooms/energyBalancing");
 const cpuTier = require("./cpuTier");
+const combat = require("./combat");
 
 // ROADMAP 0162: the bucket band of this tick (bandLevel 0 critical .. 3 full, for Grafana)
 // and how many guard() calls each tier gate skipped this tick
@@ -287,6 +288,8 @@ function exportStats() {
             roomStats.energySpentQuality = energyLedger.snapshotInfo(roomName);
             roomStats.terminalOperations = terminalOps.stats(roomName);
             roomStats.energyBalancing = energyBalancing.stats(roomName);
+            // ROADMAP 0120: idle defenders by reason (empty object when none)
+            roomStats.defenderIdle = combat.idleDefenders(roomName);
         }
     }
 

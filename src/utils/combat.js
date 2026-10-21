@@ -325,7 +325,36 @@ function nearestOwnRampart(creep) {
     return creep.pos.findClosestByPath(free.length ? free : all);
 }
 
+// ROADMAP 0120 (ARK-28): a defender never goes "mute" - every branch that leaves it without
+// a shot/heal/move toward a threat records why in creep.memory.idleReason (written only when
+// the reason changes; idleSince marks when). act() clears it once the creep fights again.
+const IDLE_REASONS = ["noHostile", "outOfRoom", "noTarget", "rampartBound", "noPartner"];
+function idle(creep, reason) {
+    if (creep.memory.idleReason === reason) return;
+    creep.memory.idleReason = reason;
+    creep.memory.idleSince = Game.time;
+}
+function act(creep) {
+    if (creep.memory.idleReason === undefined) return;
+    delete creep.memory.idleReason;
+    delete creep.memory.idleSince;
+}
+// Per-reason count of the idle defenders standing in a room (census: current room), for Memory.stats.
+function idleDefenders(roomName) {
+    const out = {};
+    ["defender", "defenderStriker", "defenderMedic"].forEach((role) =>
+        census.creepsByRole(roomName, role).forEach((c) => {
+            const reason = c.memory.idleReason;
+            if (reason) out[reason] = (out[reason] || 0) + 1;
+        }));
+    return out;
+}
+
 module.exports = {
+    IDLE_REASONS,
+    idle,
+    act,
+    idleDefenders,
     silenceAttackAlerts,
     takeCover,
     isDangerous,

@@ -5059,6 +5059,37 @@ findMap[FIND_HOSTILE_CREEPS] = [];
         assert(t.fledToSpawn(),
             "D3: melee actually adjacent despite the rampart (a gap) - flees, self-corrects");
 
+        // ROADMAP 0120 (ARK-28): an idle defender records why, and stops once it fights
+        const combatIdle = require(path.join(PROJECT, "src/utils/combat"));
+        Memory.rooms.TestRoom.defenseActive = false;
+        t = mkStriker([], [], false);
+        Game.time++;
+        strikerMod.run(t.creep);
+        const since = t.creep.memory.idleSince;
+        Game.time++;
+        strikerMod.run(t.creep);
+        assert(t.creep.memory.idleReason === "noHostile" && since === Game.time - 1 && t.creep.memory.idleSince === since,
+            "0120: a defender with no threat records idleReason noHostile, idleSince kept across ticks");
+        Game.creeps.IdleStriker = Object.assign(t.creep, { name: "IdleStriker" });
+        Game.time++;
+        const counted = combatIdle.idleDefenders("TestRoom");
+        assert(counted.noHostile === 1, "0120: idleDefenders counts the room's idle defenders by reason (got " + JSON.stringify(counted) + ")");
+        delete Game.creeps.IdleStriker;
+        Memory.rooms.TestRoom.defenseActive = true;
+        melee = mkMelee("m4", new RoomPosition(25, 27, "TestRoom"));
+        const fighting = mkStriker([melee], [], true);
+        fighting.creep.memory.idleReason = "noHostile"; fighting.creep.memory.idleSince = Game.time - 50;
+        Game.time++;
+        strikerMod.run(fighting.creep);
+        assert(fighting.shot() && fighting.creep.memory.idleReason === undefined && fighting.creep.memory.idleSince === undefined,
+            "0120: a defender that engages clears its idleReason");
+        Memory.rooms.TestRoom.defenseActive = false;
+        t = mkStriker([], [], false);
+        t.creep.memory.room = "HomeRoom";
+        Game.time++;
+        strikerMod.run(t.creep);
+        assert(t.creep.memory.idleReason === "outOfRoom", "0120: a defender idle outside its home room records outOfRoom (H2)");
+
         delete Memory.rooms.TestRoom;
     }
 

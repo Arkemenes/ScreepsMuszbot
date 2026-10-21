@@ -116,7 +116,10 @@ function getIntel(room) {
 
     // read by rooms/raiding.js only, for rooms we do not own (counted by the enemy scan above)
     if (room.controller && room.controller.my) {
-        mem.numberOfTowers = roomCache.structuresByType(room, STRUCTURE_TOWER).length || undefined;
+        // ARK-116: usually the first structure read of the tick, so it pays the room's shared
+        // roomCache FIND_STRUCTURES fill - spanned to keep that apart from intel's own work
+        mem.numberOfTowers = cpuMeter.span("intel.structures", () =>
+            roomCache.structuresByType(room, STRUCTURE_TOWER).length) || undefined;
     }
 }
 

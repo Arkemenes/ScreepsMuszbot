@@ -54,11 +54,16 @@ const defenderMedic = {
                 (h) => combat.hasMelee(h) && creep.pos.getRangeTo(h) <= 1
             );
             if (meleeAdjacent) {
+                combat.act(creep);
                 combat.kiteAwayFrom(creep, dangers);
                 combat.patch(creep);
                 return;
             }
         }
+
+        if (!mem.defenseActive) combat.idle(creep, creep.memory.room && creep.room.name !== creep.memory.room ? "outOfRoom" : "noHostile");
+        else if (!partner) combat.idle(creep, "noPartner");
+        else combat.act(creep);
 
         if (partner && creep.pos.getRangeTo(partner) > combat.KITE_RANGE - 1) {
             creep.moveTo(partner, { range: combat.KITE_RANGE - 1, reusePath: 5 });

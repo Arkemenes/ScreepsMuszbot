@@ -1,6 +1,6 @@
 # 0120 — Defensores criados mas parados
 
-- **Status:** spec
+- **Status:** in progress (instrumentação publicada em 2026-10-20; correção aguarda incidente real)
 - **Owner:** Arkemenes
 - **Created:** 2026-10-03
 - **Relacionadas:** 0032 (combat overhaul), 0036, 0123 (ofensiva); bug, não feature
@@ -86,3 +86,29 @@ nunca fica "mudo" — ele registra por que está ocioso.
 - Modo solo (`defender`) ou par (`defenderStriker`/`Medic`)? Qual RCL/energia?
 - Dá para o usuário colar `Memory.creeps[x]` + `Memory.rooms[sala]` de um defender
   parado? É o dado mais valioso.
+
+## Findings
+
+### 2026-10-20 — instrumentação (ARK-28)
+
+Implementado só o diagnóstico, por decisão do usuário:
+
+- `utils/combat.js`: `idle(creep, reason)` grava `creep.memory.idleReason` e
+  `idleSince` apenas quando o motivo muda; `act(creep)` limpa os dois quando o
+  creep volta a combater. Motivos: `noHostile`, `outOfRoom` (H2), `noTarget`
+  (H4), `rampartBound` (H3: `moveTo` devolve OK/ERR_TIRED a caminho da rampart;
+  `idleSince` antigo indica que nunca chega), `noPartner` (H5, medic).
+- `defender`, `defenderStriker` e `defenderMedic` chamam `idle`/`act` nos ramos
+  sem ação e nos de combate.
+- `Memory.stats.rooms[sala].defenderIdle`: contagem por motivo dos defensores
+  parados na sala (census pela sala atual), publicada com as demais stats.
+- Smoke: `0120: a defender with no threat records idleReason noHostile, idleSince kept across ticks`,
+  `0120: idleDefenders counts the room's idle defenders by reason`,
+  `0120: a defender that engages clears its idleReason`,
+  `0120: a defender idle outside its home room records outOfRoom (H2)`.
+
+Observação live antes da instrumentação (tick ~83775740): 5 `defenderStriker` e
+2 `defenderMedic` vivos em W7N49, E5N41 e E6N41, com `defenseActive=false` e
+nenhum inimigo em todas as salas próprias. Compatível com H1 (nasceram para um
+ataque que já terminou e esperam perto do spawn até morrer). Não confirmado
+como bug: falta um incidente com hostil presente e defensor parado.

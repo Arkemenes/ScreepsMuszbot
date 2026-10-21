@@ -42,6 +42,7 @@ const defender = {
 
         // ---- nothing to fight: mend allies, otherwise wait near the spawn ----
         if (!hostiles.length) {
+            combat.idle(creep, creep.memory.room && creep.room.name !== creep.memory.room ? "outOfRoom" : "noHostile");
             const injured = mem.defenseActive
                 ? creep.pos.findClosestByRange(FIND_MY_CREEPS, {
                       filter: (a) => a.hits < a.hitsMax,
@@ -65,6 +66,7 @@ const defender = {
         // ---- combat: shoot + heal every tick, then reposition ----
         combat.shoot(creep, hostiles);
         combat.patch(creep);
+        combat.act(creep);
 
         const meleeClosing = _.some(
             hostiles,
@@ -82,6 +84,7 @@ const defender = {
 
         // no melee bearing down: sit at the edge of our range on the target
         const target = combat.pickTarget(creep.room);
+        if (!target) combat.idle(creep, "noTarget");
         if (target) {
             const range = creep.pos.getRangeTo(target);
             if (range > combat.KITE_RANGE) {

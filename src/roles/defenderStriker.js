@@ -73,6 +73,7 @@ const defenderStriker = {
         const hostiles = mem.defenseActive ? getHostiles(creep.room) : [];
 
         if (!hostiles.length) {
+            combat.idle(creep, creep.memory.room && creep.room.name !== creep.memory.room ? "outOfRoom" : "noHostile");
             const spawn = roomCache.mySpawns(creep.room)[0];
             if (spawn && creep.pos.getRangeTo(spawn) > 5) {
                 creep.moveTo(spawn, { reusePath: 20 });
@@ -94,6 +95,7 @@ const defenderStriker = {
         );
 
         if (meleeClosing) {
+            combat.act(creep);
             if (!onRampart) {
                 const rampart = combat.nearestOwnRampart(creep);
                 if (rampart) {
@@ -124,7 +126,9 @@ const defenderStriker = {
             const rampart = combat.nearestOwnRampart(creep);
             if (rampart) {
                 const status = creep.moveTo(rampart, { range: 0, reusePath: 5 });
-                if (status === OK || status === ERR_TIRED) return;
+                // H3: still walking to the rampart - "rampartBound" with idleSince shows a
+                // creep that keeps getting OK from moveTo without ever arriving
+                if (status === OK || status === ERR_TIRED) { combat.idle(creep, "rampartBound"); return; }
                 // unreachable - don't sit here doing nothing, fall through to
                 // the normal hold-at-range-and-shoot logic below instead.
             }
@@ -136,7 +140,8 @@ const defenderStriker = {
         // finished instead of poked at from max range forever (ROADMAP
         // 0032 O1, scoped to same-room pursuit during implementation).
         const target = combat.pickTarget(creep.room);
-        if (!target) return;
+        if (!target) { combat.idle(creep, "noTarget"); return; }
+        combat.act(creep);
         const range = creep.pos.getRangeTo(target);
         const spawn = roomCache.mySpawns(creep.room)[0];
         const wounded = target.hits < target.hitsMax;
