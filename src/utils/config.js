@@ -405,6 +405,9 @@ const defaults = {
         // replacement for it.
         // Legacy fallback when terminalFuel.enabled is false.
         terminalReserveRatio: 0.1,
+        // rooms/energyBalancing: energy each room keeps before sending to another (2026-10-21: 10k,
+        // was the 40k of reserveRatio + terminalReserveRatio); null restores the ratio sum
+        balanceReserve: 10000,
         // ROADMAP 0097: normal rebalancing and its hard per-transfer cap.
         balanceEnabled: true,
         balanceInterval: 1200,

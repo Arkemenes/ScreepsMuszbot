@@ -17,7 +17,12 @@ function snapshot(room) {
     const terminalCap = room.terminal.store.getCapacity(RESOURCE_ENERGY) || 0;
     const energy = store(room.storage, RESOURCE_ENERGY) + store(room.terminal, RESOURCE_ENERGY);
     const capacity = storageCap + terminalCap;
-    const reserve = storageCap * config.get("logistics.reserveRatio", 0.01) + terminalCap * config.get("logistics.terminalReserveRatio", 0.1);
+    // energy a room keeps for itself before it may send (and under which it is a target in need):
+    // logistics.balanceReserve (10000, user decision 2026-10-21; it used to be 1% of storage + 10%
+    // of terminal capacity = 40000); null falls back to that ratio sum
+    const fixed = config.get("logistics.balanceReserve", 10000);
+    const reserve = Number.isFinite(fixed) && fixed >= 0 ? fixed
+        : storageCap * config.get("logistics.reserveRatio", 0.01) + terminalCap * config.get("logistics.terminalReserveRatio", 0.1);
     return { room, energy, capacity, ratio: capacity ? energy / capacity : 0, reserve, excess: Math.max(0, energy - reserve), state: tiers.getEconomyState(room) };
 }
 function store(structure, resource) { return structure && structure.store && (structure.store[resource] || 0) || 0; }
