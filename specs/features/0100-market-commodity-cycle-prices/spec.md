@@ -1,6 +1,6 @@
 # 0100 — Preço direto para ciclos de commodities
 
-- **Status:** in-progress
+- **Status:** done
 - **Owner:** usuário + assistente
 - **Created:** 2026-09-19
 
