@@ -3458,6 +3458,38 @@ assert(mNoContainer.memory.seat && mNoContainer.memory.seat[0] === 21 && mNoCont
         "builder queues repair for a PLANNED damaged road even with no recent traffic on its tile"
     );
 
+    // ROADMAP 0148 T4 (AC8, constitution §9): with a full tower covering it, builderDemand
+    // reports the road as no demand (the on-demand policy may skip the next respawn) - yet
+    // a builder still alive takes it as its only work instead of idling
+    {
+        const builderDemand = require(path.join(PROJECT, "src/utils/builderDemand"));
+        const fbTower = Object.assign(new Structure(), {
+            id: "fb_tower", structureType: STRUCTURE_TOWER, hits: 3000, hitsMax: 3000, my: true,
+            pos: new RoomPosition(10, 10, "W1N1"), room, store: store(1000, 1000),
+        });
+        REG.fb_tower = fbTower;
+        findMap[FIND_STRUCTURES].push(fbTower);
+        const savedLevel = room.controller.level, savedHits = coldPlannedRoad.hits;
+        room.controller.level = 8;
+        coldPlannedRoad.hits = 3000; // out of the critical tier: normal repair only
+        const towerStores = findMap[FIND_STRUCTURES].filter((s) => s.structureType === STRUCTURE_TOWER)
+            .map((t) => { const prev = t.store; t.store = store(1000, 1000); return [t, prev]; });
+        Game.time++;
+        const fbDemand = builderDemand.evaluate(room);
+        const fbBuilder = makeCreep("BldFallback", "builder", {
+            store: store(50, 50), pos: new RoomPosition(2, 47, "W1N1"),
+        });
+        builder.run(fbBuilder);
+        assert(!fbDemand.useful &&
+            fbBuilder.memory.stack && fbBuilder.memory.stack[0][1] === "cold_road",
+            "0148 fallback: the tower-covered band is no builder demand, yet a living builder repairs it instead of idling (demand " +
+            JSON.stringify(fbDemand.reasons) + ")");
+        room.controller.level = savedLevel;
+        coldPlannedRoad.hits = savedHits;
+        towerStores.forEach(([t, prev]) => { t.store = prev; });
+        findMap[FIND_STRUCTURES] = findMap[FIND_STRUCTURES].filter((s) => s.id !== "fb_tower");
+    }
+
     // an equally damaged road the plan does NOT reserve stays out of the
     // queue - being in the plan is what replaced the traffic requirement,
     // not the traffic rule disappearing altogether

@@ -9,8 +9,9 @@ module.exports = function (project, assert) {
     const repair = require(src("utils/rampartRepair"));
     const demand = require(src("utils/builderDemand"));
     const report = require(src("utils/energyReport"));
+    const tiers = require(src("utils/resourceTiers"));
     const original = { count: census.count, sorted: damaged.sorted, mayRepair: repair.builderMayRepair,
-        evaluate: demand.evaluate, context: report.context };
+        evaluate: demand.evaluate, context: report.context, economy: tiers.getEconomySnapshot };
     try {
         let builders = 0, list = [], result = { useful: false, reasons: [], lead: 294, idleSince: 1000 }, ctx = { utilization: { builder: { ratio: 0.02 } } };
         census.count = (room, role) => (role === "builder" ? builders : 0);
@@ -18,6 +19,8 @@ module.exports = function (project, assert) {
         repair.builderMayRepair = (s) => s.hits < s.hitsMax;
         demand.evaluate = () => result;
         report.context = () => ctx;
+        let economy = "stable";
+        tiers.getEconomySnapshot = () => ({ state: economy, reason: "none", criticalConsumers: 0 });
         global.Memory = { settings: { population: { onDemand: { rooms: ["Pilot"] } } }, rooms: { Pilot: {}, Other: {} } };
         global.Game = Object.assign({}, saved.game, { time: 1100 });
         repair.resetLimits();
@@ -58,6 +61,35 @@ module.exports = function (project, assert) {
         assert(run(pilot) === 1 && !Memory.rooms.Pilot.onDemand && policy.status("Pilot").mode === "off",
             "0148 recovery ownership: a room taken off the policy drops its pilot state and is legacy again");
 
+        // T4 (AC9): no eligible room -> the policy stays off, with the reason per room
+        Memory.settings.population.onDemand.rooms = ["Pilot"];
+        builders = 1; result = { useful: false, reasons: [], lead: 294, idleSince: 1000 }; ctx = { utilization: { builder: { ratio: 0.02 } } };
+        Game.time = 1600;
+        Memory.rooms.Pilot.enemies = 2;
+        assert(run(pilot) === 1 && policy.status("Pilot").mode === "ineligible" && policy.status("Pilot").reasons[0] === "threat" && !Memory.rooms.Pilot.onDemand,
+            "0148 no eligible room: hostiles in the room keep it out of the pilot, reason threat (got " + JSON.stringify(policy.status("Pilot")) + ")");
+        delete Memory.rooms.Pilot.enemies;
+        economy = "critical";
+        assert(run(pilot) === 1 && policy.status("Pilot").reasons[0] === "economy-critical",
+            "0148 no eligible room: a critical economy is no stable supply, reason economy-critical");
+        run(other);
+        assert(policy.status("Other").mode === "off" && policy.status("Other").reasons[0] === "not-opted-in",
+            "0148 no eligible room: a room outside population.onDemand.rooms reports not-opted-in");
+        const out = global.onDemandStatus();
+        assert(/Pilot.*economy-critical/.test(out) && /Other.*not-opted-in/.test(out) && /nenhuma sala ativa/.test(out),
+            "0148 no eligible room: onDemandStatus() lists the reason of every room and says none is active (got " + out + ")");
+        economy = "stable";
+        assert(run(pilot) === 0 && Memory.rooms.Pilot.onDemand.state === "active", "0148 no eligible room: eligible again -> the pilot can enter");
+        builders = 0; Memory.rooms.Pilot.defenseActive = true; Game.time = 1610;
+        assert(run(pilot) === 1 && Memory.rooms.Pilot.onDemand.state === "recovering" && Memory.rooms.Pilot.onDemand.reasons[0] === "threat",
+            "0148 no eligible room: a threat while active ends the pilot (recovering, reason threat)");
+        delete Memory.rooms.Pilot.defenseActive;
+        Memory.settings.population.onDemand.enabled = false;
+        assert(run(pilot) === 1 && !Memory.rooms.Pilot.onDemand && policy.status("Pilot").reasons[0] === "flag-off",
+            "0148 no eligible room: the global flag off reports flag-off and drops the pilot state");
+        delete Memory.settings.population.onDemand.enabled;
+        Memory.settings.population.onDemand.rooms = [];
+
         builders = 0;
         list = [{ structureType: STRUCTURE_ROAD, hits: 100, hitsMax: 5000 }];
         assert(run(other, 0) === 1 && policy.status("Other").floor === "critical",
@@ -76,6 +108,7 @@ module.exports = function (project, assert) {
         repair.builderMayRepair = original.mayRepair;
         demand.evaluate = original.evaluate;
         report.context = original.context;
+        tiers.getEconomySnapshot = original.economy;
         repair.resetLimits();
         global.Game = saved.game;
         global.Memory = saved.memory;

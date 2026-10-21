@@ -301,7 +301,8 @@ function exportStats() {
             if (onDemand) {
                 roomStats.onDemand = { mode: onDemand.mode, builder: onDemand.builder, legacy: onDemand.legacy,
                     idleFor: onDemand.idleFor === undefined ? null : onDemand.idleFor, lead: onDemand.lead === undefined ? null : onDemand.lead,
-                    active: onDemand.mode === "active" ? 1 : 0, floor: onDemand.floor ? 1 : 0 };
+                    active: onDemand.mode === "active" ? 1 : 0, floor: onDemand.floor ? 1 : 0,
+                    reason: onDemand.reasons.length ? String(onDemand.reasons[0]) : "" };
             }
         }
     }
