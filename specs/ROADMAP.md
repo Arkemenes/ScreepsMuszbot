@@ -2,6 +2,10 @@
 
 Reparo localARK-145: [cpuReport isolado](../docs/cpu-report-isolado-2026-10-16.md) para comparar150ticks novos por flag. Pacote119 foi publicado pelo usuário aproximadamente18:17; evidência anterior mistura estados e não aprova ganhoL2. Reparo preparado sem novo deploy do agente; ARK-128/139 e aceite live continuam abertos.
 
+## Execução autônoma do roadmap — 2026-10-20
+
+Roadmap e ordem de execução no Linear (milestones M0–M4). M0 fechado salvo ARK-116 (CPU < 15, warm ~17,4), ARK-139, ARK-28 (instrumentado) e ARK-91 (depende do aliado). M1: 0153 ligado por padrão, energyReport (0154-B), readinessContext (0157-A) e labReport (0155) publicados com aceite live pendente. Retomada: [handoff 2026-10-21](../docs/handoff-2026-10-21.md).
+
 ## Execução incremental autorizada — 2026-10-16
 
 [Etapas, dependências e aceite](../docs/plano-execucao-incremental-2026-10-16.md): 0156-A/ARK-142 concluído offline; etapa2/T1–T2 da0154 (ARK-143) publicada pelo usuário; 0153-A1 físico e0156-L2-book implementados localmente, sem novo deploy. [Pacote](../docs/pacote-local-listagens-2026-10-16.md); demais etapas separadas. Histórico persistente sofisticado da 0157 adiado até necessidade demonstrada; core/relatórios iniciais no heap. O gate de 48h de operator permanece. Esta decisão posterior substitui as restrições gerais de implementação da consolidação anterior. Sem publicação/ativação nesta entrega.
