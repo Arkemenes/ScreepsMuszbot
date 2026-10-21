@@ -2,11 +2,12 @@
 // ROADMAP 0154-B (ARK-133): energyReport - where a room's energy goes and how much of its
 // WORK is actually working, over a trailing window of game ticks.
 //
-// observe() runs once per tick after energyLedger.finalize() and keeps one compact sample
-// per owned room in a heap ring (energyReport.windowTicks, default 1500): spend by ledger
-// category, WORK parts alive / WORK parts that acted per role, stored energy, controller
-// progress. Nothing goes to Memory; a global reset or a skipped tick shows up as missing
-// coverage, never as zero activity.
+// observe() runs once per tick after energyLedger.finalize() and folds each owned room into
+// a heap ring of blocks (energyReport.sampleTicks ticks each, default 10; window
+// energyReport.windowTicks, default 1500): spend by ledger category and WORK parts alive /
+// WORK parts that acted per role are summed every tick; stored energy and controller
+// progress are read once, at the block's first tick. Nothing goes to Memory; a global
+// reset or a skipped tick shows up as missing coverage (n < ticks), never as zero activity.
 //
 // report(room, n) aggregates the last n ticks. "income" is a PROXY (delta of stored energy
 // plus estimated spend): it ignores transfers, purchases and sales, and is labelled as
@@ -31,6 +32,11 @@ function windowTicks() {
 
 // Keyed by id only: the engine rebuilds game objects every tick, so a body-identity check
 // would never hit live.
+function sampleTicks() {
+    const value = Number(config.get("energyReport.sampleTicks", 10));
+    return Number.isFinite(value) && value >= 1 ? Math.floor(value) : 10;
+}
+
 function workParts(creep) {
     const hit = workCache.get(creep.id);
     if (hit !== undefined) return hit;
@@ -43,8 +49,8 @@ function workParts(creep) {
 }
 
 function storedEnergy(room) {
-    let energy = (room.storage && room.storage.store[RESOURCE_ENERGY] || 0) +
-        (room.terminal && room.terminal.store[RESOURCE_ENERGY] || 0);
+    const storage = room.storage, terminal = room.terminal;
+    let energy = (storage && storage.store[RESOURCE_ENERGY] || 0) + (terminal && terminal.store[RESOURCE_ENERGY] || 0);
     for (const c of roomCache.structuresByType(room, STRUCTURE_CONTAINER)) energy += c.store[RESOURCE_ENERGY] || 0;
     return energy;
 }
@@ -55,7 +61,7 @@ function observe() {
     if (Game.time < lastTick) for (const name of Object.keys(rings)) delete rings[name];
     lastTick = Game.time;
     const acted = cpuMeter.span("energyReport.acted", () => energyLedger.actedIds());
-    const keep = windowTicks();
+    const keep = windowTicks(), block = sampleTicks();
     const live = new Set();
     let creepsCpu = 0, sampleCpu = 0, mark;
     for (const room of Game.myRooms || []) {
@@ -79,11 +85,22 @@ function observe() {
         const between = Game.cpu.getUsed();
         creepsCpu += between - mark;
         const ring = rings[name] || (rings[name] = []);
-        ring.push({ t: Game.time, spend: energyLedger.tickCategories(name), roles,
-            stored: storedEnergy(room), level: room.controller && room.controller.level,
-            progress: room.controller && room.controller.progress,
-            progressTotal: room.controller && room.controller.progressTotal });
-        while (ring.length && ring[0].t <= Game.time - keep) ring.shift();
+        let sample = ring[ring.length - 1];
+        if (!sample || Game.time - sample.t >= block) {
+            sample = { t: Game.time, n: 0, spend: {}, roles: {}, stored: storedEnergy(room),
+                level: room.controller && room.controller.level,
+                progress: room.controller && room.controller.progress,
+                progressTotal: room.controller && room.controller.progressTotal };
+            ring.push(sample);
+            while (ring[0].t <= Game.time - keep) ring.shift();
+        }
+        sample.n++;
+        const spend = energyLedger.tickCategories(name);
+        for (const category in spend) sample.spend[category] = (sample.spend[category] || 0) + spend[category];
+        for (const role in roles) {
+            const sum = sample.roles[role] || (sample.roles[role] = [0, 0]);
+            sum[0] += roles[role][0]; sum[1] += roles[role][1];
+        }
         sampleCpu += Game.cpu.getUsed() - between;
     }
     cpuMeter.add("spans", "energyReport.creeps", creepsCpu, 1);
@@ -99,9 +116,11 @@ function observe() {
 function report(roomName, n) {
     const want = Math.max(1, Math.floor(Number(n) || windowTicks()));
     const ring = rings[roomName] || [];
+    // blocks are kept whole: the window edge is exact to one block (sampleTicks)
     const samples = ring.filter((s) => s.t > Game.time - want);
-    const out = { room: roomName, requestedTicks: want, observedTicks: samples.length,
-        coverage: samples.length / want, fromTick: samples.length ? samples[0].t : null,
+    const observed = samples.reduce((sum, s) => sum + s.n, 0);
+    const out = { room: roomName, requestedTicks: want, observedTicks: observed,
+        coverage: observed / want, fromTick: samples.length ? samples[0].t : null,
         toTick: samples.length ? samples[samples.length - 1].t : null,
         spend: {}, spendPerTick: 0, utilization: {}, storedDelta: null, incomeProxyPerTick: null,
         rcl: null, kind: "estimated" };
@@ -118,21 +137,22 @@ function report(roomName, n) {
             w[0] += alive; w[1] += acting;
         }
     }
-    const ticks = samples.length;
+    const ticks = observed;
     out.spendPerTick = spend / ticks;
     for (const [role, [alive, acting]] of Object.entries(work)) {
         out.utilization[role] = { workAlive: alive / ticks, workActing: acting / ticks, ratio: alive ? acting / alive : 0 };
     }
     const first = samples[0], last = samples[samples.length - 1];
-    if (ticks > 1) {
+    if (last.t > first.t) {
         out.storedDelta = last.stored - first.stored;
-        // spend of the first sample happened before the "last - first" interval opened
-        const spendInside = spend - Object.values(first.spend || {}).reduce((a, b) => a + b, 0);
+        // stored is read at a block's first tick (before its intents apply), so the
+        // "last - first" interval holds every block's spend except the last one's
+        const spendInside = spend - Object.values(last.spend || {}).reduce((a, b) => a + b, 0);
         out.incomeProxyPerTick = (out.storedDelta + spendInside) / (last.t - first.t);
     }
     if (last.level) {
         out.rcl = { level: last.level, progress: last.progress, progressTotal: last.progressTotal, etaTicks: null };
-        if (ticks > 1 && last.level === first.level && last.progressTotal) {
+        if (last.t > first.t && last.level === first.level && last.progressTotal) {
             const rate = (last.progress - first.progress) / (last.t - first.t);
             if (rate > 0) out.rcl.etaTicks = Math.ceil((last.progressTotal - last.progress) / rate);
         }

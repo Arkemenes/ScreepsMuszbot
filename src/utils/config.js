@@ -442,6 +442,8 @@ const defaults = {
         enabled: true,
         // a creep lives 1500 ticks: readiness needs evidence covering a whole lifetime (0157)
         windowTicks: 1500,
+        // ticks folded into one heap block (stored/progress read once per block)
+        sampleTicks: 10,
         autoTicks: 1500,
         minCoverage: 0.9,
     },

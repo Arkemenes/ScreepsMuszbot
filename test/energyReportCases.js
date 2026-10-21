@@ -7,7 +7,7 @@ module.exports = function (project, assert) {
     const ledger = require(src("energyLedger"));
     const original = { actedIds: ledger.actedIds, tickCategories: ledger.tickCategories };
     try {
-        global.Memory = { settings: { energyReport: { autoTicks: 0 } }, rooms: {} };
+        global.Memory = { settings: { energyReport: { autoTicks: 0, sampleTicks: 1 } }, rooms: {} };
         let stored = 1000, progress = 0;
         const room = {
             name: "ReportRoom",
@@ -50,6 +50,23 @@ module.exports = function (project, assert) {
         const partial = energyReport.report("ReportRoom", 20);
         assert(partial.coverage === 0.5 && energyReport.context("ReportRoom", 20) === null && energyReport.context("ReportRoom", 10) !== null,
             "0154 report: missing ticks lower coverage and context() refuses to answer below energyReport.minCoverage");
+        // blocks of 5 ticks: same totals, stored/progress read once per block, ring 5x smaller
+        energyReport.reset();
+        Memory.settings.energyReport.sampleTicks = 5;
+        let storedReads = 0;
+        Object.defineProperty(room, "storage", { configurable: true, get() { storedReads++; return { store: { energy: stored } }; } });
+        for (let i = 0; i < 20; i++) {
+            Game.time = 2000 + i;
+            stored = 1000 + 10 * i;
+            progress = 50 * i;
+            energyReport.observe();
+        }
+        const b = energyReport.report("ReportRoom", 20);
+        assert(b.observedTicks === 20 && b.coverage === 1 && b.spendPerTick === 5 && b.utilization.builder.ratio === 0.5 &&
+            b.fromTick === 2000 && b.toTick === 2015 && b.storedDelta === 150 && b.incomeProxyPerTick === 15 &&
+            b.rcl.etaTicks === Math.ceil((10000 - 750) / 50) && storedReads === 4,
+            "0154 report blocks: sampleTicks folds ticks into blocks with the same totals and one stored read per block (got " +
+            JSON.stringify({ o: b.observedTicks, d: b.storedDelta, i: b.incomeProxyPerTick, reads: storedReads }) + ")");
         Game.time = 500;
         energyReport.observe();
         assert(energyReport.report("ReportRoom", 10).observedTicks === 1,
