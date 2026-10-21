@@ -3,7 +3,7 @@
 // WORK is actually working, over a trailing window of game ticks.
 //
 // observe() runs once per tick after energyLedger.finalize() and keeps one compact sample
-// per owned room in a heap ring (energyReport.windowTicks, default 600): spend by ledger
+// per owned room in a heap ring (energyReport.windowTicks, default 1500): spend by ledger
 // category, WORK parts alive / WORK parts that acted per role, stored energy, controller
 // progress. Nothing goes to Memory; a global reset or a skipped tick shows up as missing
 // coverage, never as zero activity.
@@ -24,8 +24,8 @@ let lastAuto = -1;
 const workCache = new Map(); // creep id -> { body, work } (WORK parts, counted once per body)
 
 function windowTicks() {
-    const value = Number(config.get("energyReport.windowTicks", 600));
-    return Number.isFinite(value) && value > 0 ? Math.floor(value) : 600;
+    const value = Number(config.get("energyReport.windowTicks", 1500));
+    return Number.isFinite(value) && value > 0 ? Math.floor(value) : 1500;
 }
 
 function workParts(creep) {

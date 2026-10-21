@@ -35,7 +35,10 @@ global.boostPreview = function (creepName, compoundType, count) {
 global.boostEvaluate = function (creepName, compound, context) {
     const creep = Game.creeps[creepName];
     if (!creep) return { status: "unknown", reason: "missing-creep", worth: false };
-    return boostPolicy.worth(creep.memory.role, compound, { ...context,
+    // 0157-A: without a hand-written delivery context, judge with the room's live one
+    const delivery = context && context.delivery ||
+        require("../utils/readinessContext").delivery(creep.room, "boost:" + creepName, creep.ticksToLive || 0);
+    return boostPolicy.worth(creep.memory.role, compound, { ...context, delivery,
         constants: boostConstants.current(), body: creep.body, ttl: creep.ticksToLive, nowTick: Game.time,
         minReturnRatio: config.get("boost.minReturnRatio", 0.20), continueReturnRatio: config.get("boost.continueReturnRatio", 0.10) });
 };

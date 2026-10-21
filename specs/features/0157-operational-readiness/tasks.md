@@ -15,11 +15,11 @@
 
 ## Implementação futura — não executada
 
-- [ ] **T1 — Normalizar fontes/unidades/identidades de claims e curvas entregáveis conservadoras.** AC1,3. Verificação futura: `0157 delivery envelope; 0157 prefix demand; 0157 affine continuous supply`.
-- [ ] **T2 — Implementar admissão/bundle vivo e reconciliação por owner sem cache de saldo.** AC2. Verificação futura: `0157 concurrent admission; 0157 owner recovery`.
-- [ ] **T3 — Implementar utilização por ação, ocupação e qualidade com denominadores census.** AC4. Verificação futura: `0157 action utilization`.
+- [ ] **T1 — Normalizar fontes/unidades/identidades de claims e curvas entregáveis conservadoras.** AC1,3. Parcial 2026-10-20 (0157-A, publicado): `utils/readinessContext` monta o contexto vivo — livre = `terminalClaims.physicalPool` − `reserveFloor` − compromissos de outros owners; oferta futura = taxa líquida observada (energyReport, nunca negativa); cobertura/horizonte/regime (sala+RCL). Smoke `0157 delivery envelope` (4) e `0157 prefix demand`. Verificação futura: `0157 delivery envelope; 0157 prefix demand; 0157 affine continuous supply`.
+- [ ] **T2 — Implementar admissão/bundle vivo e reconciliação por owner sem cache de saldo.** AC2. Parcial 2026-10-20: `commit/release` por owner em `Memory.readiness[sala][owner]` (idempotente, expira por `untilTick`); outros owners veem saldo/taxa descontados. Smoke `0157 concurrent admission` (2) e `0157 owner recovery` (2). Falta reconciliação de canais/transporte. Verificação futura: `0157 concurrent admission; 0157 owner recovery`.
+- [ ] **T3 — Implementar utilização por ação, ocupação e qualidade com denominadores census.** AC4. Parcial 2026-10-20: utilização de WORK por role em `utils/energyReport` (0154-B). Verificação futura: `0157 action utilization`.
 - [ ] **T4 — DEFERRED: infraestrutura persistente de metricSets/protocolo publish/replay/ack.** Exige necessidade demonstrada e revisão da solução mínima; não bloqueia a versão core em heap. AC5. Verificação futura: `0157 persistent coverage; 0157 output quality histories; 0157 durable publisher replay; 0157 late closed origin; 0157 contiguous checkpoint prefix`.
-- [ ] **T5 — Integrar hook guardado e consumidores de contrato, preservando recuperação no off.** AC6. Verificação futura: `0157 collection budget`.
+- [ ] **T5 — Integrar hook guardado e consumidores de contrato, preservando recuperação no off.** AC6. Parcial 2026-10-20: `boostEvaluate` usa `readinessContext.delivery` quando não recebe contexto manual. Verificação futura: `0157 collection budget`.
 - [ ] **T6 — Após autorização medir overhead/calibrar evidência e obter dados reais onde exigidos.** AC5–6. Verificação futura: `LIVE-0157: qualidade, custo e duração reais`.
 
 ## Definition of done futura

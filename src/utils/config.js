@@ -440,8 +440,15 @@ const defaults = {
         // ROADMAP 0154-B (ARK-133): heap window of per-room samples, console line per room
         // every autoTicks (0 = off), and the coverage context() needs before it answers
         enabled: true,
-        windowTicks: 600,
+        // a creep lives 1500 ticks: readiness needs evidence covering a whole lifetime (0157)
+        windowTicks: 1500,
         autoTicks: 1500,
+        minCoverage: 0.9,
+    },
+    readiness: {
+        // ROADMAP 0157-A (ARK-140): safety margin on demand, and the energyReport coverage
+        // a room needs before utils/readinessContext lets a plan through
+        margin: 0.20,
         minCoverage: 0.9,
     },
     listingPolicy: {
