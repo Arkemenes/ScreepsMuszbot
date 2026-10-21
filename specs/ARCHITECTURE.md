@@ -428,7 +428,9 @@ decision and operation state through `Memory.stats.rooms.<room>.energyBalancing`
 `rooms/energyBalancing.js` (0097) pulls non-critical rooms toward the
 empire-wide energy ratio: a room more than `logistics.balanceGapRatio` below it
 is a target, more than that above it a source, and the amount is the target's
-deficit capped by the source's surplus. One run plans several transfers at once,
+deficit capped by the source's surplus (surplus = energy above `logistics.balanceReserve`,
+10k since 2026-10-21 by user decision; it was 1% of storage + 10% of terminal capacity = 40k,
+and `null` restores that). One run plans several transfers at once,
 spending each source's surplus as it goes: a source may feed many targets, a
 target takes one inbound transfer and never also sends (`lockConflict()`'s
 automatic-transfer branch). The old
