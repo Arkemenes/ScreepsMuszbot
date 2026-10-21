@@ -27,6 +27,7 @@
 
 const observerUtil = require("../utils/observer");
 const config = require("../utils/config");
+const cpuTier = require("../utils/cpuTier");
 
 // --- console: observe(roomName, ticks=10) -------------------------------
 // Keeps an owned observer in range pointed at roomName for `ticks` ticks -
@@ -160,7 +161,7 @@ function explorePriority(observers) {
 // player is actively waiting on them.
 let exploreTick = -1;
 function throttledExplore(observers) {
-    const interval = config.get("observer.exploreInterval", 10);
+    const interval = cpuTier.scaled("observer.exploreInterval", 10);
     if (interval > 1 && Game.time - exploreTick < interval) return false;
     const acted = explorePriority(observers);
     if (acted) exploreTick = Game.time;

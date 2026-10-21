@@ -9,6 +9,15 @@ const resourceTiers = require("./resourceTiers");
 const market = require("./market");
 const terminalOps = require("./terminalOps");
 const energyBalancing = require("../rooms/energyBalancing");
+const cpuTier = require("./cpuTier");
+
+// ROADMAP 0162: the bucket band of this tick (bandLevel 0 critical .. 3 full, for Grafana)
+// and how many guard() calls each tier gate skipped this tick
+function publishBand(cpu) {
+    cpu.band = cpuTier.band();
+    cpu.bandLevel = cpuTier.level();
+    cpu.skipped = cpuTier.skippedNow();
+}
 
 // heap-resident, survives ticks but not a global reset - a reset just means
 // the very next call recomputes fresh instead of reusing a stale value, so
@@ -154,6 +163,7 @@ function exportStats() {
         if (Memory.stats.cpu) {
             Memory.stats.cpu.bucket = Game.cpu.bucket;
             Memory.stats.cpu.tick = Game.time; // ARK-116: the tick this bucket belongs to (stats.time moves every 60)
+            publishBand(Memory.stats.cpu);
             Memory.stats.cpu.limit = Game.cpu.limit;
             Memory.stats.cpu.used = Game.cpu.getUsed();
             Memory.stats.cpu.accounting = cpuMeter.accounting();
@@ -288,6 +298,7 @@ function exportStats() {
     // Collect CPU stats
     Memory.stats.cpu.bucket = Game.cpu.bucket;
     Memory.stats.cpu.tick = Game.time; // ARK-116: the tick this bucket belongs to (stats.time moves every 60)
+    publishBand(Memory.stats.cpu);
     Memory.stats.cpu.limit = Game.cpu.limit;
     Memory.stats.cpu.used = Game.cpu.getUsed();
     Memory.stats.cpu.accounting = cpuMeter.accounting();

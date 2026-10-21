@@ -1,6 +1,6 @@
-# 0160 — Tiers de prioridade por nível do CPU bucket
+# 0162 — Tiers de prioridade por nível do CPU bucket
 
-- **Status:** spec
+- **Status:** done
 - **Owner:** Claude / ARK-198
 - **Created:** 2026-10-20
 
@@ -38,22 +38,29 @@ orçamentos maiores). Os limiares e a tabela de tiers ficam em
   proposto abaixo; `main.js` consulta `cpuTier.runs()` antes de cada guard
   opcional. Substitui `shedding()` sem mudar o comportamento atual dele no
   padrão (marketFlip/swingTrade continuam pausando abaixo de 2000).
-- Faixas padrão (configuráveis em `cpu.bands`), com histerese para não
+- Faixas padrão (configuráveis em `cpu.bands`), com histerese de ±250 para não
   oscilar na fronteira:
   - `critical` < 1000 → só T0
   - `low` < 3000 → T0–T1
   - `normal` → T0–T2
-  - `full` ≥ 9000 → T0–T3 + `boost()`
+  - `full` ≥ 9500 → T0–T3 + `boost()`
 - Tiers propostos (padrão):
   - **T0 essencial:** `defense`, `spawn`, `creep`, `traffic`, `structure`,
-    `rampart`, `bootstrapStorage`, `intel` (hostis), `energyLedger`, `stats`
-    (caminho leve), `memoryCleanup`, `planStore`.
+    `rampart`, `bootstrapStorage`, `intel` das salas próprias, `energyLedger`,
+    `stats` (caminho leve), `memoryCleanup`, `planStore`.
   - **T1 economia:** `terminalOps`, `energyBalancing`, `boostLogistics`,
-    `craftLedger`, `market` (scan), `plan` (construction sites).
+    `craftLedger`, `market` (scan), `plan` (construction sites), `intel` de
+    salas não próprias.
   - **T2 otimização:** `craftPlanner`, `marketFlip`, `swingTrade`,
     `plan` (preview visual), `cpuReport`.
   - **T3 luxo:** `pixel` (quando religado), prévias de layout de salas não
     próprias, `raiding.autoRaid`, scans adiantados com `boost()`.
+- `boost()` (faixa `full`) só encurta intervalos/aumenta orçamentos que já
+  existem, cada um com seu multiplicador lido do tier: `observer.exploreInterval`
+  10→1 (observação todo tick, pedido do usuário), `craft.scanInterval` 300→150,
+  `labPolicy.policyCpuPerTick` 1→2, `terminalOps.tickInterval` 5→3,
+  `marketFlip.scanInterval` ÷2, `builder.idleSpendRecheckTicks` e
+  `hauler.idleRecheckTicks` ÷2.
 - Publicação: `Memory.stats.cpu.band` e `Memory.stats.cpu.skipped` (labels
   pulados no tick); painel no Grafana.
 - Smoke cobrindo cada faixa, a histerese e o boost.
@@ -70,17 +77,18 @@ orçamentos maiores). Os limiares e a tabela de tiers ficam em
 
 ## Acceptance criteria
 
-1. O smoke afirma `0160: critical band runs only tier 0`: com bucket 500,
+1. O smoke afirma `0162: critical band runs only tier 0`: com bucket 500,
    `craftPlanner`, `terminalOps`, `marketFlip` e `swingTrade` não são chamados;
    `spawn`, `defense` e o laço de creeps são.
-2. O smoke afirma `0160: default tiers keep the legacy shed behaviour`: com
-   bucket 1500, `marketFlip`/`swingTrade` pausam e `terminalOps` roda (igual a
-   `shedding()` hoje).
-3. O smoke afirma `0160: band hysteresis`: o bucket oscilando ±50 em torno de um
+2. O smoke afirma `0162: default tiers keep the legacy shed behaviour`: com
+   bucket 1500, `marketFlip`/`swingTrade` pausam e `terminalOps` roda.
+   `shedding()` (`cpu.shedBucket` 2000) continua valendo; como T2, os dois também
+   pausam na faixa `low` (abaixo de 3000).
+3. O smoke afirma `0162: band hysteresis`: o bucket oscilando ±50 em torno de um
    limiar não alterna a faixa a cada tick.
-4. O smoke afirma `0160: full band enables tier 3 and boost`: com bucket ≥ 9000,
+4. O smoke afirma `0162: full band enables tier 3 and boost`: com bucket ≥ 9500,
    `cpuTier.runs(3)` é verdadeiro e `cpuTier.boost() > 1`.
-5. O smoke afirma `0160: tiers are configurable`: mover um label para outro tier
+5. O smoke afirma `0162: tiers are configurable`: mover um label para outro tier
    em `Memory.settings.cpu.tiers` muda o resultado no tick seguinte.
 6. `Memory.stats.cpu.band` e `Memory.stats.cpu.skipped` são publicados; o
    Grafana mostra a faixa ao longo do tempo.
@@ -97,14 +105,10 @@ orçamentos maiores). Os limiares e a tabela de tiers ficam em
 - Config, não literais: faixas e tabela em `config`/`Memory.settings`.
 - Testável offline: tudo coberto pelo smoke com `Game.cpu.bucket` simulado.
 
-## Open questions
+## Decisões (revisão 2026-10-20)
 
-1. A tabela de tiers acima está certa? Em especial: `plan` (construction sites)
-   em T1 ou T0? `intel` de salas não próprias pode cair para T2?
-2. Com bucket cheio, o que deve ganhar `boost()`? Sugestões: `craft.scanInterval`
-   e `terminalOps.tickInterval` divididos por 2, orçamento do `labPolicy.poll`
-   maior, reavaliação dos haulers/builders ociosos mais frequente.
-3. Os limiares 1000 / 3000 / 9000 servem, ou prefere outros?
-4. O laço de creeps deve ter um modo degradado em `critical` (ex.: só roles
-   econômicos e de defesa a cada tick, os demais a cada 2)? A spec atual deixa
-   o laço inteiro em T0.
+Respostas aprovadas pelo usuário junto com o plano de otimização de 20/10:
+tabela de tiers acima (sites em T1, intel de fora em T1); boost conforme a lista
+em In scope, com o observer explorando todo tick; limiares 1000/3000/9500 com
+histerese ±250; sem modo degradado do laço de creeps nesta versão (feature
+própria depois, se a medição pedir).

@@ -14,6 +14,7 @@ const names = require("../utils/names");
 const energyLedger = require("../utils/energyLedger");
 const config = require("../utils/config");
 const speak = require("../utils/speech");
+const cpuTier = require("../utils/cpuTier");
 
 function abandonUnsafeLinkLoad(creep) {
     if (creep.getState() !== "GetEnergy" || !creep.memory.stack) return false;
@@ -426,7 +427,7 @@ var builder = {
                             config.get("upgrader.rcl8SafeRatio", 0.99))
             ) {
                 speak(creep, "zzz");
-                const idle = config.get("builder.idleSpendRecheckTicks", 10);
+                const idle = cpuTier.scaled("builder.idleSpendRecheckTicks", 10);
                 if (idle > 1) { creep.memory.idleUntil = Game.time + idle; creep.memory.idleRoom = creep.room.name; }
                 return;
             }

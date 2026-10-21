@@ -189,7 +189,7 @@ module.exports = function (project, assert) {
         const core = load("src/utils/labPlanModel"), originalEvaluate = core.evaluate, originalCpu = Game.cpu;
         let virtualCpu = 0, modelSteps = 0;
         Game.time++;
-        Game.cpu = { ...originalCpu, bucket: 10000, getUsed: () => virtualCpu };
+        Game.cpu = { ...originalCpu, bucket: 5000, getUsed: () => virtualCpu }; // normal band: base budget, no 0160 boost
         core.evaluate = function* () {
             for (let i = 0; i < 100; i++) { virtualCpu += 0.6; modelSteps++; yield null; }
             return { status: "invalid" };

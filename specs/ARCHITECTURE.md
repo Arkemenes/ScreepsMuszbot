@@ -769,6 +769,7 @@ Medição e validação (tudo no heap, nada por tick em Memory):
   que só cai com menos creeps/estruturas ou menos ações; script − intentCpu = lógica otimizável.
 - Grafana: a "CPU real" vem da tendência do bucket no Prometheus (`limit − deriv(bucket)/deriv(game_time)`, 30 min), não de
   `cpu.accounting` (janela no heap que recomeça a cada global reset e fica inflada pelo aquecimento pós-deploy).
+- `utils/cpuTier.js` (ROADMAP 0162, ARK-198): faixa do CPU bucket por tick (critical <1000, low <3000, normal, full ≥9500; histerese ±250). `guard()` só roda o label se o tier dele (`cpu.tiers`) couber na faixa: critical T0, low T0–1, normal T0–2, full T0–3. Label fora da tabela roda. Na faixa full, `cpuTier.scaled()` encurta intervalos e aumenta orçamentos listados em `cpu.boost` (observer explora todo tick). Publica `cpu.band`/`cpu.bandLevel`/`cpu.skipped`.
 - `utils/probe.js`: contador de "mesma entrada que a chamada anterior" (`terminalOps.listResidual`, `labPolicy.assignments`).
 - `utils/shadowBudget.js` e `test/equivalence/compare.js`: sombra live opcional (teto de CPU) e oráculo offline de equivalência.
 - `utils/cpuAudit.js` (`cpuAuditMemory`, `cpuAuditRoomFields`) e `utils/ordersAudit.js` (`ordersAudit`: taxa estimada, idade e distância ao

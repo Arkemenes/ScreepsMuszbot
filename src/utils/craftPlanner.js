@@ -16,6 +16,7 @@ const craftChain = require("./craftChain");
 const labPolicy = require("./labPolicy");
 const labPolicyRuntime = require("./labPolicyRuntime");
 const resourceTiers = require("./resourceTiers");
+const cpuTier = require("./cpuTier");
 
 let lastScanTick = null;
 let lastScanHistoryReady = false;
@@ -338,7 +339,7 @@ function scanRoom(room, snapshot, mem, found, purchaseBook, onlyProduct) {
 }
 
 function scan() {
-    const interval = Math.max(1, Number(config.get("craft.scanInterval", 300)) || 300);
+    const interval = Math.max(1, Number(cpuTier.scaled("craft.scanInterval", 300)) || 300);
     // Hydrating segments can finish just after the initial warming verdict.
     // That provisional verdict must not lock idle rooms out for a full cadence.
     const historyReady = market.historyReady();

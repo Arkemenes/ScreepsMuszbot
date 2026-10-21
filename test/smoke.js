@@ -8427,6 +8427,8 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
         }
     }
     delete Memory.settings.observer; // back to the default exploreInterval (10)
+    const observerBucket = Game.cpu.bucket;
+    Game.cpu.bucket = 5000; // normal band: the 0162 full-band boost would observe every tick
     Game.time += 20; // clear of any interval window left by the tests above
     observed = null;
     observerLogic.run(obs2);
@@ -8435,6 +8437,12 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
     observerLogic.run(obs2);
     assert(observed === null,
         "a repeat explore decision is throttled within observer.exploreInterval");
+    Game.cpu.bucket = 10000;
+    Game.time += 1;
+    observed = null;
+    observerLogic.run(obs2);
+    assert(observed !== null, "0162: in the full band the observer explores every tick (exploreInterval boosted 10 -> 1)");
+    Game.cpu.bucket = observerBucket;
     Memory.settings.observer = { exploreInterval: 1 };
     observed = null;
     observerLogic.run(obs2);
@@ -9408,6 +9416,70 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
     console.log = origLog;
     flipMod.tick = realFlipTick;
     assert(shedCalls === 0 && flipSeen.length === 1, "0113: below cpu.shedBucket marketFlip is paused, above it runs (" + shedCalls + "/" + flipSeen.length + ")");
+
+    // --- ROADMAP 0162: priority tiers by bucket band ----------------------
+    {
+        const tier = require(path.join(PROJECT, "src/utils/cpuTier"));
+        const utilsMod = require(path.join(PROJECT, "src/utils"));
+        const savedTicks = { terminalOps: utilsMod.terminalOps.tick, craftPlanner: utilsMod.craftPlanner.tick, swingTrade: utilsMod.swingTrade.tick, flip: flipMod.tick };
+        const ran = {};
+        utilsMod.terminalOps.tick = () => { ran.terminalOps = true; };
+        utilsMod.craftPlanner.tick = () => { ran.craftPlanner = true; };
+        utilsMod.swingTrade.tick = () => { ran.swingTrade = true; };
+        flipMod.tick = () => { ran.marketFlip = true; };
+        const loopAt = (bucket) => {
+            Object.keys(ran).forEach((k) => delete ran[k]);
+            tier.reset();
+            Game.cpu.bucket = bucket; Game.time++;
+            console.log = (...a) => { logs.push(a.join(" ")); };
+            mainForPixel.loop();
+            console.log = origLog;
+            return Object.assign({}, tier.skippedNow());
+        };
+        const critical = loopAt(500);
+        assert(!ran.terminalOps && !ran.craftPlanner && !ran.marketFlip && !ran.swingTrade &&
+            !critical.spawn && !critical.defense && !critical.creep && critical.terminalOps && critical.craftPlanner,
+            "0162: critical band runs only tier 0 (skipped " + Object.keys(critical).join() + ")");
+        const low = loopAt(1500);
+        assert(ran.terminalOps && !ran.marketFlip && !ran.swingTrade && !ran.craftPlanner,
+            "0162: default tiers keep the legacy shed behaviour (ran " + Object.keys(ran).join() + ")");
+        const normal = loopAt(5000);
+        assert(ran.terminalOps && ran.craftPlanner && ran.marketFlip && ran.swingTrade && !normal.terminalOps,
+            "0162: normal band runs tiers 0-2 like before (ran " + Object.keys(ran).join() + ")");
+        utilsMod.terminalOps.tick = savedTicks.terminalOps; utilsMod.craftPlanner.tick = savedTicks.craftPlanner;
+        utilsMod.swingTrade.tick = savedTicks.swingTrade; flipMod.tick = savedTicks.flip;
+
+        // hysteresis: hovering +-50 around the 3000 edge does not flip the band every tick
+        tier.reset();
+        Game.cpu.bucket = 3400; Game.time++;
+        const start = tier.band();
+        const seen = [];
+        [2960, 3040, 2950, 3050, 2970].forEach((b) => { Game.cpu.bucket = b; Game.time++; seen.push(tier.band()); });
+        Game.cpu.bucket = 2700; Game.time++;
+        const dropped = tier.band();
+        assert(start === "normal" && seen.every((b) => b === "normal") && dropped === "low",
+            "0162: band hysteresis (" + start + " -> " + seen.join() + " -> " + dropped + ")");
+
+        // full band: tier 3 runs and the boost scales the configured knobs
+        tier.reset();
+        Game.cpu.bucket = 9600; Game.time++;
+        assert(tier.band() === "full" && tier.runs(3) && tier.scaled("observer.exploreInterval", 10) === 1 &&
+            tier.scaled("craft.policyCpuPerTick", 1) === 2 && tier.scaled("craft.scanInterval", 300) === 150,
+            "0162: full band enables tier 3 and boost");
+        Game.cpu.bucket = 5000; Game.time++;
+        assert(!tier.runs(3) && tier.scaled("observer.exploreInterval", 10) === 10, "0162: no boost outside the full band");
+
+        // configurable: moving a label to another tier changes the gate on the next tick
+        const savedTierSettings = Memory.settings;
+        Memory.settings = Object.assign({}, savedTierSettings, { cpu: { tiers: { terminalOps: 3 } } });
+        Game.time++;
+        const movedOff = tier.allows("terminalOps");
+        const keptSpawn = tier.allows("spawn") && tier.allows("craftPlanner"); // other labels keep their defaults
+        Memory.settings = savedTierSettings;
+        assert(!movedOff && keptSpawn && tier.allows("terminalOps") && tier.allows("someUnknownLabel"),
+            "0162: tiers are configurable");
+        tier.reset();
+    }
 
     Game.cpu.bucket = 10000; // restore the shared default
     delete Game.cpu.generatePixel;
@@ -10609,10 +10681,9 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
 }
 
 // --- ROADMAP 0050: runBuild() says "~Pew!~" on a successful build/repair -
-// (ARK-116: only with Memory.settings.creep.say on - speech is a 0.2 CPU intent)
+// (speech can be switched off with Memory.settings.creep.say; on by default - say() is a free intent)
 {
     const savedSaySettings = Memory.settings;
-    Memory.settings = Object.assign({}, savedSaySettings, { creep: { say: true } });
     const site = Object.assign(new ConstructionSite(), { id: "sayBuildSite1" });
     REG.sayBuildSite1 = site;
     let said = null;
@@ -10635,10 +10706,11 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
     });
     repairerCreep.runBuild("sayWall1");
     assert(said === "~Pew!~", "runBuild says '~Pew!~' on a successful repair");
-    Memory.settings = savedSaySettings;
+    Memory.settings = Object.assign({}, savedSaySettings, { creep: { say: false } });
     said = null; wall.hits = 50;
     repairerCreep.runBuild("sayWall1");
-    assert(said === null, "ARK-116: with creep.say off (default) a creep stays silent - no 0.2 CPU say intent");
+    assert(said === null, "with creep.say off a creep stays silent");
+    Memory.settings = savedSaySettings;
     delete REG.sayWall1;
 }
 

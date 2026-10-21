@@ -7,13 +7,15 @@
 // Memory.stats.cpu.meter.intents.<class.method> and .intentCpu publish them per tick.
 // The wrapper is one apply() and a compare per call - far below the 0.2 it measures.
 const INTENT_CPU = 0.2;
+// say and pull are not wrapped: the driver's freeMethods charge them nothing
+// (screeps/driver lib/runtime/runtime.js, intents.set).
 
 const ACTIONS = {
     Creep: ["attack", "attackController", "build", "claimController", "dismantle", "drop",
-        "generateSafeMode", "harvest", "heal", "move", "notifyWhenAttacked", "pickup", "pull",
-        "rangedAttack", "rangedHeal", "rangedMassAttack", "repair", "reserveController", "say",
+        "generateSafeMode", "harvest", "heal", "move", "notifyWhenAttacked", "pickup",
+        "rangedAttack", "rangedHeal", "rangedMassAttack", "repair", "reserveController",
         "signController", "suicide", "transfer", "upgradeController", "withdraw"],
-    PowerCreep: ["drop", "enableRoom", "move", "notifyWhenAttacked", "pickup", "renew", "say",
+    PowerCreep: ["drop", "enableRoom", "move", "notifyWhenAttacked", "pickup", "renew",
         "suicide", "transfer", "usePower", "withdraw"],
     StructureSpawn: ["spawnCreep", "recycleCreep", "renewCreep"],
     StructureTower: ["attack", "heal", "repair"],

@@ -6,6 +6,7 @@ const traffic = require("../utils/traffic");
 const config = require("../utils/config");
 const mapExits = require("../utils/mapExits");
 const cpuMeter = require("../utils/cpuMeter");
+const cpuTier = require("../utils/cpuTier");
 
 // The plan's building list / mincut boxes for a room, or [] when unplanned.
 function planBuildings(roomName) {
@@ -103,7 +104,8 @@ function planCity(room, opts) {
     }
 
     const existingPlan = planStore.getPlan(roomName);
-    if (existingPlan && config.get("planner.visualizeEnabled", true)) {
+    // ROADMAP 0162: the preview is tier 2 (paused below the low band)
+    if (existingPlan && config.get("planner.visualizeEnabled", true) && cpuTier.allows("planPreview")) {
         const redraw = planScanDue(
             roomName + ":visualize",
             room,

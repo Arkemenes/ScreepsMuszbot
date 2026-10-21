@@ -19,6 +19,7 @@ const transientStock = require("../utils/transientStock");
 const names = require("../utils/names");
 const terminalOps = require("../utils/terminalOps");
 const stockPolicy = require("../utils/resourcePolicy");
+const cpuTier = require("../utils/cpuTier");
 
 // Per-tick, per-room cache for the filtered structure lists below - every
 // hauler in a room was independently re-running the same filter over
@@ -889,7 +890,7 @@ function idleNear(creep) {
 const idleChecks = {}; // creep name -> { tick, room } of the last empty search (heap only)
 let idleChecksGc = 0;
 function idleSkip(creep) {
-    const every = config.get("hauler.idleRecheckTicks", 5);
+    const every = cpuTier.scaled("hauler.idleRecheckTicks", 5);
     if (!(every > 1)) return false;
     const mark = idleChecks[creep.name];
     if (!mark || mark.room !== creep.room.name || Game.time < mark.tick || Game.time - mark.tick >= every) return false;

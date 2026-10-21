@@ -10,6 +10,7 @@ const cadence = require("./cadence");
 const marketPrices = require("./market");
 const terminalOps = require("./terminalOps");
 const marketPricing = require("./marketPricing");
+const cpuTier = require("./cpuTier");
 
 const FINAL_STATES = ["completed", "failed", "cancelled"];
 let lastScanTick = null;
@@ -183,7 +184,7 @@ function openFlip(candidate, quantity, expectedNetProfit) {
     return true;
 }
 function scan() {
-    const interval = Math.max(1, Number(config.get("marketFlip.scanInterval", 60)) || 60);
+    const interval = Math.max(1, Number(cpuTier.scaled("marketFlip.scanInterval", 60)) || 60);
     if (!cadence.due(lastScanTick, interval)) return;
     lastScanTick = Game.time;
     const mem = memory();

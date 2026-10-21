@@ -17,6 +17,7 @@ const terminalPowerCost = require("./terminalPowerCost");
 const terminalMessenger = require("./terminalMessenger");
 const terminalRouting = require("./terminalRouting");
 const hostiles = require("./hostiles");
+const cpuTier = require("./cpuTier");
 
 const FINAL_STATES = ["completed", "failed", "cancelled", "forfeited"];
 
@@ -1896,7 +1897,7 @@ function dispatchTerminalMessage() {
 let lastTickRun = null;
 function tick() {
     if (!config.get("terminalOps.enabled", true)) return;
-    const interval = config.get("terminalOps.tickInterval", 5);
+    const interval = cpuTier.scaled("terminalOps.tickInterval", 5);
     if (interval > 1 && !cadence.due(lastTickRun, interval)) return;
     lastTickRun = Game.time;
     memory();

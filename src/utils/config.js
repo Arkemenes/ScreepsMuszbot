@@ -586,8 +586,8 @@ const defaults = {
         safeModeTicksToKillThreshold: 20,
     },
     creep: {
-        // creep.say() costs 0.2 CPU per call like any action; speech is cosmetic, off by default
-        say: false,
+        // creep speech on/off. say() is free (the driver's freeMethods: say, pull), so on by default
+        say: true,
     },
     planner: {
         // planCity() won't spend a tick's CPU below this bucket
@@ -865,6 +865,29 @@ const defaults = {
         // below this bucket the optional modules (market scan, marketFlip) pause so the
         // bucket can refill; craftPlanner has its own craft.minBucket gate
         shedBucket: 2000,
+        // ROADMAP 0162: bucket bands (utils/cpuTier). critical < critical, low < low,
+        // full >= full, normal in between; hysteresis = margin to cross an edge
+        bands: { critical: 1000, low: 3000, full: 9500, hysteresis: 250 },
+        // tier per guard() label prefix: critical runs T0, low T0-1, normal T0-2, full T0-3.
+        // A label missing here runs as T0 (never switched off by omission).
+        tiers: {
+            planStore: 0, memoryCleanup: 0, bootstrapStorage: 0, intel: 0, spawn: 0, defense: 0,
+            creep: 0, traffic: 0, rampart: 0, structure: 0, energyLedger: 0, intentMeter: 0, stats: 0,
+            plan: 1, terminalOps: 1, energyBalancing: 1, boostLogistics: 1, craftLedger: 1, market: 1,
+            intelRemote: 1,
+            craftPlanner: 2, marketFlip: 2, swingTrade: 2, cpuReport: 2, planPreview: 2,
+            pixel: 3, raiding: 3, layoutPreview: 3,
+        },
+        // full band only: existing intervals divided / budgets multiplied by factor
+        boost: {
+            "observer.exploreInterval": { factor: 10, kind: "interval" },
+            "craft.scanInterval": { factor: 2, kind: "interval" },
+            "craft.policyCpuPerTick": { factor: 2, kind: "budget" },
+            "terminalOps.tickInterval": { factor: 5 / 3, kind: "interval" },
+            "marketFlip.scanInterval": { factor: 2, kind: "interval" },
+            "builder.idleSpendRecheckTicks": { factor: 2, kind: "interval" },
+            "hauler.idleRecheckTicks": { factor: 2, kind: "interval" },
+        },
     },
     mineralMiner: {
         // ROADMAP 0114: minimum deposit amount to spawn a mineralMiner, and the

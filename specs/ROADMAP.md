@@ -31,7 +31,7 @@ detalhe.
 
 | #    | Feature | Status | Notas |
 |------|---------|--------|-------|
-| 0160 | [Tiers de prioridade por nível do CPU bucket](features/0160-cpu-priority-tiers/spec.md) | spec | ARK-198: faixas critical/low/normal/full com histerese; tiers T0–T3 por label de guard em config, substitui `shedding()` mantendo o comportamento padrão; boost com bucket cheio. Aguarda revisão (open questions). |
+| 0162 | [Tiers de prioridade por nível do CPU bucket](features/0162-cpu-priority-tiers/spec.md) | done | ARK-198: faixas critical/low/normal/full (1000/3000/9500, histerese ±250); tiers T0–T3 por label de guard em `cpu.tiers`; boost na faixa full (observer todo tick, scans/orçamentos). Decisões aprovadas em 20/10. |
 | 0159 | [RoomVisual v2](features/0159-roomvisual-v2/spec.md) | done (local) | ARK-182: build oficial Screeps v2.0.0 (`874f8b9`), licença MIT e integração CommonJS preservados. Smoke12686/check/build130 verdes; bundle carrega/desenha, SHA256 oficial conferido. Sem commit/publicação. |
 | 0158 | [Storage provisório até RCL 4](features/0158-bootstrap-storage/spec.md) | done (local) | ARK-161: container no tile do terminal como storage canônico; energia/minerais drenados ao definitivo, remoção só após entrega confirmada. Smoke11915/check/build verdes; sem commit/publicação. |
 | 0157 | [Operational readiness](features/0157-operational-readiness/spec.md) | in-progress | ARK-140: checker puro de envelope/prefixos local como dependência do boost. Coleta de renda/entrega, admissão compartilhada, métricas e evidência operacional pendentes; persistência sofisticada adiada. Sem ativação. |

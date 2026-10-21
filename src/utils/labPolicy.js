@@ -4,6 +4,7 @@ const config = require("./config");
 const model = require("./labPlanModel");
 const data = require("./labPolicyData");
 const labSlots = require("./labSlots");
+const cpuTier = require("./cpuTier");
 const jobs = new Map(), planCache = new Map(), index = new Map();
 const widePhaseCache = new Map();
 let recipeSource, recipeSignature, recipes, budgetTick = -1, used = 0, cpuStart = 0;
@@ -164,7 +165,7 @@ function poll(key) {
         cpuStart = Game.cpu && Game.cpu.getUsed ? Game.cpu.getUsed() : 0;
     }
     const budget = config.get("craft.policyWorkPerTick", 1000);
-    const cpuLimit = config.get("craft.policyCpuPerTick", 1);
+    const cpuLimit = cpuTier.scaled("craft.policyCpuPerTick", 1);
     const active = job.entries.filter((e) => e.generator);
     if (!Game.cpu || Game.cpu.bucket >= config.get("craft.minBucket", 500)) {
         while (job.status === "evaluating" && used < budget) {

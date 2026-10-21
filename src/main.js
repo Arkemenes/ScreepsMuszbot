@@ -6,6 +6,8 @@ let roomLogic = require("./rooms");
 let prototypes = require("./prototypes");
 let utils = require("./utils");
 let config = require("./utils/config");
+// ROADMAP 0162: which guard()ed subsystems run in this tick's bucket band
+const cpuTier = require("./utils/cpuTier");
 // ARK-116: count successful game actions (0.2 CPU each) - after ./prototypes replaced move/moveTo
 const intentMeter = require("./utils/intentMeter");
 intentMeter.install();
@@ -164,6 +166,8 @@ function meterKey(label) {
     return i < 0 ? label : label.slice(0, i);
 }
 function guard(label, fn, group, key) {
+    const module = meterKey(label);
+    if (!cpuTier.allows(module)) { cpuTier.skip(module); return; }
     const start = Game.cpu.getUsed();
     try {
         fn();
@@ -171,7 +175,7 @@ function guard(label, fn, group, key) {
         console.log("[" + label + "] " + (e && e.stack ? e.stack : e));
     }
     const used = Game.cpu.getUsed() - start;
-    cpuMeter.record("modules", meterKey(label), used);
+    cpuMeter.record("modules", module, used);
     if (group) cpuMeter.record(group, key, used);
 }
 // Console: cpuTop(n=15) prints the heaviest modules / roles / structures / spans of the
@@ -306,9 +310,11 @@ module.exports.loop = function () {
                 guard("bootstrapStorage:" + r.name, () => require("./utils/bootstrapStorage").prepareRoom(r))
             );
             // get intel for each room
-            _.forEach(Game.rooms, (r) =>
-                guard("intel:" + r.name, () => roomLogic.getIntel(r))
-            );
+            // ROADMAP 0162: own rooms are tier 0; rooms we only see (scouts, observer) tier 1
+            _.forEach(Game.rooms, (r) => {
+                if (!(r.controller && r.controller.my) && !cpuTier.allows("intelRemote")) { cpuTier.skip("intelRemote"); return; }
+                guard("intel:" + r.name, () => roomLogic.getIntel(r));
+            });
             // plan the city layout for each room in our empire
             _.forEach(Game.myRooms, (r) =>
                 guard("plan:" + r.name, () => roomLogic.planCity(r))
@@ -317,6 +323,7 @@ module.exports.loop = function () {
             // see planLayout()/roles/scout.js. Needs the scout parked there
             // for vision, same as Game.myRooms needs an owned structure/creep.
             _.forEach(Game.rooms, (r) => {
+                if (Memory.layoutRequests && Memory.layoutRequests[r.name] && !cpuTier.allows("layoutPreview")) { cpuTier.skip("layoutPreview"); return; }
                 if (
                     Memory.layoutRequests &&
                     Memory.layoutRequests[r.name] &&
