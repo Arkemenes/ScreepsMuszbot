@@ -1,6 +1,6 @@
 # 0077 — Roteamento multi-sala considera estrutura conhecida (não só terreno)
 
-- **Status:** in-progress
+- **Status:** done
 - **Owner:**
 - **Created:** 2026-09-14
 

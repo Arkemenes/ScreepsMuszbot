@@ -39,3 +39,12 @@
   bastou, sem precisar estender a classe `Room` do harness.
 - 789 assertions verdes (783 antes + 6 novas: AC1, AC2, AC3, e 3 de
   regressão AC4). `npx grunt` build limpo.
+
+## Fechamento (2026-10-20, ARK-10)
+
+A pendência do ROADMAP ("creep ainda pode ficar parado; reproduzir antes de fechar")
+referia-se ao caminho nativo multi-sala anterior. Ele foi substituído pela navegação
+incremental (`travelToRoom`/`moveToRoom` por salto, cache de grafo, `allowUnplannedHop`;
+ARK-102/110/111/112/113 concluídas). Live tick ~83775740: nenhum creep com
+`_m.stuck > 2`, nenhuma sala marcada como beco sem saída, último claim (E6N41) aceito.
+Feature fechada; uma nova ocorrência de travamento vira bug próprio com reprodução.
