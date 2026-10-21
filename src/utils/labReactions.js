@@ -95,7 +95,7 @@ function execute(structure) {
     ledger.used[group] = (ledger.used[group] || 0) + quantity;
     ledger.outputs.add(structure.id);
     require("./craftLedger").production(structure, reaction.product, quantity, power);
-    require("./labReport").recordRun(structure, quantity); // ROADMAP 0155: this lab reacted this tick
+    require("./labReport").recordRun(structure, quantity, reaction.product); // ROADMAP 0155: this lab reacted this tick
     if (state) state.pending.push({ tick: Game.time, product: reaction.product, amount: quantity, power, quotaKey: reaction.quotaKey,
         before: structure.store[reaction.product] || 0, out: structure.id, inputs: [a.id, b.id] });
 }

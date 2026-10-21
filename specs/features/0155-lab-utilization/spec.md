@@ -2,7 +2,7 @@
 
 > **Decisão posterior — 16/10/2026:** implementação local autorizada passo a passo no [plano de execução incremental](../../../docs/plano-execucao-incremental-2026-10-16.md). Histórico persistente sofisticado adiado até necessidade demonstrada; cobertura inicial no heap, com lacunas explícitas. Gates operacionais continuam válidos.
 
-- **Status:** in-progress — labReport (observação final por lab/tick, contadores cumulativos, relatório) publicado em 2026-10-20; vínculo com confirmação/origem (T2) e gate de cobertura 0157 (T3) pendentes.
+- **Status:** done — labReport com confirmação por cooldown, produção final vs intermediária, regime/época e evidência de 48h (gate do OPERATE_LAB) publicados em 2026-10-21; 48h live na ARK-203.
 - **Issue:** ARK-134 (filha de ARK-128).
 - **Created / revisão documental:** 2026-10-15.
 - **Contrato integrado e aceite:** [planejamento vigente](../../../docs/planejamento-integrado-2026-10-16.md); análises anteriores são históricas.
