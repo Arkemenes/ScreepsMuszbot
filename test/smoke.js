@@ -10493,7 +10493,10 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
 }
 
 // --- ROADMAP 0050: runBuild() says "~Pew!~" on a successful build/repair -
+// (ARK-116: only with Memory.settings.creep.say on - speech is a 0.2 CPU intent)
 {
+    const savedSaySettings = Memory.settings;
+    Memory.settings = Object.assign({}, savedSaySettings, { creep: { say: true } });
     const site = Object.assign(new ConstructionSite(), { id: "sayBuildSite1" });
     REG.sayBuildSite1 = site;
     let said = null;
@@ -10516,6 +10519,10 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
     });
     repairerCreep.runBuild("sayWall1");
     assert(said === "~Pew!~", "runBuild says '~Pew!~' on a successful repair");
+    Memory.settings = savedSaySettings;
+    said = null; wall.hits = 50;
+    repairerCreep.runBuild("sayWall1");
+    assert(said === null, "ARK-116: with creep.say off (default) a creep stays silent - no 0.2 CPU say intent");
     delete REG.sayWall1;
 }
 

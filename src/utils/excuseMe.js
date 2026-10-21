@@ -28,6 +28,7 @@
 // no business negotiating that away for anyone.
 
 const config = require("./config");
+const speak = require("./speech");
 
 const SAY_ASK = "Excuse-me";
 const SAY_REPLY = "Ok!";
@@ -186,12 +187,12 @@ function ask(mover, nx, ny) {
     const exit = pickExitTile(room, last, { x: tailX, y: tailY }, mover.pos);
     if (!exit) return false;
 
-    mover.say(SAY_ASK);
+    speak(mover, SAY_ASK);
 
     let target = exit;
     for (let i = creeps.length - 1; i >= 0; i--) {
         const c = creeps[i];
-        c.say(SAY_REPLY);
+        speak(c, SAY_REPLY);
         c.move(c.pos.getDirectionTo(target.x, target.y));
         target = { x: c.pos.x, y: c.pos.y };
     }

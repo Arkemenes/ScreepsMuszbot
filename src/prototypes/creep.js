@@ -1,4 +1,5 @@
 const energyLedger = require("../utils/energyLedger");
+const speak = require("../utils/speech");
 energyLedger.installHooks(Creep.prototype);
 
 /** Example state - goto location */
@@ -141,7 +142,7 @@ Creep.prototype.runBuild = function (scope) {
         let status = energyLedger.invoke(this, "build", target);
 
         if (status == OK) {
-            this.say("~Pew!~");
+            speak(this, "~Pew!~");
         } else if (status == ERR_NOT_IN_RANGE) {
             this.moveTo(target);
         } else {
@@ -158,7 +159,7 @@ Creep.prototype.runBuild = function (scope) {
         let status = energyLedger.invoke(this, "repair", target);
 
         if (status == OK) {
-            this.say("~Pew!~");
+            speak(this, "~Pew!~");
         } else if (status == ERR_NOT_IN_RANGE) {
             this.moveTo(target);
         } else {

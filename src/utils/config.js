@@ -580,6 +580,10 @@ const defaults = {
         // rush projects well under this even at full hp).
         safeModeTicksToKillThreshold: 20,
     },
+    creep: {
+        // creep.say() costs 0.2 CPU per call like any action; speech is cosmetic, off by default
+        say: false,
+    },
     planner: {
         // planCity() won't spend a tick's CPU below this bucket
         minBucket: 500,

@@ -8,6 +8,7 @@ const reservations = require("../utils/reservations");
 const resourceTiers = require("../utils/resourceTiers");
 const names = require("../utils/names");
 const config = require("../utils/config");
+const speak = require("../utils/speech");
 
 function abandonUnsafeLinkLoad(creep) {
     if (creep.getState() !== "GetEnergy" || !creep.memory.stack) return false;
@@ -102,7 +103,7 @@ var roleUpgrader = {
                 creep.pushState("GetEnergy", link.id);
 
                 if (!creep.invokeState()) {
-                    creep.say("zzz");
+                    speak(creep, "zzz");
                 }
                 return;
             }
@@ -119,7 +120,7 @@ var roleUpgrader = {
                 creep.pushState("GetEnergy", resource.id);
 
                 if (!creep.invokeState()) {
-                    creep.say("zzz");
+                    speak(creep, "zzz");
                 }
                 return;
             }
@@ -157,7 +158,7 @@ var roleUpgrader = {
                 creep.pushState("GetEnergy", structure.id);
 
                 if (!creep.invokeState()) {
-                    creep.say("zzz");
+                    speak(creep, "zzz");
                 }
                 return;
             }
@@ -170,7 +171,7 @@ var roleUpgrader = {
                 creep.pushState("GetEnergy", nearbyFullSource.id);
 
                 if (!creep.invokeState()) {
-                    creep.say("zzz");
+                    speak(creep, "zzz");
                 }
                 return;
             }
@@ -191,11 +192,11 @@ var roleUpgrader = {
             creep.pushState("Upgrade", controller.id);
 
             if (!creep.invokeState()) {
-                creep.say("zzz");
+                speak(creep, "zzz");
                 return;
             }
 
-            creep.say("zzz");
+            speak(creep, "zzz");
             return;
         }
     },

@@ -13,6 +13,7 @@ const resourceTiers = require("../utils/resourceTiers");
 const names = require("../utils/names");
 const energyLedger = require("../utils/energyLedger");
 const config = require("../utils/config");
+const speak = require("../utils/speech");
 
 function abandonUnsafeLinkLoad(creep) {
     if (creep.getState() !== "GetEnergy" || !creep.memory.stack) return false;
@@ -294,7 +295,7 @@ var builder = {
                 if (pile) {
                     reservations.claim(creep, pile.id);
                     creep.pushState("GetEnergy", pile.id);
-                    if (!creep.invokeState()) creep.say("zzz");
+                    if (!creep.invokeState()) speak(creep, "zzz");
                     return;
                 }
 
@@ -346,7 +347,7 @@ var builder = {
                 if (rampartRepair.tier(repairTarget) === "critical") {
                     creep.pushState("Build", repairTarget.id);
                     if (!creep.invokeState()) {
-                        creep.say("zzz");
+                        speak(creep, "zzz");
                     }
                     return;
                 }
@@ -372,7 +373,7 @@ var builder = {
             if (targetConstructionSite) {
                 creep.pushState("Build", targetConstructionSite.id);
                 if (!creep.invokeState()) {
-                    creep.say("zzz");
+                    speak(creep, "zzz");
                 }
                 return;
             }
@@ -388,7 +389,7 @@ var builder = {
             if (repairTarget) {
                 creep.pushState("Build", repairTarget.id);
                 if (!creep.invokeState()) {
-                    creep.say("zzz");
+                    speak(creep, "zzz");
                 }
                 return;
             }
@@ -419,18 +420,18 @@ var builder = {
                         CONTROLLER_DOWNGRADE[8] *
                             config.get("upgrader.rcl8SafeRatio", 0.99))
             ) {
-                creep.say("zzz");
+                speak(creep, "zzz");
                 return;
             }
 
             creep.pushState("Upgrade", controller.id);
 
             if (!creep.invokeState()) {
-                creep.say("zzz");
+                speak(creep, "zzz");
                 return;
             }
 
-            creep.say("zzz");
+            speak(creep, "zzz");
             return;
         }
     },
