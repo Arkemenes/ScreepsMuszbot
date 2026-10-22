@@ -12,6 +12,31 @@ const salvage = require("../utils/salvage");
 const remotes = require("../rooms/remotes");
 const looting = require("../rooms/looting");
 
+// Heap: each delivery pick runs a room-graph search per owned room
+// (remotes.roomDistance), so reuse it while the looter stays in one room.
+// A cached target is re-resolved and re-checked for capacity on every use.
+const deliveries = new Map();
+
+function deliveryDestination(creep, resource) {
+    const ttl = config.get("loot.deliveryCacheTicks", 20);
+    const memo = deliveries.get(creep.name);
+    if (memo && memo.room === creep.room.name && memo.resource === resource &&
+        Game.time >= memo.tick && Game.time - memo.tick < ttl) {
+        if (!memo.id) return null;
+        const dest = Game.getObjectById(memo.id);
+        const required = Math.max(1, creep.store.getUsedCapacity());
+        if (dest && dest.store && dest.store.getFreeCapacity(resource) >= required) return dest;
+    }
+    if (deliveries.size > 50) {
+        for (const [name, entry] of deliveries) {
+            if (!Game.creeps[name] || Game.time - entry.tick >= ttl) deliveries.delete(name);
+        }
+    }
+    const dest = looting.deliveryDestination(creep, resource);
+    deliveries.set(creep.name, { room: creep.room.name, resource, tick: Game.time, id: dest ? dest.id : null });
+    return dest;
+}
+
 function travel(creep, roomName) {
     routing.travelToRoom(creep, roomName, { range: 20, reusePath: 20, blockHostiles: false });
 }
@@ -24,7 +49,7 @@ function cargoResource(creep) {
 function mustHeadHome(creep) {
     const ttl = creep.ticksToLive;
     if (!ttl) return false;
-    const dest = looting.deliveryDestination(creep, cargoResource(creep) || RESOURCE_ENERGY);
+    const dest = deliveryDestination(creep, cargoResource(creep) || RESOURCE_ENERGY);
     const hops = remotes.roomDistance(creep.room.name, dest ? dest.pos.roomName : creep.memory.home);
     return ttl < hops * config.get("loot.ticksPerHop", 50) + config.get("loot.returnMargin", 50);
 }
@@ -33,7 +58,7 @@ function mustHeadHome(creep) {
 function unload(creep) {
     const resource = cargoResource(creep);
     if (!resource) return false;
-    const dest = looting.deliveryDestination(creep, resource);
+    const dest = deliveryDestination(creep, resource);
     if (!dest) return true; // nowhere with room right now - hold the cargo
     if (creep.room.name !== dest.pos.roomName) {
         travel(creep, dest.pos.roomName);

@@ -239,6 +239,11 @@ module.exports = function (project, assert) {
         delete Game.rooms.E9N48;
         assert(!!routing.findRoute("E9N49","E9N47",graphOpts),
             "ARK-116: losing visibility re-evaluates the stored room intel");
+        const beforeVisibility=cachedCalls;
+        Game.rooms.E9N48={controller:{}};routing.findRoute("E9N49","E9N47",graphOpts);
+        delete Game.rooms.E9N48;routing.findRoute("E9N49","E9N47",graphOpts);
+        assert(cachedCalls===beforeVisibility,
+            "ARK-116: a route room gaining/losing vision without new ownership keeps the graph cache");
         Game.time++;complete=false;used=14;
         Game.cpu.limit=20;Game.cpu.tickLimit=500;Game.cpu.bucket=5000;
         const budgetTraveler=make();let budgetMoves=0;
@@ -308,6 +313,11 @@ module.exports = function (project, assert) {
         Game.time++;routing.moveToRoom(inc,"E1N43",incremental);
         assert(localSearches===2 && incMove.target.roomName==="E1N43" && searches===beforeIncremental,
             "ARK-116: entering the next room advances one hop and refreshes the local crossing path");
+        const graphSpans=()=>measured.filter((entry)=>entry.key==="routing.graphRoute").length;
+        const beforeStay=graphSpans(), graphsBeforeStay=incGraphs;
+        for(let i=0;i<10;i++){Game.time++;routing.moveToRoom(inc,"E1N43",incremental);}
+        assert(graphSpans()===beforeStay && incGraphs===graphsBeforeStay && incMove.target.roomName==="E1N43",
+            "ARK-116: incremental traveler reuses its next crossing while it stays in the same room");
         Memory.rooms.E1N43={owner:"new-budget-ban"};
         const beforeBanMoves=localSearches;
         assert(routing.moveToRoom(inc,"E1N43",incremental)===ERR_NO_PATH &&

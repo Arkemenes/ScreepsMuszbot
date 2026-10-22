@@ -14205,6 +14205,33 @@ function mineralStore(resources, freeCap) {
     quiet(() => looterMod.run(lt.c));
     assert(!currentLoot() && !lt.actions.length,
         "0184: a room containing only energy dust finishes instead of draining spawn regeneration forever");
+    // ARK-116: the delivery pick (one room-graph search per owned room) is
+    // reused while the looter stays in one room; capacity is re-checked.
+    depot.storage = depotStorage;
+    depotStorageFree = 1000;
+    depotContainerFree = 1000;
+    REG.lootDepotStorage = depotStorage;
+    REG.lootDepotContainer = depotContainer;
+    const originalDeliveryPick = looting.deliveryDestination;
+    let deliveryPicks = 0;
+    looting.deliveryDestination = (...args) => { deliveryPicks++; return originalDeliveryPick(...args); };
+    try {
+        lt = mkLooter(lootRoomObj, { energy: 500 }, 0);
+        lt.c.name = "looterDeliveryMemo";
+        for (let i = 0; i < 5; i++) { Game.time++; travelledTo = null; looterMod.run(lt.c); }
+        assert(deliveryPicks === 1 && travelledTo === depotName,
+            "ARK-116: a travelling looter picks its delivery once per room stay (picks " + deliveryPicks + ")");
+        depotStorageFree = 0;
+        Game.time++;
+        travelledTo = null;
+        looterMod.run(lt.c);
+        assert(deliveryPicks === 2 && travelledTo === depotName,
+            "ARK-116: a cached delivery target that filled up is re-picked immediately");
+    } finally {
+        looting.deliveryDestination = originalDeliveryPick;
+        delete REG.lootDepotStorage;
+        delete REG.lootDepotContainer;
+    }
     Game.rooms = originalGameRooms;
     Game.map.findRoute = originalLootRoute;
     Game.time++;

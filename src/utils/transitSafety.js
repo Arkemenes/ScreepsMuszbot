@@ -58,9 +58,16 @@ function roomPlayer(roomName) {
     return mem.owner || (mem.reservation && mem.reservation.username) || null;
 }
 
-function isBlockedRoom(roomName) {
+// Snapshot for callers that test many rooms in one pass (a graph search).
+function blockedPlayers() {
+    return manualPlayers().concat(learnedPlayers());
+}
+
+function isBlockedRoom(roomName, blocked) {
     const player = roomPlayer(roomName);
-    return !!player && (manualPlayers().includes(player) || learnedPlayers().includes(player));
+    if (!player) return false;
+    return blocked ? blocked.includes(player)
+        : manualPlayers().includes(player) || learnedPlayers().includes(player);
 }
 
 // Cached native paths must be discarded even when only ownership changes.
@@ -162,4 +169,4 @@ function reset() {
     invalidateLearnedPlayers();
 }
 
-module.exports = { observeRoom, isBlockedRoom, policyKey, restrictionKey, reset };
+module.exports = { observeRoom, isBlockedRoom, blockedPlayers, roomPlayer, policyKey, restrictionKey, reset };

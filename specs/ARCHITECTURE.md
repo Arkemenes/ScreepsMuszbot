@@ -239,6 +239,20 @@ No cache de grafo de viagens allowUnplannedHop sem allowRoom dinâmico,
 snapshots escalares validam as entradas de política de todas as salas
 observadas. A chave inclui aliados/usuário e os bloqueios já existentes;
 mudanças de intel/controller e vencimento de dead end invalidam o reuso.
+Visibilidade entra no snapshot só pelo dono de trânsito resolvido
+(`transitSafety.roomPlayer`): creep entrando/saindo de uma sala da rota
+não invalida mais o cache dos outros. O `routeCallback` usa uma lista de
+bloqueados (`transitSafety.blockedPlayers()`) montada uma vez por busca.
+Viagem `incrementalRoute` (looters e demais `travelToRoom`) guarda no heap,
+por creep, o próximo hop escolhido (`incrementalRoute()` em
+`utils/routing.js`): enquanto o creep fica na mesma sala, com mesmo
+destino/avoid/chaves de trânsito e dentro de `routing.graphRouteCacheTicks`,
+nem `routing.graphRoute` roda; o hop e o destino são rechecados a cada tick
+(ban de trânsito, dead end, hostil com `blockHostiles`). `allowRoom`
+dinâmico ignora o memo. O looter reusa a escolha de entrega
+(`looting.deliveryDestination`, uma `findRoute` por sala própria) por
+`loot.deliveryCacheTicks` (20) enquanto fica na mesma sala, rechecando
+capacidade do alvo a cada uso.
 Source Keepers mantém callbacks completos com observação viva. Planejamento
 completo desses travelers respeita o menor de limit/tickLimit; falta de
 orçamento de planejamento ou slot ocupado não para o hop limitado quando

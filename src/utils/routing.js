@@ -451,15 +451,15 @@ function findRoute(fromRoomName, toRoomName, opts) {
 }
 
 // Scalar inputs of the ordinary room policy; keeper observation stays live.
+// Visibility enters only through the transit owner it resolves to: a creep
+// entering or leaving a route room must not invalidate everyone's route.
 function graphRoomState(roomName) {
     const mem = Memory.rooms && Memory.rooms[roomName];
-    const room = Game.rooms[roomName], ctrl = room && room.controller;
     const owner = mem && mem.owner;
     return [owner && typeof owner === "object" ? owner.username : owner,
         !!(mem && mem.my), mem && mem.reservation && mem.reservation.username,
         !!(mem && mem.enemies > 0), !!(mem && mem.routeDeadEndUntil > Game.time),
-        !!room, !!ctrl, !!(ctrl && ctrl.my), ctrl && ctrl.owner && ctrl.owner.username,
-        ctrl && ctrl.reservation && ctrl.reservation.username];
+        transitSafety.roomPlayer(roomName)];
 }
 
 function selectGraphRoute(fromRoomName, toRoomName, opts) {
@@ -468,8 +468,9 @@ function selectGraphRoute(fromRoomName, toRoomName, opts) {
     const avoid = opts.avoid || [];
     const hostilePenalty = config.get("routing.hostilePenalty", 10);
     const nonHighwayPenalty = config.get("routing.nonHighwayPenalty", 2);
+    const blocked = transitSafety.blockedPlayers();
     const roomCost = (roomName) => {
-            if (roomName !== fromRoomName && transitSafety.isBlockedRoom(roomName)) return Infinity;
+            if (roomName !== fromRoomName && transitSafety.isBlockedRoom(roomName, blocked)) return Infinity;
             if (avoid.indexOf(roomName) !== -1) return Infinity;
             if (isKnownDeadEnd(roomName)) return Infinity;
             if (opts.allowRoom && !opts.allowRoom(roomName)) return Infinity;
@@ -520,6 +521,41 @@ function selectGraphRoute(fromRoomName, toRoomName, opts) {
             route: route.map((step) => Object.assign({}, step)) });
     }
     return route === ERR_NO_PATH ? null : route;
+}
+
+// Incremental travel consumes only the next crossing, so the graph decision
+// is reused for the rest of the creep's stay in the room (heap, keyed by
+// creep id). The chosen hop and the destination are re-checked every tick;
+// rooms further along are re-evaluated on entering the next room or at TTL.
+const incrementalHops = new Map();
+let incrementalHopsCleanupTick = -1;
+
+function incrementalRoute(creep, toRoomName, routeOpts) {
+    if (routeOpts.allowRoom) return findRoute(creep.room.name, toRoomName, routeOpts);
+    const ttl = config.get("routing.graphRouteCacheTicks", 50);
+    if (Game.time < incrementalHopsCleanupTick || Game.time - incrementalHopsCleanupTick >= ttl) {
+        for (const [id, memo] of incrementalHops) {
+            if (Game.time < memo.tick || Game.time - memo.tick >= ttl) incrementalHops.delete(id);
+        }
+        incrementalHopsCleanupTick = Game.time;
+    }
+    const id = planningId(creep);
+    const key = [creep.room.name, toRoomName, routeOpts.avoid.join(","), !!routeOpts.blockHostiles,
+        !!routeOpts.allowSourceKeepers, creep.memory._routeTransitKey, creep.memory._routeKeeperKey].join("|");
+    const memo = incrementalHops.get(id);
+    if (memo && memo.key === key && Game.time >= memo.tick && Game.time - memo.tick < ttl &&
+        [memo.route[0].room, toRoomName].every((roomName) => !isKnownDeadEnd(roomName) &&
+            !transitSafety.isBlockedRoom(roomName) &&
+            !(routeOpts.blockHostiles && isDangerousRoom(roomName, routeOpts)))) {
+        return memo.route.map((step) => Object.assign({}, step));
+    }
+    const route = findRoute(creep.room.name, toRoomName, routeOpts);
+    if (Array.isArray(route) && route.length) {
+        incrementalHops.set(id, { key, tick: Game.time, route: route.map((step) => Object.assign({}, step)) });
+    } else {
+        incrementalHops.delete(id);
+    }
+    return route;
 }
 
 // costCallback for Creep.moveTo(): the creep's current room, the
@@ -1436,6 +1472,8 @@ function moveToRoom(creep, toRoomName, opts) {
         route = (idx === -1 ? creep.memory._realRoute : creep.memory._realRoute.slice(idx + 1)).map(
             (r) => ({ room: r })
         );
+    } else if (opts.incrementalRoute) {
+        route = incrementalRoute(creep, toRoomName, routeOpts);
     } else {
         route = findRoute(creep.room.name, toRoomName, routeOpts);
     }

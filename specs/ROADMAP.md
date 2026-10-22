@@ -468,6 +468,12 @@ ARK-116: análise longitudinal30min prioriza terminal operations1,99 e
 sell:atTerminal1,29. Frete idêntico compartilhado dentro da seleção do
 livro (100→1 em teste), sem cache de preços/volumes; ranking/frescor passam.
 Impacto longitudinal e meta<9 continuam pendentes.
+ARK-116 (2026-10-22): looters >10 CPU em uso, concentrado em
+`routing.graphRoute`/`graphSearch`. Viagem incremental memoriza no heap o
+próximo hop por creep enquanto ele fica na sala (10 ticks → 0 graphRoute no
+teste); snapshot do cache de grafo não depende mais de visibilidade crua;
+`routeCallback` monta bloqueados uma vez por busca; looter reusa a escolha de
+entrega por sala (5 ticks → 1 escolha). Smoke13170 verde; ganho live pendente.
 ARK-116: após13min/visão15min, scoreOrders0,009 não explica sell:atTerminal.
 Swing.quote buscava livro completo para recurso único; matching filtrado
 por recurso/lado preserva cotação/energia líquida e reuso de all no tick.

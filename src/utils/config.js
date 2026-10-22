@@ -871,6 +871,8 @@ const defaults = {
         maxHops: 10,
         ticksPerHop: 50,
         returnMargin: 50,
+        // Heap reuse of a looter's delivery pick while it stays in one room.
+        deliveryCacheTicks: 20,
         // Presence of towers/armed creeps never pauses a loot mission.
         cancelHpRatio: 0.5,
     },
