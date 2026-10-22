@@ -9,6 +9,7 @@
 
 const config = require("../utils/config");
 const mapExits = require("../utils/mapExits");
+const observerUtil = require("../utils/observer");
 const claimDiagnostics = require("../utils/claimDiagnostics");
 const { isAlly } = require("../utils/hostiles");
 // Tunables (defaults + Memory.settings override path) live in utils/config:
@@ -248,49 +249,134 @@ global.unreserveRoom = function (targetRoomName) {
     );
 };
 
+function clearPendingClaimCheck(roomName) {
+    const pending = Memory.claimCheck;
+    if (!pending || (roomName && pending.room !== roomName)) return;
+    const requests = Memory.observeRequests;
+    if (requests && requests[pending.room] === pending.observeUntil) {
+        if (pending.previousObserveUntil && pending.previousObserveUntil > Game.time) {
+            requests[pending.room] = pending.previousObserveUntil;
+        } else {
+            delete requests[pending.room];
+        }
+    }
+    delete Memory.claimCheck;
+}
+
+function processPendingClaimCheck() {
+    const pending = Memory.claimCheck;
+    if (!pending) return;
+    if (!pending.room) {
+        clearPendingClaimCheck();
+        console.log("[remotes] invalid ownership check cleared; no claim was sent");
+        return;
+    }
+    const room = Game.rooms && Game.rooms[pending.room];
+    if (!room && (!pending.expiresAt || Game.time >= pending.expiresAt)) {
+        const expiredRoom = pending.room;
+        clearPendingClaimCheck(expiredRoom);
+        console.log("[remotes] ownership check for " + expiredRoom + " expired; no claim was sent");
+        return;
+    }
+    if (!room) return;
+    const targetRoomName = pending.room;
+    const motherRoomName = pending.from;
+    clearPendingClaimCheck(targetRoomName);
+    console.log("[remotes] fresh vision received for " + targetRoomName + "; validating current controller");
+    global.claimRoom(targetRoomName, motherRoomName);
+}
+
 global.claimRoom = function (targetRoomName, motherRoomName) {
-    const tmem = Memory.rooms[targetRoomName];
-    if (!tmem || !tmem.lastVisit) {
+    if (Memory.claimTarget) {
         console.log(
-            `[remotes] ${targetRoomName} hasn't been scouted yet - can't claim it`
+            "[remotes] a claim is already pending: " + Memory.claimTarget.room +
+                " (from " + Memory.claimTarget.from + ")"
         );
         return;
     }
-    if (tmem.my) {
-        console.log(`[remotes] ${targetRoomName} is already mine`);
-        return;
-    }
-    if (tmem.owner && tmem.owner !== myUsername()) {
+    if (Memory.claimCheck && Memory.claimCheck.room !== targetRoomName) {
         console.log(
-            `[remotes] ${targetRoomName} is already owned by ${tmem.owner} - can't claim it`
+            "[remotes] ownership check is already pending for " + Memory.claimCheck.room +
+                "; finish or cancel it before checking " + targetRoomName
         );
         return;
     }
-    if (tmem.hasController === false) {
-        console.log(
-            `[remotes] ${targetRoomName} has no controller to claim (highway/Source Keeper/center room)`
-        );
-        return;
-    }
+
     const targetStatus = Game.map.getRoomStatus && Game.map.getRoomStatus(targetRoomName);
     if (targetStatus && targetStatus.status !== "normal") {
         console.log(
-            `[remotes] ${targetRoomName} isn't available to claim (status: ${targetStatus.status} - ` +
-                `novice/respawn zone protection, or out of bounds)`
+            "[remotes] " + targetRoomName + " is not available to claim (status: " +
+                targetStatus.status + " - novice/respawn zone protection, or out of bounds)"
         );
         return;
     }
-    if (Memory.claimTarget) {
+
+    const visibleRoom = Game.rooms && Game.rooms[targetRoomName];
+    if (!visibleRoom) {
+        if (Memory.claimCheck) {
+            console.log("[remotes] still waiting for current vision of " + targetRoomName + "; no claimer was sent");
+            return;
+        }
+        const obs = observerUtil.observerFor(targetRoomName);
+        if (!obs) {
+            console.log(
+                "[remotes] " + targetRoomName + " has no current vision and no Observer in range; " +
+                    "ownership cannot be verified, so no claim was sent"
+            );
+            return;
+        }
+        const expiresAt = Game.time + 10;
+        Memory.observeRequests = Memory.observeRequests || {};
+        const previousObserveUntil = Memory.observeRequests[targetRoomName] || null;
+        const observeUntil = Math.max(previousObserveUntil || 0, expiresAt);
+        Memory.observeRequests[targetRoomName] = observeUntil;
+        Memory.claimCheck = {
+            room: targetRoomName,
+            from: motherRoomName || null,
+            requestedAt: Game.time,
+            expiresAt,
+            observeUntil,
+            previousObserveUntil,
+        };
         console.log(
-            `[remotes] a claim is already pending: ${Memory.claimTarget.room} ` +
-                `(from ${Memory.claimTarget.from})`
+            "[remotes] " + targetRoomName + " is not visible; Observer in " + obs.room.name +
+                " will check its current owner before any claimer is dispatched"
         );
+        return;
+    }
+
+    clearPendingClaimCheck(targetRoomName);
+    const controller = visibleRoom.controller;
+    Memory.rooms = Memory.rooms || {};
+    const currentIntel = Memory.rooms[targetRoomName] ||
+        (Memory.rooms[targetRoomName] = {});
+    currentIntel.lastVisit = Game.time;
+    currentIntel.hasController = !!controller;
+    currentIntel.my = !!(controller && controller.my);
+    if (controller && controller.owner && controller.owner.username) {
+        currentIntel.owner = controller.owner.username;
+    } else {
+        delete currentIntel.owner;
+    }
+    if (!controller) {
+        console.log(
+            "[remotes] " + targetRoomName + " has no controller to claim (highway/Source Keeper/center room)"
+        );
+        return;
+    }
+    if (controller.my) {
+        console.log("[remotes] " + targetRoomName + " is already mine");
+        return;
+    }
+    const currentOwner = controller.owner && controller.owner.username;
+    if (currentOwner && currentOwner !== myUsername()) {
+        console.log("[remotes] " + targetRoomName + " is currently owned by " + currentOwner + "; cannot claim it");
         return;
     }
 
     const mother = motherRoomName || nearestOwnedRoom(targetRoomName);
     if (!mother) {
-        console.log(`[remotes] no owned room found to claim ${targetRoomName} from`);
+        console.log("[remotes] no owned room found to claim " + targetRoomName + " from");
         return;
     }
 
@@ -300,19 +386,19 @@ global.claimRoom = function (targetRoomName, motherRoomName) {
     // claimer is guaranteed to die before ever reaching the controller;
     // refuse instead of wasting the spawn. Room-hop count is a rough,
     // cheap stand-in for exact travel time (roomDistance is already
-    // cached per tick) - it doesn't know the safe-routing detours
-    // utils/routing.js's highway/hostile preferences might add, so this
-    // is deliberately conservative-ish, not a precise ETA.
+    // cached per tick) - it does not know the safe-routing detours
+    // utils/routing.js highway/hostile preferences might add, so this is
+    // deliberately conservative, not a precise ETA.
     const hops = roomDistance(mother, targetRoomName);
     const estimatedTicks = hops * config.get("claim.ticksPerRoomHop", 50);
     const margin = config.get("claim.travelMargin", 10);
     const budget = CREEP_CLAIM_LIFE_TIME - margin;
     if (estimatedTicks > budget) {
         console.log(
-            `[remotes] ${targetRoomName} is too far from ${mother} to claim safely ` +
-                `(~${estimatedTicks} ticks estimated travel, ${budget} available after a ` +
-                `${margin}-tick safety margin out of ${CREEP_CLAIM_LIFE_TIME} total CLAIM ` +
-                `lifetime) - pick a closer mother room`
+            "[remotes] " + targetRoomName + " is too far from " + mother +
+                " to claim safely (~" + estimatedTicks + " ticks estimated travel, " + budget +
+                " available after a " + margin + "-tick safety margin out of " +
+                CREEP_CLAIM_LIFE_TIME + " total CLAIM lifetime) - pick a closer mother room"
         );
         return;
     }
@@ -323,13 +409,13 @@ global.claimRoom = function (targetRoomName, motherRoomName) {
     ).length;
     if (Game.gcl.level <= ownedRooms) {
         console.log(
-            `[remotes] warning: GCL ${Game.gcl.level} may not cover another room ` +
-                `(${ownedRooms} owned already) - dispatching anyway, claimController will fail if not`
+            "[remotes] warning: GCL " + Game.gcl.level + " may not cover another room (" +
+                ownedRooms + " owned already) - dispatching anyway, claimController will fail if not"
         );
     }
 
     Memory.claimTarget = { room: targetRoomName, from: mother };
-    console.log(`[remotes] ${mother} will claim ${targetRoomName}`);
+    console.log("[remotes] " + mother + " will claim " + targetRoomName);
 };
 
 // Drops a pending claim order. Mirrors cancelContest() (rooms/raiding.js,
@@ -338,13 +424,20 @@ global.claimRoom = function (targetRoomName, motherRoomName) {
 // finishes its own run() (reach the controller, or hit a dead end and
 // suicide) same as always.
 global.cancelClaim = function () {
-    if (!Memory.claimTarget) {
-        console.log("[remotes] no claim pending");
-        return;
+    let cancelled = false;
+    if (Memory.claimTarget) {
+        claimDiagnostics.cancel(Memory.claimTarget);
+        console.log("[remotes] claim on " + Memory.claimTarget.room + " cancelled");
+        delete Memory.claimTarget;
+        cancelled = true;
     }
-    claimDiagnostics.cancel(Memory.claimTarget);
-    console.log(`[remotes] claim on ${Memory.claimTarget.room} cancelled`);
-    delete Memory.claimTarget;
+    if (Memory.claimCheck) {
+        const roomName = Memory.claimCheck.room;
+        clearPendingClaimCheck(roomName);
+        console.log("[remotes] ownership check for " + roomName + " cancelled");
+        cancelled = true;
+    }
+    if (!cancelled) console.log("[remotes] no claim pending");
 };
 
 global.claimStatus = function () {
@@ -367,4 +460,5 @@ module.exports = {
     pendingReserves,
     roomCallback,
     allowRoom,
+    processPendingClaimCheck,
 };

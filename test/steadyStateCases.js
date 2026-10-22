@@ -126,6 +126,15 @@ module.exports = function (project, assert) {
             assert(hauler.idleSkip(mkCreep(calm, 50)) === false, "0152: a hauler carrying anything keeps searching every tick");
             assert(hauler.idleSkip(mkCreep(mkRoom("OtherRoom", false))) === false, "0152: a change of room forgets the idle mark");
             assert(hauler.idleSkip(mkCreep(mkRoom("IdleRoom", true))) === false, "0152: a hungry spawn/extension keeps the per-tick search");
+            {
+                const tier = require(path.join(project, "src/utils/cpuTier"));
+                const g = global.Game;
+                global.Game = Object.assign({}, g, { cpu: Object.assign({}, g.cpu, { bucket: 500 }) });
+                tier.reset();
+                const skipsHungry = hauler.idleSkip(mkCreep(mkRoom("IdleRoom", true)));
+                global.Game = g; tier.reset();
+                assert(skipsHungry === true, "cpu: in the critical band an idle hauler keeps its recheck interval even with a hungry spawn");
+            }
             at(90000);
             assert(hauler.idleSkip(creep) === false, "0152: a clock that goes backwards (reset) forgets the idle mark");
             at(90002);

@@ -190,9 +190,7 @@ function planCity(room, opts) {
                 rcl: ["  2  ", " 222 ", "22122", " 222 ", "  2  "],
                 ramparts: ["     ", "     ", "     ", "     ", "     "],
             };
-            const spawn = room.find(FIND_MY_STRUCTURES, {
-                filter: { structureType: STRUCTURE_SPAWN },
-            })[0];
+            const spawn = firstSpawnAnchor(room);
 
             stampStep(
                 pm,
@@ -711,7 +709,31 @@ function byPosition(a, b) {
 // so without this a fresh floodFill pick could land on a different tile than
 // what's already standing (or already waiting to be built there). Reuse it
 // instead of drifting away from it / queuing a second one nearby.
+// ROADMAP 0172: replanRoom(room, {fresh: true}) sets planFresh so the plan is
+// laid out from terrain alone - no spawn anchor, no reuse of built
+// containers/links/towers, no skipping tiles a structure already occupies.
+// Nothing is demolished; what's standing off-plan stays until removed by hand.
+function ignoresBuilt(roomName) {
+    const mem = Memory.rooms[roomName];
+    return !!(mem && mem.planFresh);
+}
+
+// The tile the first spawn stamp is centred on: a built spawn, else a queued
+// spawn construction site (a freshly claimed room, before the first spawn
+// finishes), else none - the stamp is placed by flood fill. A fresh replan
+// (0172) ignores the built spawn but still honours a spawn site: the site is
+// the player's deliberate pick for the new layout, not legacy structure.
+function firstSpawnAnchor(room) {
+    const isSpawn = { filter: (s) => s.structureType === STRUCTURE_SPAWN };
+    const built = ignoresBuilt(room.name)
+        ? null
+        : room.find(FIND_MY_STRUCTURES, isSpawn).sort(byPosition)[0];
+    if (built) return built;
+    return room.find(FIND_MY_CONSTRUCTION_SITES, isSpawn).sort(byPosition)[0] || null;
+}
+
 function existingBuiltNear(roomName, structureType, pos, range = 1) {
+    if (ignoresBuilt(roomName)) return undefined;
     const room = Game.rooms[roomName];
     const near = (s) =>
         s.structureType === structureType &&
@@ -732,6 +754,7 @@ function existingContainerNear(roomName, pos) {
 // run - is never double-counted). Consumed before computing a brand-new
 // perimeter tower position.
 function unclaimedBuiltTowers(roomName) {
+    if (ignoresBuilt(roomName)) return [];
     const planned = new Set(
         planBuildings(roomName)
             .filter((b) => b.structureType === STRUCTURE_TOWER)
@@ -778,14 +801,14 @@ function getContainerLocations(roomName, floodFillMatrix) {
                     inBounds(coordX, coordY) &&
                     floodFillMatrix.get(coordX, coordY) > maxVal &&
                     terrain[coordX][coordY] !== TERRAIN_MASK_WALL &&
-                    !Game.rooms[roomName].find(FIND_STRUCTURES, {
+                    (ignoresBuilt(roomName) || !Game.rooms[roomName].find(FIND_STRUCTURES, {
                         filter: (s) =>
                             s.pos &&
                             s.pos.x === coordX &&
                             s.pos.y === coordY &&
                             s.structureType !== STRUCTURE_CONTAINER &&
                             s.structureType !== STRUCTURE_ROAD,
-                    })[0] &&
+                    })[0]) &&
                     (i !== 0 || j !== 0)
                 ) {
                     // Add the location to the list
@@ -832,14 +855,14 @@ function getContainerLocations(roomName, floodFillMatrix) {
                     inBounds(coordX, coordY) &&
                     floodFillMatrix.get(coordX, coordY) > maxVal &&
                     terrain[coordX][coordY] !== TERRAIN_MASK_WALL &&
-                    !Game.rooms[roomName].find(FIND_STRUCTURES, {
+                    (ignoresBuilt(roomName) || !Game.rooms[roomName].find(FIND_STRUCTURES, {
                         filter: (s) =>
                             s.pos &&
                             s.pos.x === coordX &&
                             s.pos.y === coordY &&
                             s.structureType !== STRUCTURE_CONTAINER &&
                             s.structureType !== STRUCTURE_ROAD,
-                    })[0] &&
+                    })[0]) &&
                     (i !== 0 || j !== 0)
                 ) {
                     // Add the location to the list
@@ -1395,7 +1418,8 @@ global.testSpawnPosition = testSpawnPosition;
 // ~13 ticks (needs Game.cpu.bucket >= 500). Existing structures are not
 // demolished; use destroyUnplannedRoads() for roads.
 // Run from the console: replanRoom("W1N1")
-function replanRoom(roomName) {
+//   replanRoom("W1N1", {fresh: true}) -> plan from terrain only (see ignoresBuilt)
+function replanRoom(roomName, opts) {
     const mem = Memory.rooms[roomName];
     if (!mem) {
         console.log(`[replan] no memory for room ${roomName}`);
@@ -1406,8 +1430,13 @@ function replanRoom(roomName) {
     delete mem.buildings;
     delete mem.mincutBoundries;
     delete mem.constructionIndex;
+    if (opts && opts.fresh) mem.planFresh = true;
+    else delete mem.planFresh;
     planStore.dropPlan(roomName);
-    console.log(`[replan] ${roomName}: plan cleared, rebuilding`);
+    console.log(
+        `[replan] ${roomName}: plan cleared, rebuilding` +
+            (mem.planFresh ? " from terrain only (existing structures ignored, none demolished)" : "")
+    );
 }
 
 global.replanRoom = replanRoom;
@@ -1647,3 +1676,6 @@ module.exports = planCity;
 // exposed for the offline smoke test only (0013: stamp scoring)
 module.exports.findStampLocation = findStampLocation;
 module.exports.drawPlanPreview = drawPlanPreview;
+module.exports.existingBuiltNear = existingBuiltNear;
+module.exports.firstSpawnAnchor = firstSpawnAnchor;
+module.exports.unclaimedBuiltTowers = unclaimedBuiltTowers;

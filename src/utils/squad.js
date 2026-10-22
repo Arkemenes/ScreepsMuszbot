@@ -11,6 +11,9 @@ const config = require("./config");
 const mapExits = require("./mapExits");
 const routing = require("./routing");
 const combat = require("./combat");
+const crossing = require("./squadCrossing");
+const breach = require("./squadBreach");
+const assembly = require("./squadAssembly");
 
 const DIR_VECTORS = {
     1: { dx: 0, dy: -1 }, 2: { dx: 1, dy: -1 }, 3: { dx: 1, dy: 0 },
@@ -87,8 +90,8 @@ function tileWalkable(room, x, y) {
 // Followers get the remaining shape slots in their fixed roster order (not
 // tied to any particular creep identity, so a leader promotion doesn't
 // need to reshuffle anyone else's slot).
-function slotsFor(squad, shape) {
-    const offsets = shapeOffsets(shape, squad.dir);
+function slotsFor(squad, shape, dir) {
+    const offsets = shapeOffsets(shape, dir === undefined ? squad.dir : dir);
     const followers = squad.members.filter((id) => id !== squad.leader);
     const order = [squad.leader].concat(followers);
     const map = {};
@@ -122,7 +125,7 @@ function formed(squad, shape) {
 function shapeFits(leader, squad, shape, dir) {
     const v = DIR_VECTORS[dir];
     if (!v) return false;
-    const slots = slotsFor(squad, shape);
+    const slots = slotsFor(squad, shape, dir);
     const leaderNext = { x: leader.pos.x + v.dx, y: leader.pos.y + v.dy };
     return squad.members.every((id) => {
         const off = id === squad.leader ? { dx: 0, dy: 0 } : slots[id];
@@ -139,6 +142,12 @@ function leaderGoal(leader, squad) {
         if (squad.target.id) {
             const obj = Game.getObjectById(squad.target.id);
             if (obj) return obj.pos;
+        }
+        // ROADMAP 0175: a combat squad walks to its priority structure
+        // (combat.structureTarget) so the strikers end up in range of it
+        if (squad.mission !== "siege" && squad.state !== "retreating") {
+            const structure = combat.structureTarget(leader.room, leader.pos);
+            if (structure) return structure.pos;
         }
         return new RoomPosition(25, 25, squad.target.room);
     }
@@ -162,10 +171,12 @@ function avoidMatrix(room, avoidList) {
 }
 
 function leaderNextDirection(leader, squad) {
-    const goal = leaderGoal(leader, squad);
+    const assault = breach.get(squad);
+    if (assault && assault.reason) return null;
+    const goal = assault ? assault.approach : leaderGoal(leader, squad);
     const result = PathFinder.search(
         leader.pos,
-        { pos: goal, range: 1 },
+        { pos: goal, range: assault ? 0 : 1 },
         {
             maxRooms: 1,
             plainCost: 2,
@@ -177,6 +188,17 @@ function leaderNextDirection(leader, squad) {
     if (!result.path.length) return null;
     const next = result.path[0];
     return leader.pos.getDirectionTo(next.x, next.y);
+}
+
+// Both ranged and dismantle roles share the first obstacle on the route.
+// Strategic targets stay tower/spawn; walls are only intermediate objectives.
+function attackTarget(creep, squadId) {
+    const squad = Memory.squads && Memory.squads[squadId];
+    if (squad && creep.room.name === squad.target.room) {
+        const plan = breach.get(squad);
+        if (plan) return plan.target;
+    }
+    return combat.structureTarget(creep.room, creep.pos);
 }
 
 function bumpStuck(squad, leader, dir) {
@@ -223,6 +245,51 @@ function ensureDecision(squad) {
     squad.shape = shape;
     squad.dir = dir;
     squad.stuckTicks = 0;
+
+    // ROADMAP 0178: the leader only steps once every member is on its slot -
+    // otherwise everyone moves at the same speed and a straggler never
+    // catches up (live: the striker reached the tower ahead of the medics).
+    // A border tile is exempt (the squad has to step in first), and after
+    // squad.formTimeoutTicks of waiting it takes one step anyway so a
+    // blocked member can't freeze the whole squad.
+    if (formed(squad, shape) || isBorder(leader.pos.x, leader.pos.y)) {
+        squad.formWait = 0;
+        squad.go = true;
+    } else {
+        squad.formWait = (squad.formWait || 0) + 1;
+        squad.go = squad.formWait >= config.get("squad.formTimeoutTicks", 5);
+        if (squad.go) squad.formWait = 0;
+    }
+}
+
+// ROADMAP 0178: the last room before the target on the mother's route -
+// every member travels there on its own and waits for the rest before
+// anyone enters the target room. The mother itself when they're neighbours.
+function stagingRoom(squad) {
+    if (squad.staging === undefined) {
+        const route = Game.map.findRoute(squad.from, squad.room);
+        squad.staging = Array.isArray(route) && route.length >= 2
+            ? route[route.length - 2].room
+            : squad.from;
+    }
+    return squad.staging;
+}
+
+// True once the squad may leave the staging room: every living member is
+// there (and done spawning), or squad.stageTimeoutTicks passed.
+function regrouped(squad, creep) {
+    if (squad.staged) return true;
+    const staging = stagingRoom(squad);
+    if (creep.room.name !== staging) return false;
+    if (!squad.stageSince) squad.stageSince = Game.time;
+    const members = squadMembers(squad);
+    const all = members.every((c) => c.room.name === staging && !c.spawning);
+    const timedOut = Game.time - squad.stageSince >= config.get("squad.stageTimeoutTicks", 300);
+    if (all || timedOut) {
+        squad.staged = true;
+        if (!all) console.log(`[squad] regroup in ${staging} timed out - entering ${squad.room} with whoever is there`);
+    }
+    return squad.staged;
 }
 
 function avgHpRatio(squad) {
@@ -258,6 +325,11 @@ function missionComplete(squad) {
     const mem = Memory.rooms[squad.room];
     if (!mem) return false;
     if (squad.mission === "siege") return !(mem.enemyStructures > 0);
+    // ROADMAP 0175: combat only ever targets armed creeps and towers/spawns,
+    // so with vision it's done once those are gone - leftover extensions or
+    // storage must not keep the squad in the room forever
+    const room = Game.rooms[squad.room];
+    if (room) return !combat.threats(room).length && !combat.structureTarget(room);
     return !(mem.enemies > 0) && !(mem.enemyStructures > 0);
 }
 
@@ -290,6 +362,21 @@ function advance(creep, squadId) {
     // as "dangerous" for the sole reason that it's currently the retreat
     // destination, and a squad could never actually finish retreating.
     const dangerous = isDangerousRoom(creep.room.name, squad.room);
+    if (squad.state === "advancing" && dangerous) {
+        maybeRetreat(squad);
+        if (squad.state === "advancing" && missionComplete(squad)) {
+            squad.state = "retreating";
+            squad.target = { room: squad.from };
+        }
+    }
+    if (squad.state === "retreating" && squadMembers(squad).every((c) =>
+        c.room.name === squad.from && !isBorder(c.pos.x, c.pos.y))) {
+        disband(squadId);
+        return;
+    }
+    if (squad.crossing || squad.staged || dangerous) {
+        if (crossing.advance(creep, squad)) return;
+    }
     if (!dangerous) {
         if (squad.state === "retreating") {
             if (creep.room.name === squad.from) {
@@ -298,25 +385,27 @@ function advance(creep, squadId) {
                 // never gets stranded solo-moded in unfamiliar territory
                 // with no way to find its way back (it has no travel-home
                 // logic outside squad mode)
-                disband(squadId);
+                // Wait for the rest of the squad before releasing the roles.
                 return;
             }
             routing.travelToRoom(creep, squad.from, { range: 20, reusePath: 20 });
             return;
         }
-        routing.travelToRoom(creep, squad.target.room, { range: 20, reusePath: 20 });
-        return;
-    }
-
-    if (squad.state === "advancing") {
-        maybeRetreat(squad);
-        // ROADMAP 0047: nothing left to fight - head home instead of
-        // idling at the room center forever (only if maybeRetreat() above
-        // didn't already start a retreat for low HP).
-        if (squad.state === "advancing" && missionComplete(squad)) {
-            squad.state = "retreating";
-            squad.target = { room: squad.from };
+        // ROADMAP 0178: regroup in the staging room before the target
+        if (!squad.staged) {
+            const staging = stagingRoom(squad);
+            if (creep.room.name !== staging) {
+                routing.travelToRoom(creep, staging, { range: 20, reusePath: 20 });
+                return;
+            }
+            if (!regrouped(squad, creep)) {
+                const center = new RoomPosition(25, 25, staging);
+                if (creep.pos.getRangeTo(center) > 5) creep.moveTo(center, { range: 5, reusePath: 10 });
+                return;
+            }
         }
+        crossing.advance(creep, squad);
+        return;
     }
 
     ensureDecision(squad);
@@ -334,53 +423,98 @@ function advance(creep, squadId) {
         return;
     }
 
-    if (squad.dirTick === Game.time && squad.dir) {
+    if (squad.dirTick === Game.time && squad.dir && squad.go) {
         creep.move(squad.dir);
     }
 }
 
+// ROADMAP 0178: a squad medic's heal for this tick. The squad member that
+// lost the most hits comes first (itself included, no "self first" rule) -
+// heal() when adjacent, rangedHeal() within 3. Nobody hurt but something
+// can shoot (armed hostile or an active tower with energy): pre-heal the
+// leader, the one walking point - damage and healing resolve in the same
+// tick, so the heal lands on the very shot it takes. Otherwise falls back
+// to combat.patch() (any wounded ally nearby).
+function heal(creep, squadId) {
+    const squad = Memory.squads && Memory.squads[squadId];
+    if (!squad) {
+        combat.patch(creep);
+        return;
+    }
+    const sameRoom = squadMembers(squad).filter((c) => c.room.name === creep.room.name);
+    const hurt = sameRoom
+        .filter((c) => c.hits < c.hitsMax)
+        .sort((a, b) => (b.hitsMax - b.hits) - (a.hitsMax - a.hits));
+    const healAt = (target) => {
+        const range = creep.pos.getRangeTo(target);
+        if (range <= 1) return creep.heal(target) === OK || true;
+        if (range <= combat.KITE_RANGE) return creep.rangedHeal(target) === OK || true;
+        return false;
+    };
+    for (const target of hurt) {
+        if (healAt(target)) return;
+    }
+    const underFire = combat.threats(creep.room).length > 0 || combat.hostileTowerThreat(creep.room);
+    const leader = Game.getObjectById(squad.leader);
+    if (underFire && leader && leader.room.name === creep.room.name && healAt(leader)) return;
+    combat.patch(creep);
+}
+
 // Called from a spawned-but-not-yet-squadded creep's run() (memory.
 // pendingSquad set, memory.squadId not yet) - registers itself into
-// Memory.pendingSquad.spawned, and once every member the mission needs
-// exists, promotes it into a real Memory.squads[id] and tags all four
+// Memory.pendingSquads[id].spawned, and once the complete recipe has
+// finished spawning, promotes it into Memory.squads[id] and tags all four
 // with the new squadId in the same tick.
 function registerPending(creep) {
-    const pending = Memory.pendingSquad;
-    if (!pending || pending.room !== creep.memory.pendingSquad) {
+    const pending = assembly.find(creep.memory.pendingSquad);
+    if (!pending || !pending.need.includes(creep.memory.role)) {
         creep.memory.pendingSquad = undefined;
         return;
     }
+    creep.memory.pendingSquad = pending.id;
+    if (creep.spawning) return;
     if (pending.spawned.indexOf(creep.id) === -1) pending.spawned.push(creep.id);
-    if (pending.spawned.length < pending.need.length) return;
-
-    const squadId = "squad" + Game.time;
+    const available = assembly.population(pending).filter((c) => !c.spawning);
+    const chosen = [];
+    for (const role of pending.need) {
+        const index = available.findIndex((c) => c.memory.role === role);
+        if (index < 0) return;
+        chosen.push(available.splice(index, 1)[0]);
+    }
+    const squadId = pending.id;
     if (!Memory.squads) Memory.squads = {};
     Memory.squads[squadId] = {
         mission: pending.mission,
         room: pending.room,
         from: pending.from,
         target: { room: pending.room },
-        members: pending.spawned.slice(),
-        leader: pending.spawned[0],
+        members: chosen.map((c) => c.id),
+        leader: chosen[0].id,
         shape: "block",
         state: "advancing",
     };
-    for (const id of pending.spawned) {
-        const c = Game.getObjectById(id);
-        if (c) {
-            c.memory.squadId = squadId;
-            c.memory.pendingSquad = undefined;
-        }
+    for (const c of chosen) {
+        c.memory.squadId = squadId;
+        c.memory.pendingSquad = undefined;
     }
-    delete Memory.pendingSquad;
+    delete Memory.pendingSquads[squadId];
+}
+
+// Runs even when no surviving creep can call advance() anymore.
+function maintain() {
+    for (const entry of Object.values(assembly.pending())) assembly.prune(entry);
+    for (const id of Object.keys(Memory.squads || {})) pruneDeadMembers(id);
 }
 
 module.exports = {
     isDangerousRoom,
     advance,
+    attackTarget,
     disband,
     registerPending,
+    maintain,
     missionComplete,
+    heal,
     // exposed for the offline smoke test only
     pruneDeadMembers,
     slotsFor,

@@ -71,11 +71,11 @@ function tierOf(label) {
     return Number.isInteger(t) ? t : 0;
 }
 
-// cpu.boost keys are config paths (with dots), so the map is merged, not walked.
-function boostRule(key) {
-    const own = Memory.settings && Memory.settings.cpu && Memory.settings.cpu.boost;
+// cpu.boost / cpu.shed keys are config paths (with dots), so the map is merged, not walked.
+function rule(map, key) {
+    const own = Memory.settings && Memory.settings.cpu && Memory.settings.cpu[map];
     if (own && Object.prototype.hasOwnProperty.call(own, key)) return own[key];
-    const defs = config.defaults.cpu && config.defaults.cpu.boost;
+    const defs = config.defaults.cpu && config.defaults.cpu[map];
     return defs && defs[key];
 }
 
@@ -83,14 +83,19 @@ function allows(label) {
     return runs(tierOf(label));
 }
 
+// full band: cpu.boost speeds an interval up (divides it) or grows a budget.
+// critical/low bands: cpu.shed slows an interval down (multiplies it) or shrinks a budget,
+// so the bucket can refill without switching the work off.
 function scaled(key, fallback) {
     const value = config.get(key, fallback);
-    if (band() !== "full") return value;
-    const rule = boostRule(key);
-    const factor = rule && Number(rule.factor);
+    const b = band();
+    if (b === "normal") return value;
+    const r = rule(b === "full" ? "boost" : "shed", key);
+    const factor = r && Number(r.factor);
     if (!(factor > 0) || !(Number(value) > 0)) return value;
-    if (rule.kind === "budget") return value * factor;
-    return Math.max(1, Math.round(value / factor));
+    const grow = (b === "full") === (r.kind === "budget");
+    if (r.kind === "budget") return grow ? value * factor : value / factor;
+    return grow ? Math.max(1, Math.round(value * factor)) : Math.max(1, Math.round(value / factor));
 }
 
 function skip(label) {

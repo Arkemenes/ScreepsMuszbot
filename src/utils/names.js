@@ -105,6 +105,10 @@ const TITLE_POOLS = {
         part1: ["Annexer", "Sovereign", "Founder", "Colonizer"],
         part2: ["of the New Domain", "of the Annexation", "of the First Flag", "of the Charter"],
     },
+    looter: {
+        part1: ["Plunderer", "Scavenger", "Salvager", "Reaver"],
+        part2: ["of the Spoils", "of the Emptied Vault", "of the Long Haul", "of the Fallen Hold"],
+    },
     "reserver:contest": {
         part1: ["Conqueror", "Usurper", "Warlord", "Besieger"],
         part2: ["of the Long Siege", "of the Broken Claim", "of the Contested Crown", "of the Grudge"],

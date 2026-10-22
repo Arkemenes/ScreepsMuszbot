@@ -10,5 +10,7 @@ let roomLogic = {
 // setFactoryProduct/cancelFactoryProduct (ROADMAP 0051) - no per-tick
 // entry point, structures/lab.js|factory.js read Memory.rooms[x] directly
 require("./refining");
+// registers global.lootRoom/cancelLoot/lootStatus (ROADMAP 0177)
+require("./looting");
 
 module.exports = roomLogic;

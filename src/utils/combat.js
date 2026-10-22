@@ -231,6 +231,60 @@ function threatPriority(hostile) {
     return 3;
 }
 
+// ROADMAP 0175: which hostile structure an offensive creep goes for once no
+// armed hostile creep is left - only what fights back or reinforces:
+// 0 = a tower that can still fire, or an invader core; 1 = a spawn;
+// 2 = an empty tower. Everything else (extension, storage, terminal, lab,
+// container, walls...) is never a target, so it stays intact. Closest to
+// `fromPos` within the best tier when given.
+function structureTier(structure) {
+    const type = structure.structureType;
+    if (type === STRUCTURE_INVADER_CORE) return 0;
+    if (type === STRUCTURE_TOWER) {
+        const energy = structure.store ? structure.store[RESOURCE_ENERGY] || 0 : 0;
+        const shotCost = typeof TOWER_ENERGY_COST === "number" ? TOWER_ENERGY_COST : 10;
+        return energy >= shotCost ? 0 : 2;
+    }
+    if (type === STRUCTURE_SPAWN) return 1;
+    return null;
+}
+
+// A tower only fires while active, and that needs a controller with an
+// owner - in a room with no controller, or one whose controller is unowned
+// (abandoned/unclaimed), leftover towers are dead weight. isActive() is the
+// engine's own answer; the controller check is the fallback. Shared by
+// rooms/looting.js (0177) and the squad medics (0178).
+function towerCanFire(tower, room) {
+    if (typeof tower.isActive === "function") return tower.isActive();
+    return !!(room.controller && room.controller.owner);
+}
+
+// True when a hostile tower in `room` can shoot right now (active, with
+// energy for at least one shot).
+function hostileTowerThreat(room) {
+    const shotCost = typeof TOWER_ENERGY_COST === "number" ? TOWER_ENERGY_COST : 10;
+    return roomCache.structuresByType(room, STRUCTURE_TOWER).some(
+        (t) => !t.my && t.store && (t.store[RESOURCE_ENERGY] || 0) >= shotCost && towerCanFire(t, room)
+    );
+}
+
+function structureTarget(room, fromPos) {
+    let best = null;
+    let bestTier = Infinity;
+    let bestRange = Infinity;
+    for (const structure of roomCache.hostileStructures(room)) {
+        const tier = structureTier(structure);
+        if (tier === null || tier > bestTier) continue;
+        const range = fromPos && fromPos.getRangeTo ? fromPos.getRangeTo(structure) : 0;
+        if (tier < bestTier || range < bestRange) {
+            best = structure;
+            bestTier = tier;
+            bestRange = range;
+        }
+    }
+    return best;
+}
+
 function pickTarget(room) {
     return _.sortBy(getHostiles(room), threatPriority)[0];
 }
@@ -369,6 +423,8 @@ module.exports = {
     KITE_RANGE,
     threatPriority,
     pickTarget,
+    structureTarget,
+    hostileTowerThreat,
     kiteAwayFrom,
     shoot,
     patch,

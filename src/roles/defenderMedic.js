@@ -36,7 +36,8 @@ const defenderMedic = {
         // squad-mate, combat.patch doesn't care which).
         if (creep.memory.squadId) {
             squad.advance(creep, creep.memory.squadId);
-            combat.patch(creep);
+            // ROADMAP 0178: most-damaged squad member first, pre-heal the leader under fire
+            squad.heal(creep, creep.memory.squadId);
             return;
         }
         if (creep.memory.pendingSquad) {

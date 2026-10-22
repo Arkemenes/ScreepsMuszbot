@@ -73,6 +73,15 @@ function pixelHeadroom() {
     return !!snap && snap.used <= Game.cpu.limit - config.get("pixel.minHeadroom", 3);
 }
 
+// cpu.throttle (ARK-235): roles that only run one tick in `every` while the bucket band is at
+// or below maxBand - null when it does not apply this tick.
+function roleThrottle() {
+    const t = config.get("cpu.throttle", null);
+    if (!t || !Array.isArray(t.roles) || !t.roles.length || !(t.every > 1)) return null;
+    if (cpuTier.level() > cpuTier.BANDS.indexOf(t.maxBand || "normal")) return null;
+    return t;
+}
+
 function disableProfiler() {
     utils.profiler.disable();
     if (ownOriginals) {
@@ -305,6 +314,10 @@ module.exports.loop = function () {
             guard("planStore", () => utils.planStore.activate());
             // ROADMAP 0146: one pass per global that drops dead/derived fields from Memory.rooms
             guard("memoryCleanup", () => require("./utils/memoryCleanup").run());
+            // Assembly migration and dead squads must not depend on a survivor's role.
+            guard("squads", () => require("./utils/squad").maintain());
+            // ROADMAP 0171: resume claimRoom only after the Observer supplies current vision.
+            guard("claimCheck", () => roomLogic.remotes.processPendingClaimCheck());
             // ROADMAP 0154 T6: close/re-apply experiment overlays before needs and spawn read settings
             guard("experiments", () => require("./utils/experiments").reconcile());
             // Resolve the central warehouse before any economy/role reads it.
@@ -372,14 +385,28 @@ module.exports.loop = function () {
             );
             // run each creep role see /roles/index.js
             guard("craftLedger", () => require("./utils/craftLedger").tick());
+            const throttle = roleThrottle();
+            let throttled = 0;
             for (var name in Game.creeps) {
                 var creep = Game.creeps[name];
                 let role = creep.memory.role;
                 // 0014: the harvester role was folded into hauler
                 if (role === "harvester") role = creep.memory.role = "hauler";
-                guard("traffic:" + name, () => utils.traffic.record(creep));
+                // below the full band the optional roles take turns: each runs one tick in
+                // `every` (staggered, so the cost is spread instead of bunched on one tick)
+                if (throttle && throttle.roles.indexOf(role) !== -1 && (throttled++ + Game.time) % throttle.every !== 0) {
+                    cpuTier.skip("role:" + role);
+                    continue;
+                }
+                // one guard per creep (2026-10-22: a second one just for traffic.record doubled
+                // the per-creep metering overhead); a traffic error never stops the role
                 if (creepLogic[role]) {
-                    guard("creep:" + name, () => creepLogic[role].run(creep), "roles", role);
+                    guard("creep:" + name, () => {
+                        try { utils.traffic.record(creep); } catch (e) { console.log("[traffic:" + name + "] " + (e && e.stack ? e.stack : e)); }
+                        creepLogic[role].run(creep);
+                    }, "roles", role);
+                } else {
+                    guard("traffic:" + name, () => utils.traffic.record(creep));
                 }
             }
             guard("traffic:trace", () => utils.traffic.flushScoutTrace());

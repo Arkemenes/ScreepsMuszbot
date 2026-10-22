@@ -47,12 +47,10 @@ const defenderStriker = {
             if (threats.length) {
                 combat.shoot(creep, threats);
             } else {
-                // ROADMAP 0047: no hostile creep left - mop up a hostile
-                // structure instead of standing idle (excludes power banks,
-                // same convention raider.js/squadDismantler.js already use).
-                const structureTarget = creep.room.find(FIND_HOSTILE_STRUCTURES, {
-                    filter: (s) => s.structureType !== STRUCTURE_POWER_BANK,
-                })[0];
+                // ROADMAP 0047/0175: no hostile creep left - shoot what
+                // fights back (live tower, then spawn, then empty tower),
+                // never extensions/storage (combat.structureTarget).
+                const structureTarget = squad.attackTarget(creep, creep.memory.squadId);
                 if (structureTarget && creep.pos.getRangeTo(structureTarget) <= combat.KITE_RANGE) {
                     creep.rangedAttack(structureTarget);
                 }

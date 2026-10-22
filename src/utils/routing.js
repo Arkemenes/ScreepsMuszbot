@@ -309,14 +309,17 @@ function routingStructureMatrix(room, roadCost) {
 
     const matrix = new PathFinder.CostMatrix();
     for (const structure of structures) {
-        if (structure.structureType === STRUCTURE_ROAD) {
+        // A matrix returned from costCallback REPLACES the engine's own, so
+        // every non-walkable structure (extension, spawn, tower, ...) has
+        // to be blocked here too - not only walls. Leaving them at 0 sent a
+        // claimer's cached path straight through its home's extensions and
+        // parked it in a dead-end pocket.
+        const type = structure.structureType;
+        if (type === STRUCTURE_ROAD) {
             matrix.set(structure.pos.x, structure.pos.y, roadCost);
-        } else if (
-            structure.structureType === STRUCTURE_WALL ||
-            structure.structureType === STRUCTURE_INVADER_CORE ||
-            (structure.structureType === STRUCTURE_RAMPART &&
-                !structure.my && !structure.isPublic)
-        ) {
+        } else if (type === STRUCTURE_RAMPART) {
+            if (!structure.my && !structure.isPublic) matrix.set(structure.pos.x, structure.pos.y, 255);
+        } else if (type !== STRUCTURE_CONTAINER && type !== STRUCTURE_PORTAL) {
             matrix.set(structure.pos.x, structure.pos.y, 255);
         }
     }

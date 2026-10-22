@@ -15,6 +15,7 @@
 // its own gate (remoteRefusalReason/isEnemyRemote) below.
 
 const config = require("../utils/config");
+const assembly = require("../utils/squadAssembly");
 const { isTargetEnemy, isAlly } = require("../utils/hostiles");
 const remotes = require("./remotes");
 const defenderStriker = require("../roles/defenderStriker");
@@ -24,13 +25,26 @@ const squadDismantler = require("../roles/squadDismantler");
 // A targetEnemy's room, scouted, with no tower/hostile seen and a low
 // enough RCL to be worth the risk. Intel can be stale (last observation,
 // not live) - accepted risk, see spec 0032's O4 "Contras".
-function isWeakEnemyRoom(roomName) {
+// ROADMAP 0176: a 4-creep squad with 2 medics (opts.squad) can take what a
+// solo, heal-less raider can't - up to raiding.squadMaxTowers towers (1),
+// and RCL only capped by raiding.squadMaxTargetRcl (8: towers are the real
+// threat, not the level). Hostile creeps seen still refuse either way.
+function weakLimits(opts) {
+    const squad = !!(opts && opts.squad);
+    return {
+        towers: squad ? config.get("raiding.squadMaxTowers", 1) : 0,
+        rcl: squad ? config.get("raiding.squadMaxTargetRcl", 8) : config.get("raiding.maxTargetRcl", 3),
+    };
+}
+
+function isWeakEnemyRoom(roomName, opts) {
     const mem = Memory.rooms[roomName];
     if (!mem || !mem.lastVisit) return false;
     if (!mem.owner || !isTargetEnemy(mem.owner)) return false;
+    const limits = weakLimits(opts);
     if ((mem.enemies || 0) > 0) return false;
-    if ((mem.numberOfTowers || 0) > 0) return false;
-    if ((mem.controllerLevel || 0) > config.get("raiding.maxTargetRcl", 3)) return false;
+    if ((mem.numberOfTowers || 0) > limits.towers) return false;
+    if ((mem.controllerLevel || 0) > limits.rcl) return false;
     return true;
 }
 
@@ -44,8 +58,9 @@ function findWeakTarget() {
 }
 
 // Shared by raidRoom() and raidSquad() - same "is this room fair game"
-// rule either way. Returns null when OK, or a reason string when refused.
-function refusalReason(targetRoomName) {
+// rule, with the squad's looser strength limits (opts.squad, ROADMAP 0176).
+// Returns null when OK, or a reason string when refused.
+function refusalReason(targetRoomName, opts) {
     const tmem = Memory.rooms[targetRoomName];
     if (!tmem || !tmem.lastVisit) {
         return "hasn't been scouted yet - can't raid it";
@@ -57,8 +72,11 @@ function refusalReason(targetRoomName) {
         if (!isTargetEnemy(tmem.owner)) {
             return `is owned by ${tmem.owner}, not in targetEnemies - refusing`;
         }
-        if (!isWeakEnemyRoom(targetRoomName)) {
-            return "doesn't look weak enough to raid safely (tower/hostile seen, or RCL too high) - refusing";
+        if (!isWeakEnemyRoom(targetRoomName, opts)) {
+            const limits = weakLimits(opts);
+            return "doesn't look weak enough to raid safely " +
+                `(seen: ${tmem.numberOfTowers || 0} tower(s), ${tmem.enemies || 0} hostile creep(s), ` +
+                `RCL ${tmem.controllerLevel || 0}; limits: ${limits.towers} tower(s), 0 creeps, RCL ${limits.rcl}) - refusing`;
         }
         return null;
     }
@@ -250,6 +268,70 @@ global.contestRoom = function (targetRoomName, motherRoomName) {
     );
 };
 
+// --- console: defend one of my own rooms from another (ROADMAP 0173) ----
+// A young room (RCL 1-2) can only spawn token defenders; this sends a raider
+// sized by the mother's energy. mission "defend" fights hostile creeps only -
+// never the previous owner's structures (salvage, 0169) - then parks in the
+// room until it dies, still defending. A dead defender is replaced while
+// Memory.defendTarget stands; the raider clears it once the room is clean.
+//   defendRoom("W9N49")            -> mother = nearest other owned room with a spawn
+//   defendRoom("W9N49", "W7N49")   -> explicit mother room
+function defendRefusalReason(targetRoomName, motherRoomName) {
+    const tmem = Memory.rooms[targetRoomName];
+    if (!tmem || !tmem.my) return `${targetRoomName} isn't one of my rooms - use raidRoom for others`;
+    if (motherRoomName === targetRoomName) return "the mother room can't defend itself this way";
+    const mother = Game.rooms[motherRoomName];
+    if (!mother || !mother.controller || !mother.controller.my) return `${motherRoomName} isn't an owned room in vision`;
+    if (!mother.find(FIND_MY_SPAWNS).length) return `${motherRoomName} has no spawn`;
+    return null;
+}
+
+function nearestSpawnRoom(targetRoomName) {
+    let best = null;
+    let bestDist = Infinity;
+    for (const name in Game.rooms) {
+        const room = Game.rooms[name];
+        if (name === targetRoomName || !room.controller || !room.controller.my) continue;
+        if (!room.find(FIND_MY_SPAWNS).length) continue;
+        const dist = remotes.roomDistance(name, targetRoomName);
+        if (dist < bestDist) {
+            bestDist = dist;
+            best = name;
+        }
+    }
+    return best;
+}
+
+global.defendRoom = function (targetRoomName, motherRoomName) {
+    const mother = motherRoomName || nearestSpawnRoom(targetRoomName);
+    if (!mother) {
+        console.log(`[defend] no other owned room with a spawn to defend ${targetRoomName} from`);
+        return;
+    }
+    const reason = defendRefusalReason(targetRoomName, mother);
+    if (reason) {
+        console.log(`[defend] ${reason}`);
+        return;
+    }
+    if (Memory.defendTarget && Memory.defendTarget.room !== targetRoomName) {
+        console.log(
+            `[defend] replacing the pending defense of ${Memory.defendTarget.room} ` +
+                `(from ${Memory.defendTarget.from})`
+        );
+    }
+    Memory.defendTarget = { room: targetRoomName, from: mother };
+    console.log(`[defend] ${mother} will send a raider to defend ${targetRoomName}; cancelDefend() to stop`);
+};
+
+global.cancelDefend = function () {
+    if (!Memory.defendTarget) {
+        console.log("[defend] no defense pending");
+        return;
+    }
+    console.log(`[defend] defense of ${Memory.defendTarget.room} cancelled (a raider already out keeps guarding)`);
+    delete Memory.defendTarget;
+};
+
 global.cancelContest = function () {
     if (!Memory.contestTarget) {
         console.log("[raiding] no contest pending");
@@ -273,21 +355,9 @@ global.raidSquad = function (targetRoomName, mission, motherRoomName) {
         return;
     }
 
-    const reason = refusalReason(targetRoomName);
+    const reason = refusalReason(targetRoomName, { squad: true });
     if (reason) {
         console.log(`[raiding] ${targetRoomName} ${reason}`);
-        return;
-    }
-
-    if (Memory.pendingSquad) {
-        console.log(
-            `[raiding] a squad is already assembling for ${Memory.pendingSquad.room} ` +
-                `(from ${Memory.pendingSquad.from})`
-        );
-        return;
-    }
-    if (Memory.squads && Object.keys(Memory.squads).length) {
-        console.log("[raiding] a squad is already active - only one at a time for now");
         return;
     }
 
@@ -297,17 +367,12 @@ global.raidSquad = function (targetRoomName, mission, motherRoomName) {
         return;
     }
 
-    Memory.pendingSquad = {
-        mission,
-        room: targetRoomName,
-        from: mother,
-        need: SQUAD_RECIPES[mission].slice(),
-        spawned: [],
-    };
+    const id = assembly.create(mission, targetRoomName, mother, SQUAD_RECIPES[mission]);
     console.log(
-        `[raiding] ${mother} assembling a ${mission} squad (${SQUAD_RECIPES[mission].join("+")}) ` +
+        `[raiding] ${mother} assembling ${id}, a ${mission} squad (${SQUAD_RECIPES[mission].join("+")}) ` +
             `for ${targetRoomName}`
     );
+    return id;
 };
 
 const SQUAD_ROLES = {
@@ -316,22 +381,27 @@ const SQUAD_ROLES = {
     squadDismantler,
 };
 
-// The next spawn request to complete Memory.pendingSquad, or null when
+// The next spawn request to complete this mother's oldest assembly, or null when
 // there's nothing pending for this room (or nothing left to spawn - it's
 // about to be promoted to a real squad by roles/*'s registerPending()).
 function spawnPendingSquad(room) {
-    const pending = Memory.pendingSquad;
-    if (!pending || pending.from !== room.name) return null;
-    const nextIndex = pending.spawned.length;
-    if (nextIndex >= pending.need.length) return null;
+    for (const pending of Object.values(assembly.pending())) {
+        if (pending.from !== room.name) continue;
+        const members = assembly.population(pending);
+        const roleName = pending.need.find((role) => members.filter((c) => c.memory.role === role).length <
+            pending.need.filter((needed) => needed === role).length);
+        if (!roleName) continue;
+        const roleLogic = SQUAD_ROLES[roleName];
+        if (!roleLogic) continue;
+        const data = roleLogic.spawnData(room);
+        data.memory.pendingSquad = pending.id;
+        return data;
+    }
+    return null;
+}
 
-    const roleName = pending.need[nextIndex];
-    const roleLogic = SQUAD_ROLES[roleName];
-    if (!roleLogic) return null;
-
-    const data = roleLogic.spawnData(room);
-    data.memory.pendingSquad = pending.room;
-    return data;
+function hasPendingSquad(room) {
+    return Object.values(assembly.pending()).some((entry) => entry.from === room.name);
 }
 
 module.exports = {
@@ -340,4 +410,5 @@ module.exports = {
     isEnemyRemote,
     contestRefusalReason,
     spawnPendingSquad,
+    hasPendingSquad,
 };

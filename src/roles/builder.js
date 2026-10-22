@@ -229,7 +229,7 @@ global.builderStats = function (enabled) {
 const idleChecks = {}; // creep name -> { tick, room }
 let idleChecksGc = 0;
 function idleSkip(creep) {
-    const every = config.get("builder.idleRecheckTicks", 5);
+    const every = cpuTier.scaled("builder.idleRecheckTicks", 5);
     if (!(every > 1)) return false;
     const mark = idleChecks[creep.name];
     return !!mark && mark.room === creep.room.name && Game.time >= mark.tick && Game.time - mark.tick < every;

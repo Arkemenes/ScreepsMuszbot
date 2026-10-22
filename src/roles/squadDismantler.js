@@ -35,9 +35,7 @@ const squadDismantler = {
 
         squad.advance(creep, creep.memory.squadId);
 
-        const target = creep.room.find(FIND_HOSTILE_STRUCTURES, {
-            filter: (s) => s.structureType !== STRUCTURE_POWER_BANK,
-        })[0];
+        const target = squad.attackTarget(creep, creep.memory.squadId);
         if (target && creep.pos.getRangeTo(target) <= 1) {
             creep.dismantle(target);
         }

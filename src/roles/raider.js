@@ -25,6 +25,16 @@ function getBody(energy) {
     return body;
 }
 
+// Memory.defendTarget (ROADMAP 0173) is assigned to `roomName` and no
+// defending raider is alive for that room - also read by rooms/needs.js.
+function defendPending(roomName) {
+    const target = Memory.defendTarget;
+    if (!target || target.from !== roomName) return false;
+    return !census.all("raider").some(
+        (c) => c.memory.mission === "defend" && c.memory.targetRoom === target.room
+    );
+}
+
 const raider = {
     run(creep) {
         combat.silenceAttackAlerts(creep); // ROADMAP 0052 - fighting on someone else's ground is the whole job here
@@ -48,6 +58,21 @@ const raider = {
                 _.some(hostiles, (h) => combat.hasMelee(h) && creep.pos.getRangeTo(h) <= 1)
             ) {
                 combat.kiteAwayFrom(creep, hostiles);
+            }
+            return;
+        }
+
+        // ROADMAP 0173: defending one of my own rooms - creeps only, never the
+        // previous owner's structures (they're salvage, 0169). Room clean:
+        // close the request and park by the controller, still guarding it
+        // until the creep dies of old age.
+        if (creep.memory.mission === "defend") {
+            if (Memory.defendTarget && Memory.defendTarget.room === targetRoomName) {
+                delete Memory.defendTarget;
+            }
+            const controller = creep.room.controller;
+            if (controller && creep.pos.getRangeTo(controller) > 3) {
+                creep.moveTo(controller, { range: 3, reusePath: 20 });
             }
             return;
         }
@@ -76,9 +101,9 @@ const raider = {
             return;
         }
 
-        const structureTarget = creep.room.find(FIND_HOSTILE_STRUCTURES, {
-            filter: (s) => s.structureType !== STRUCTURE_POWER_BANK,
-        })[0];
+        // ROADMAP 0175: live tower / invader core, then spawn, then empty
+        // tower - extensions, storage etc. are left intact
+        const structureTarget = combat.structureTarget(creep.room, creep.pos);
         if (structureTarget) {
             const range = creep.pos.getRangeTo(structureTarget);
             if (range > combat.KITE_RANGE) {
@@ -106,6 +131,22 @@ const raider = {
     },
 
     spawnData(room) {
+        // a pending defense of my own room (ROADMAP 0173) outranks a raid
+        if (defendPending(room.name)) {
+            // sized by capacity and blocking (critical): a token defender is
+            // exactly what the defended room could already spawn on its own
+            return {
+                name: names.generate("raider"),
+                body: getBody(room.energyCapacityAvailable || room.energyAvailable),
+                critical: true,
+                memory: {
+                    role: "raider",
+                    targetRoom: Memory.defendTarget.room,
+                    mission: "defend",
+                    home: room.name,
+                },
+            };
+        }
         const target = Memory.raidTarget;
         return {
             name: names.generate("raider"),
@@ -120,4 +161,5 @@ const raider = {
     },
 };
 
+raider.defendPending = defendPending;
 module.exports = raider;

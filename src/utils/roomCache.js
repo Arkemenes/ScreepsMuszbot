@@ -18,6 +18,12 @@ function structures(room) {
     return s.structures;
 }
 
+function hostileStructures(room) {
+    const s = slot(room);
+    if (!s.hostileStructures) s.hostileStructures = room.find(FIND_HOSTILE_STRUCTURES);
+    return s.hostileStructures;
+}
+
 function myStructures(room) {
     const s = slot(room);
     if (!s.myStructures) s.myStructures = room.find(FIND_MY_STRUCTURES);
@@ -131,6 +137,7 @@ module.exports = {
     structuresInRange,
     structuresNear,
     structures,
+    hostileStructures,
     myStructures,
     constructionSites,
     structuresByType,

@@ -134,6 +134,8 @@ function spawnCreeps(room) {
     const verdict = idleVerdict[room.name];
     if (
         !underAttack &&
+        !raiding.hasPendingSquad(room) &&
+        (!creepLogic.looter || !creepLogic.looter.wanted(room)) &&
         verdict &&
         verdict.needs === needsNow &&
         verdict.creeps === creepsNow &&
@@ -194,6 +196,21 @@ function spawnCreeps(room) {
         if (census.count(room.name, "hauler", 0) === 0) pushCritical("hauler");
         else pushFullHaulerUpgrade();
         pushCritical("miner");
+    }
+
+    // ROADMAP 0173: defending one of my own rooms (defendRoom) is not luxury -
+    // it goes right after this room's own critical roles, ahead of the rest.
+    if (
+        !underAttack &&
+        creepLogic.raider &&
+        creepLogic.raider.defendPending(room.name) &&
+        creepLogic.raider.spawn(room)
+    ) {
+        const data = creepLogic.raider.spawnData(room);
+        if (data) {
+            queued.raider = true;
+            requests.push(data);
+        }
     }
 
     // Every other role that currently wants a creep, in priority order.

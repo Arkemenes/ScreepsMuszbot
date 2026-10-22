@@ -864,6 +864,16 @@ const defaults = {
         // doesn't mean "raid them whenever possible" until asked for.
         autoRaid: false,
     },
+    loot: {
+        // Ignore regenerating spawn trickles and other tiny energy piles.
+        minEnergyAmount: 30,
+        maxHaulers: 3,
+        maxHops: 10,
+        ticksPerHop: 50,
+        returnMargin: 50,
+        // Presence of towers/armed creeps never pauses a loot mission.
+        cancelHpRatio: 0.5,
+    },
     squad: {
         // average hits/hitsMax across living squad members below which a
         // retreat is considered (utils/squad.js, ROADMAP 0032 Fase 4) -
@@ -876,6 +886,19 @@ const defaults = {
         // how long a tile stays in `avoid` before being reconsidered - the
         // blocker might have only been passing through
         avoidTicks: 100,
+        // Shared doorway phase: retry bounded searches, retreat on a stalled
+        // advance, never feed formation congestion into routing's blacklist.
+        crossingMaxOps: 20000,
+        crossingRetryTicks: 10,
+        crossingStallTicks: 50,
+        crossingTimeoutTicks: 300,
+        crossingReusePathTicks: 5,
+        // Estimated movement + hits / active structural DPS, kept numeric
+        // instead of saturating breach costs in an 8-bit CostMatrix.
+        breachPlainTicks: 1,
+        breachSwampTicks: 5,
+        breachReplanTicks: 25,
+        breachMaxTiles: 2304,
     },
     scout: {
         // roles/scout.js (ROADMAP 0009): a sala-alvo de exploração que
@@ -970,6 +993,50 @@ const defaults = {
             "builder.idleSpendRecheckTicks": { factor: 2, kind: "interval" },
             "hauler.idleRecheckTicks": { factor: 2, kind: "interval" },
         },
+        // critical/low bands only: existing intervals multiplied / budgets divided by factor
+        // (2026-10-22: 57 creeps on a 20 CPU limit kept the bucket at ~0 and skipped ticks)
+        shed: {
+            "needs.cacheTicks": { factor: 3, kind: "interval" },
+            "hauler.idleRecheckTicks": { factor: 2, kind: "interval" },
+            "builder.idleRecheckTicks": { factor: 2, kind: "interval" },
+            "builder.idleSpendRecheckTicks": { factor: 3, kind: "interval" },
+            "observer.exploreInterval": { factor: 3, kind: "interval" },
+            // tier 1-2 modules that come back above the critical band
+            "terminalOps.tickInterval": { factor: 3, kind: "interval" },
+            "craft.scanInterval": { factor: 2, kind: "interval" },
+            "craft.policyCpuPerTick": { factor: 2, kind: "budget" },
+            "marketFlip.scanInterval": { factor: 2, kind: "interval" },
+        },
+        // critical band: an idle hauler keeps its recheck interval even while a spawn/extension
+        // is hungry (in a dry room the per-tick search keeps finding nothing)
+        idleSkipWhenHungry: true,
+        // critical band: no new looters spawn (missions resume when the bucket leaves it)
+        pauseLootersInCritical: true,
+        // critical band: a room with no construction site and nothing at critical hits wants no builder
+        dropIdleBuilderInCritical: true,
+        // main.js: below the full band these roles run one tick in `every` (staggered); the
+        // economy-critical ones (miner, hauler, defenders, bootstrap) always run. 2026-10-22:
+        // with 57 creeps the empire costs ~20 CPU against a 20 limit, so the bucket never refilled.
+        // { roles: [] } or every: 1 turns it off.
+        throttle: { roles: ["builder", "upgrader", "looter"], every: 2, maxBand: "normal" },
+        // critical band: no hauler.minCountWithMineral floor (mineral hauling waits)
+        dropMineralHaulerInCritical: true,
+    },
+    // ROADMAP 0185 (rooms/noStorageEconomy.js): a room with no storage and no link network
+    // sizes its haulers by measured pressure and turns a lasting surplus into upgraders
+    noStorageEconomy: {
+        enabled: true,
+        // EMA weight of each sample (one per rooms/needs.js recompute, ~every needs.cacheTicks)
+        alpha: 0.2,
+        // the extra hauler (1 + 1) comes at pressure >= high and leaves at <= low
+        pressureHigh: 0.5,
+        pressureLow: 0.2,
+        // one upgrader more (surplus >= high) or less (<= low) at most once per cooldown
+        surplusHigh: 0.6,
+        surplusLow: 0.2,
+        surplusCooldown: 1500,
+        // ceiling on the room's upgraders from this rule (base tier included)
+        maxUpgraders: 5,
     },
     mineralMiner: {
         // ROADMAP 0114: minimum deposit amount to spawn a mineralMiner, and the

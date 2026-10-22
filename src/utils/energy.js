@@ -14,7 +14,6 @@ function energyPiles(room) {
     if (energyPilesCache[room.name]) return energyPilesCache[room.name];
 
     const piles = [];
-
     for (const r of roomCache.droppedResources(room)) {
         if (r.resourceType === RESOURCE_ENERGY && r.amount >= 50) piles.push(r);
     }
@@ -24,31 +23,35 @@ function energyPiles(room) {
     for (const ruin of roomCache.ruins(room)) {
         if (ruin.store[RESOURCE_ENERGY] >= 50) piles.push(ruin);
     }
-    // Only storage, containers and receiving links can be a pile: walk those cached
-    // per-type lists instead of reading .store on every structure of the room.
+
     const holders = roomCache.structuresByType(room, STRUCTURE_STORAGE)
         .concat(roomCache.structuresByType(room, STRUCTURE_CONTAINER));
     for (const s of holders) {
         if (s.store && s.store[RESOURCE_ENERGY] >= 50) piles.push(s);
     }
-    for (const s of roomCache.structuresByType(room, STRUCTURE_LINK)) {
-        // never drain a collector link - only the miner feeds it, and it feeds
-        // the base link network
+    const links = roomCache.structuresByType(room, STRUCTURE_LINK);
+    for (const s of links) {
+        // Never drain a collector link: the miner owns its feed contract.
         if (s.store && s.store[RESOURCE_ENERGY] >= 50 && !s.isCollector()) piles.push(s);
     }
 
-    // A pile sitting in the attack zone isn't a valid target for a
-    // non-combat creep (utils/combat.js's excludeDangerZone, ROADMAP 0107
-    // follow-up, user request) - filtered here, once, so both callers
-    // (builder.js, pioneer.js) inherit it for free instead of each
-    // re-checking. No-op outside our own rooms under attack (pioneer's
-    // foreign/spawnless-room case: mem.defenseActive is only ever set for a
-    // room we own, so this never touches pioneer's own separate
-    // hostile-avoidance gate in rooms/pioneering.js).
-    energyPilesCache[room.name] = combat.excludeDangerZone(piles, room);
+    // Structures with a known foreign owner can retain energy after capture.
+    // Existing storage/container/link sources remain handled above.
+    if (config.get("salvage.enabled", true)) {
+        const known = new Set(holders.concat(links).map((s) => s.id));
+        for (const s of roomCache.structures(room)) {
+            if (known.has(s.id) || s.my === true || !s.owner || !s.store) continue;
+            if (s.store[RESOURCE_ENERGY] >= 50) piles.push(s);
+        }
+    }
+
+    const accessible = salvage.excludeProtected(piles, room);
+    energyPilesCache[room.name] = combat.excludeDangerZone(accessible, room);
     return energyPilesCache[room.name];
 }
 
+const config = require("./config");
+const salvage = require("./salvage");
 const roomCache = require("./roomCache");
 const combat = require("./combat");
 

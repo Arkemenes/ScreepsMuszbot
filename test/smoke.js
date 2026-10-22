@@ -32,7 +32,7 @@ const constants = {
     STRUCTURE_ROAD: "road", STRUCTURE_WALL: "constructedWall",
     STRUCTURE_RAMPART: "rampart", STRUCTURE_LINK: "link",
     STRUCTURE_STORAGE: "storage", STRUCTURE_TOWER: "tower",
-    STRUCTURE_CONTAINER: "container", STRUCTURE_LAB: "lab",
+    STRUCTURE_CONTAINER: "container", STRUCTURE_LAB: "lab", STRUCTURE_PORTAL: "portal",
     STRUCTURE_TERMINAL: "terminal", STRUCTURE_NUKER: "nuker",
     STRUCTURE_FACTORY: "factory", STRUCTURE_OBSERVER: "observer",
     STRUCTURE_POWER_SPAWN: "powerSpawn", STRUCTURE_EXTRACTOR: "extractor",
@@ -44,7 +44,7 @@ const constants = {
     INTERSHARD_RESOURCES: ["pixel"],
     ORDER_BUY: "buy", ORDER_SELL: "sell",
     WORK: "work", CARRY: "carry", MOVE: "move", TOUGH: "tough",
-    HEAL: "heal", ATTACK: "attack", RANGED_ATTACK: "ranged_attack", CLAIM: "claim",
+    HEAL: "heal", ATTACK: "attack", RANGED_ATTACK: "ranged_attack", CLAIM: "claim", DISMANTLE_POWER: 50,
     BODYPART_COST: { work: 100, carry: 50, move: 50, tough: 10, heal: 250,
         attack: 80, ranged_attack: 150, claim: 600 },
     CREEP_SPAWN_TIME: 3, CREEP_LIFE_TIME: 1500, CREEP_CLAIM_LIFE_TIME: 600,
@@ -452,6 +452,7 @@ const origLog = console.log;
 console.log = (...a) => { logs.push(a.join(" ")); };
 
 let threw = null;
+Memory.squads = { deadMain0181: { members: ["deadBeforeMain0181"], leader: "deadBeforeMain0181" } };
 try {
     const bot = require(path.join(PROJECT, "src/main"));
     for (let i = 0; i < 60; i++) { bot.loop(); Game.time++; }
@@ -474,6 +475,8 @@ function assert(cond, msg) {
 
 assert(!threw, "main.loop() ran 3 ticks without throwing" +
     (threw ? "\n      " + (threw.stack || threw) : ""));
+assert(!Memory.squads.deadMain0181 && !logs.some((line) => line.startsWith("[squads]")),
+    "0181: the guarded main-loop maintenance removes dead squads independently of creep roles");
 
 const guarded = logs.filter((l) =>
     /^\[(plan|intel|spawn|creep|structure|stats):/.test(l)
@@ -875,6 +878,61 @@ assert(planStore.getPlan("Wmig") === null,
         "stamp scoring picks the placement with deeper covered tiles, not " +
         "just a deeper origin (got x=" + (picked[0] && picked[0].x) + ")");
     delete Game.rooms.Wscore;
+}
+
+// --- 0172: replanRoom(room, {fresh: true}) plans from terrain alone ------
+{
+    const architect = require(path.join(PROJECT, "src/rooms/architect"));
+    const tower = { structureType: STRUCTURE_TOWER, pos: { x: 10, y: 11 } };
+    Game.rooms.Wfresh = {
+        name: "Wfresh",
+        find: (type, o) => {
+            const all = type === FIND_STRUCTURES || type === FIND_MY_STRUCTURES ? [tower] : [];
+            return o && o.filter ? all.filter(o.filter) : all;
+        },
+    };
+    Memory.rooms.Wfresh = { planned: true };
+    const quietReplan = (...args) => {
+        const log = console.log;
+        console.log = () => {};
+        try { global.replanRoom(...args); } finally { console.log = log; }
+    };
+    quietReplan("Wfresh");
+    assert(architect.existingBuiltNear("Wfresh", STRUCTURE_TOWER, { x: 10, y: 10 }) === tower &&
+        architect.unclaimedBuiltTowers("Wfresh").length === 1,
+        "0172: a normal replanRoom still reuses a built tower");
+    quietReplan("Wfresh", { fresh: true });
+    assert(Memory.rooms.Wfresh.planFresh === true && !Memory.rooms.Wfresh.planned,
+        "0172: replanRoom(room, {fresh: true}) clears the plan and sets planFresh");
+    assert(architect.existingBuiltNear("Wfresh", STRUCTURE_TOWER, { x: 10, y: 10 }) === undefined &&
+        architect.unclaimedBuiltTowers("Wfresh").length === 0,
+        "0172: a fresh replan ignores built structures (no tower reuse)");
+    quietReplan("Wfresh");
+    assert(Memory.rooms.Wfresh.planFresh === undefined,
+        "0172: a plain replanRoom drops planFresh again");
+
+    // the first spawn stamp anchors on a built spawn, else a spawn site
+    const spawnSite = { structureType: STRUCTURE_SPAWN, pos: { x: 30, y: 30 } };
+    const builtSpawn = { structureType: STRUCTURE_SPAWN, pos: { x: 20, y: 20 } };
+    let spawnsBuilt = [];
+    Game.rooms.Wfresh.find = (type, o) => {
+        const all = type === FIND_MY_STRUCTURES ? spawnsBuilt
+            : type === FIND_MY_CONSTRUCTION_SITES ? [spawnSite] : [];
+        return o && o.filter ? all.filter(o.filter) : all;
+    };
+    assert(architect.firstSpawnAnchor(Game.rooms.Wfresh) === spawnSite,
+        "0172: with no spawn built, the first spawn stamp anchors on the spawn construction site");
+    spawnsBuilt = [builtSpawn];
+    assert(architect.firstSpawnAnchor(Game.rooms.Wfresh) === builtSpawn,
+        "0172: a built spawn wins over a spawn construction site as the anchor");
+    quietReplan("Wfresh", { fresh: true });
+    assert(architect.firstSpawnAnchor(Game.rooms.Wfresh) === spawnSite,
+        "0172: a fresh replan ignores the built spawn but still anchors on the spawn site");
+    spawnSite.structureType = STRUCTURE_EXTENSION;
+    assert(architect.firstSpawnAnchor(Game.rooms.Wfresh) === null,
+        "0172: a fresh replan with no spawn site has no anchor");
+    delete Game.rooms.Wfresh;
+    delete Memory.rooms.Wfresh;
 }
 
 // --- ARK-116: the plan preview is drawn once and replayed from the heap ----
@@ -2328,6 +2386,10 @@ function withFindLookup(pos, lists) {
 
 // --- roomNeeds: one source of truth, scales with room state ----------
 const needs = require(path.join(PROJECT, "src/rooms/needs"));
+// the legacy formula tests below predate ROADMAP 0185 (storage-less rooms); it is
+// switched off for them and exercised on its own further down
+const needsCfg = require(path.join(PROJECT, "src/utils/config"));
+needsCfg.defaults.noStorageEconomy.enabled = false;
 Game.time++;
 const n = needs.roomNeeds(room);
 assert(n === needs.roomNeeds(room), "roomNeeds is cached within a tick");
@@ -2636,6 +2698,70 @@ assert(needs.roomNeeds(room).builder === 0,
 // network needs just one, even with a storage
 assert(needs.roomNeeds(room).hauler >= 2,
     "hauler count scales with source containers when there is no link network");
+
+// --- ROADMAP 0185: storage-less room - haulers by pressure, surplus to upgraders
+{
+    needsCfg.defaults.noStorageEconomy.enabled = true;
+    const nse = require(path.join(PROJECT, "src/rooms/noStorageEconomy"));
+    const savedRoomMem = Memory.rooms[room.name];
+    const st = () => Memory.rooms[room.name].noStorageEco;
+    delete Memory.rooms[room.name].noStorageEco;
+    const fresh = needs.roomNeeds((Game.time++, room));
+    assert(fresh.hauler === 1, "0185: a storage-less room without hauler pressure wants 1 hauler (" + fresh.hauler + ")");
+    // pressure: spawn/extensions with room and a full trip waiting in a container
+    const mem = Memory.rooms[room.name];
+    const sample = (p, s) => nse.observe(room, mem, p, s, 1);
+    let r;
+    for (let i = 0; i < 6; i++) r = sample(true, false);
+    assert(r.hauler === 2, "0185: lasting pressure adds the extra hauler (p=" + st().p + ")");
+    r = sample(false, false);
+    assert(r.hauler === 2, "0185: one calm sample keeps the extra hauler (hysteresis, p=" + st().p + ")");
+    for (let i = 0; i < 6; i++) r = sample(false, false);
+    assert(r.hauler === 1, "0185: the extra hauler goes once pressure stays low (p=" + st().p + ")");
+    // surplus: one upgrader more per cooldown, none before it
+    st().upTick = Game.time;
+    for (let i = 0; i < 8; i++) r = sample(false, true);
+    assert(r.upgraderExtra === 0, "0185: no upgrader before surplusCooldown elapses");
+    Game.time += 1500;
+    r = sample(false, true);
+    const first = r.upgraderExtra;
+    r = sample(false, true);
+    Game.time += 1500; r = sample(false, true);
+    Game.time += 1500; r = sample(false, true);
+    Game.time += 1500; r = sample(false, true);
+    Game.time += 1500; r = sample(false, true);
+    assert(first === 1 && r.upgraderExtra === 4, "0185: a lasting surplus adds one upgrader per cooldown up to maxUpgraders (5 with the base) (" + first + "/" + r.upgraderExtra + ")");
+    for (let i = 0; i < 8; i++) r = sample(false, false);
+    const afterDrop = r.upgraderExtra;
+    r = sample(false, false);
+    const sameWindow = r.upgraderExtra;
+    Game.time += 1500; r = sample(false, false);
+    assert(afterDrop === 3 && sameWindow === 3 && r.upgraderExtra === 2,
+        "0185: without surplus the extra upgraders step back one per cooldown (" + afterDrop + "/" + sameWindow + "/" + r.upgraderExtra + ")");
+    // excess hauler: the one closest to dying recycles, only one at a time
+    const hA = { name: "nseA", ticksToLive: 900, memory: { role: "hauler" }, room };
+    const hB = { name: "nseB", ticksToLive: 200, memory: { role: "hauler" }, room };
+    const census = require(path.join(PROJECT, "src/utils/census"));
+    const realByRole = census.creepsByRole;
+    census.creepsByRole = (rn, role) => rn === room.name && role === "hauler" ? [hA, hB] : realByRole(rn, role);
+    const pick = [nse.isExcessHauler(hA, 1), nse.isExcessHauler(hB, 1), nse.isExcessHauler(hB, 2)];
+    hB.memory.recycle = true;
+    const second = nse.isExcessHauler(hA, 0);
+    census.creepsByRole = realByRole;
+    assert(JSON.stringify(pick) === "[false,true,false]" && second === false,
+        "0185: with more haulers than wanted only the one closest to dying recycles, one at a time (" + JSON.stringify(pick) + "/" + second + ")");
+    // a storage or a link network takes the room out of the rule
+    const savedNseStorage = room.storage;
+    const without = nse.applies(Object.assign(Object.create(Object.getPrototypeOf(room)), room, { storage: undefined }));
+    const withStorage = nse.applies(Object.assign(Object.create(Object.getPrototypeOf(room)), room, { storage: { id: "stNse", store: store(0, 1e6) } }));
+    room.storage = savedNseStorage;
+    assert(!withStorage && without, "0185: only rooms without storage (and without links) use the rule");
+    assert(Object.values(st()).every((v) => typeof v === "number"), "0185: Memory keeps only numbers");
+    delete Memory.rooms[room.name].noStorageEco;
+    Memory.rooms[room.name] = savedRoomMem;
+    Game.time++;
+    needsCfg.defaults.noStorageEconomy.enabled = false;
+}
 const nLink = (col) =>
     Object.assign(new StructureLink(), {
         id: "nl" + (col ? "c" : "r"),
@@ -2685,6 +2811,8 @@ findMap[FIND_MY_STRUCTURES] = findMap[FIND_MY_STRUCTURES].filter(
     (s) => s.id !== "nlc" && s.id !== "nlr"
 );
 room.storage = null;
+
+needsCfg.defaults.noStorageEconomy.enabled = true; // end of the legacy needs formula block
 
 // --- builder: closest energy wins, all types equal -------------------
 const builder = require(path.join(PROJECT, "src/roles/builder"));
@@ -5648,6 +5776,8 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
     Memory.rooms.W1N1.remotes = ["W1N2"];
 
     // --- console: reserveRoom / unreserveRoom / claimRoom -----------------
+const priorClaimTestRoom = Game.rooms.W1N2;
+Game.rooms.W1N2 = { name: "W1N2", controller: { my: false } };
     delete Memory.rooms.W1N1.remotes;
     global.reserveRoom("W1N2");
     assert(
@@ -5688,15 +5818,23 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
     // --- claimRoom(): owner / controller / novice-zone validations ------
     Memory.rooms.W1N2.owner = "SomeoneElse";
     global.claimRoom("W1N2");
-    assert(!Memory.claimTarget,
-        "claimRoom() refuses a target already owned by another player");
+    assert(Memory.claimTarget && Memory.claimTarget.room === "W1N2" &&
+        !Memory.rooms.W1N2.owner,
+        "claimRoom() ignores stale owner intel when the visible controller is neutral");
+    delete Memory.claimTarget;
     delete Memory.rooms.W1N2.owner;
 
-    Memory.rooms.W1N2.hasController = false;
+    Game.rooms.W1N2.controller = null;
     global.claimRoom("W1N2");
     assert(!Memory.claimTarget,
         "claimRoom() refuses a target with no controller (highway/SK/center room)");
-    delete Memory.rooms.W1N2.hasController;
+    Game.rooms.W1N2.controller = { my: false };
+
+    Game.rooms.W1N2.controller.owner = { username: "SomeoneElse" };
+    global.claimRoom("W1N2");
+    assert(!Memory.claimTarget,
+        "claimRoom() refuses a currently visible controller owned by another player");
+    Game.rooms.W1N2.controller.owner = null;
 
     const realGetRoomStatus = Game.map.getRoomStatus;
     Game.map.getRoomStatus = () => ({ status: "novice", timestamp: 123 });
@@ -5704,6 +5842,79 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
     assert(!Memory.claimTarget,
         "claimRoom() refuses a target blocked by novice/respawn zone protection");
     Game.map.getRoomStatus = realGetRoomStatus;
+
+    // --- claimRoom(): observer checks current ownership before dispatch --
+    {
+        const remotesMod = require(path.join(PROJECT, "src/rooms/remotes"));
+        const previousStructures = Game.structures;
+        const previousLinearDistance = Game.map.getRoomLinearDistance;
+        const previousObserveRequests = Memory.observeRequests;
+        const previousTime = Game.time;
+        const observer = {
+            structureType: STRUCTURE_OBSERVER, my: true,
+            room: { name: "W1N1" }, observeRoom: () => OK,
+        };
+        Game.structures = { claimObserver: observer };
+        Game.map.getRoomLinearDistance = () => 1;
+        delete Game.rooms.W1N2;
+        Memory.rooms.W1N2.owner = "vlc6wsw0l";
+        delete Memory.claimTarget;
+        delete Memory.claimCheck;
+        const userObserveExpiry = Game.time + 30;
+        Memory.observeRequests = { W1N2: userObserveExpiry };
+
+        global.claimRoom("W1N2", "W1N1");
+        assert(Memory.claimCheck && Memory.claimCheck.room === "W1N2" &&
+            !Memory.claimTarget && Memory.observeRequests.W1N2,
+            "claimRoom() schedules Observer verification and does not dispatch from stale owner intel");
+
+        global.cancelClaim();
+        assert(!Memory.claimCheck && Memory.observeRequests.W1N2 === userObserveExpiry,
+            "cancelClaim() clears its check while preserving an independent observe request");
+        global.claimRoom("W1N2", "W1N1");
+
+        Game.rooms.W1N2 = { name: "W1N2", controller: { my: false, owner: null } };
+        remotesMod.processPendingClaimCheck();
+        assert(Memory.claimTarget && Memory.claimTarget.room === "W1N2" &&
+            !Memory.claimCheck && Memory.observeRequests.W1N2 === userObserveExpiry,
+            "fresh neutral vision resumes the pending claim and preserves an independent observe request");
+
+        delete Memory.claimTarget;
+        delete Game.rooms.W1N2;
+        global.claimRoom("W1N2", "W1N1");
+        Game.rooms.W1N2 = {
+            name: "W1N2",
+            controller: { my: false, owner: { username: "StillOwner" } },
+        };
+        remotesMod.processPendingClaimCheck();
+        assert(!Memory.claimTarget && !Memory.claimCheck &&
+            Memory.rooms.W1N2.owner === "StillOwner",
+            "Observer vision showing an active owner prevents claim dispatch and refreshes owner intel");
+
+        delete Game.rooms.W1N2;
+        Game.structures = {};
+        delete Memory.claimCheck;
+        global.claimRoom("W1N2", "W1N1");
+        assert(!Memory.claimCheck && !Memory.claimTarget,
+            "without current vision or an in-range Observer, claim fails explicitly without a pending mission");
+
+        delete Memory.observeRequests.W1N2;
+        Game.structures = { claimObserver: observer };
+        global.claimRoom("W1N2", "W1N1");
+        const claimCheckExpiry = Memory.claimCheck && Memory.claimCheck.expiresAt;
+        Game.time = claimCheckExpiry;
+        remotesMod.processPendingClaimCheck();
+        assert(!Memory.claimCheck && !Memory.observeRequests.W1N2 && !Memory.claimTarget,
+            "an unfulfilled ownership check expires and never dispatches a claimer");
+
+        Game.time = previousTime;
+        Game.rooms.W1N2 = { name: "W1N2", controller: { my: false } };
+        Game.structures = previousStructures;
+        Game.map.getRoomLinearDistance = previousLinearDistance;
+        Memory.observeRequests = previousObserveRequests;
+        delete Memory.rooms.W1N2.owner;
+        delete Memory.claimTarget;
+    }
 
     // --- claimRoom(): refuses a target the CLAIM lifetime can't reach ----
     // (CREEP_CLAIM_LIFE_TIME=600, not the usual 1500 - any body with a
@@ -5793,6 +6004,8 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
 
         delete Memory.claimTarget;
     }
+    if (priorClaimTestRoom) Game.rooms.W1N2 = priorClaimTestRoom;
+    else delete Game.rooms.W1N2;
 
     // --- Fase 3: targetEnemies + raiding (ROADMAP 0032 O2/O4) ----------
     {
@@ -5844,6 +6057,22 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
         Memory.rooms.E77N77.controllerLevel = 6;
         assert(!raidingMod.isWeakEnemyRoom("E77N77"),
             "RCL above the configured ceiling (raiding.maxTargetRcl) makes it not weak");
+        Memory.rooms.E77N77.controllerLevel = 2;
+
+        // ROADMAP 0176: a squad (2 medics) has looser limits than a solo raider
+        Memory.rooms.E77N77.numberOfTowers = 1;
+        Memory.rooms.E77N77.controllerLevel = 5;
+        assert(!raidingMod.isWeakEnemyRoom("E77N77") && raidingMod.isWeakEnemyRoom("E77N77", { squad: true }),
+            "0176: one tower at RCL5 refuses a solo raid but is fair game for a squad");
+        Memory.rooms.E77N77.numberOfTowers = 2;
+        assert(!raidingMod.isWeakEnemyRoom("E77N77", { squad: true }),
+            "0176: more towers than raiding.squadMaxTowers (1) refuses a squad too");
+        Memory.rooms.E77N77.numberOfTowers = 1;
+        Memory.rooms.E77N77.enemies = 1;
+        assert(!raidingMod.isWeakEnemyRoom("E77N77", { squad: true }),
+            "0176: a hostile creep seen still refuses a squad");
+        Memory.rooms.E77N77.enemies = 0;
+        Memory.rooms.E77N77.numberOfTowers = 0;
         Memory.rooms.E77N77.controllerLevel = 2;
 
         // --- raidRoom(): O4 (targetEnemy, gated by isWeakEnemyRoom) ------
@@ -6031,6 +6260,64 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
         assert(spawnDataHarass.memory.mission === "harass",
             "spawnData() carries mission:'harass' through from Memory.raidTarget");
         delete Memory.raidTarget;
+
+        // --- ROADMAP 0173: defendRoom() / raider mission "defend" --------
+        {
+            const quiet = (fn) => {
+                const log = console.log;
+                const out = [];
+                console.log = (...a) => out.push(a.join(" "));
+                try { fn(); } finally { console.log = log; }
+                return out.join("\n");
+            };
+            Memory.rooms.WDefNot = { lastVisit: 1 };
+            quiet(() => global.defendRoom("WDefNot", "W1N1"));
+            assert(!Memory.defendTarget,
+                "0173: defendRoom() refuses a room that isn't mine");
+            Memory.rooms.WDef = { my: true, lastVisit: 1 };
+            quiet(() => global.defendRoom("WDef", "WDef"));
+            assert(!Memory.defendTarget,
+                "0173: defendRoom() refuses the target room as its own mother");
+            const okLog = quiet(() => global.defendRoom("WDef", "W1N1"));
+            assert(Memory.defendTarget && Memory.defendTarget.room === "WDef" &&
+                Memory.defendTarget.from === "W1N1",
+                "0173: defendRoom() records the defense for an owned room from a mother with a spawn (" + okLog + ")");
+
+            const spawnDefend = raiderMod.spawnData({ name: "W1N1", energyAvailable: 400, energyCapacityAvailable: 2000 });
+            assert(spawnDefend.memory.mission === "defend" && spawnDefend.memory.targetRoom === "WDef",
+                "0173: spawnData() sends a mission:'defend' raider while a defense is pending");
+            assert(spawnDefend.critical === true &&
+                spawnDefend.body.filter((p) => p === RANGED_ATTACK).length === 10,
+                "0173: the defending raider is sized by energy capacity (10 RANGED_ATTACK at 2000) " +
+                    "and blocks the queue until affordable");
+            Memory.raidTarget = { room: "W6N7", from: "W1N1" };
+            assert(raiderMod.spawnData({ name: "W1N1", energyAvailable: 400 }).memory.mission === "defend",
+                "0173: a pending defense outranks a pending raid in spawnData()");
+            delete Memory.raidTarget;
+
+            Game.time++;
+            r = mkRaider([mkHostileCreep("dh1")], [], "defend");
+            r.creep.memory.targetRoom = "RaidRoom";
+            raiderMod.run(r.creep);
+            assert(r.shot() && Memory.defendTarget,
+                "0173: a defending raider fights a hostile creep and keeps the request open meanwhile");
+
+            Game.time++;
+            Memory.defendTarget = { room: "RaidRoom", from: "W1N1" };
+            r = mkRaider([], [mkHostileStructure("oldOwner1", 2)], "defend");
+            r.creep.room.controller = { pos: new RoomPosition(40, 40, "RaidRoom") };
+            raiderMod.run(r.creep);
+            assert(!r.attacked() && !r.retired() && !Memory.defendTarget &&
+                r.movedTo() && r.movedTo().o.range === 3,
+                "0173: with no hostile creep left, a defending raider ignores structures, clears " +
+                    "Memory.defendTarget and parks by the controller instead of retiring");
+
+            Memory.defendTarget = { room: "WDef", from: "W1N1" };
+            quiet(() => global.cancelDefend());
+            assert(!Memory.defendTarget, "0173: cancelDefend() drops the pending defense");
+            delete Memory.rooms.WDef;
+            delete Memory.rooms.WDefNot;
+        }
     }
 
     // --- rooms/defense.js: checkSafeMode() (ROADMAP 0032/0036 D6, revised -
@@ -6226,6 +6513,11 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
             "shapeFits('block') is false when a wall blocks one of the 4 next tiles");
         assert(squadMod.shapeFits(REG.lead, Memory.squads.sq2, "column", 3) === true,
             "shapeFits('column') is still true - single file threads between the same walls");
+        squadWalls = [mkWall(19, 20)];
+        Memory.squads.sq2.dir = null;
+        Game.time++;
+        assert(!squadMod.shapeFits(REG.lead, Memory.squads.sq2, "column", RIGHT),
+            "0179: column validation uses the candidate direction after a crossing resets squad.dir");
         squadWalls = [];
         Game.time++;
 
@@ -6262,6 +6554,23 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
         squadMod.advance(REG.f1, "sq3");
         assert(leadDir !== null && leadDir === f1Dir,
             "advance() moves every formed member in the exact same direction (lockstep)");
+
+        // ROADMAP 0178: the leader waits for the formation (up to
+        // squad.formTimeoutTicks, 5) instead of running ahead of stragglers
+        REG.lead.pos = new RoomPosition(20, 20, "SquadRoom");
+        REG.f1.pos = new RoomPosition(30, 30, "SquadRoom");
+        Memory.squads.sq3.formWait = 0;
+        const leadSteps = [];
+        REG.lead.move = (d) => { leadSteps.push(Game.time); return OK; };
+        for (let i = 0; i < 5; i++) {
+            Game.time++;
+            squadMod.advance(REG.lead, "sq3");
+        }
+        assert(leadSteps.length === 1,
+            "0178: with a member off its slot the leader waits, taking only one step per " +
+                "squad.formTimeoutTicks (got " + leadSteps.length + " steps in 5 ticks)");
+        REG.f1.pos = new RoomPosition(21, 20, "SquadRoom");
+        REG.lead.move = noop;
 
         // --- advance(): retreats when hp is low AND a safe exit exists ----
         Memory.squads.sq5 = {
@@ -6309,11 +6618,490 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
         assert(!Memory.squads.sq7 && leadHome.memory.squadId === undefined,
             "advance() disbands the squad once a retreating member is actually back home");
 
+        // --- ROADMAP 0178: regroup in the staging room before the target -
+        const routingSq = require(path.join(PROJECT, "src/utils/routing"));
+        const realTravelSq = routingSq.travelToRoom;
+        const realFindRouteSq = Game.map.findRoute;
+        const travels = [];
+        routingSq.travelToRoom = (c, roomName) => { travels.push(c.id + ">" + roomName); return OK; };
+        Game.map.findRoute = () => [{ exit: 1, room: "StageMid" }, { exit: 1, room: "SquadRoom" }];
+        Memory.rooms.StageMid = {};
+        const stageA = mkSquadCreep("stageA", 25, 25, { name: "StageMid" });
+        const stageB = mkSquadCreep("stageB", 25, 25, { name: "W1N1" });
+        Memory.squads.sq8 = {
+            mission: "combat", room: "SquadRoom", from: "W1N1",
+            target: { room: "SquadRoom" }, members: ["stageA", "stageB"], leader: "stageA",
+            shape: "block", state: "advancing",
+        };
+        Game.time++;
+        squadMod.advance(stageB, "sq8");
+        squadMod.advance(stageA, "sq8");
+        assert(Memory.squads.sq8.staging === "StageMid" && travels.join() === "stageB>StageMid",
+            "0178: members head for the staging room (last before the target) and the first one " +
+                "there waits instead of entering (got " + travels.join() + ")");
+        stageB.room = { name: "StageMid" };
+        stageB.pos = new RoomPosition(26, 25, "StageMid");
+        travels.length = 0;
+        Game.time++;
+        squadMod.advance(stageA, "sq8");
+        squadMod.advance(stageB, "sq8");
+        assert(Memory.squads.sq8.staged === true && Memory.squads.sq8.crossing &&
+            Memory.squads.sq8.crossing.from === "StageMid" && travels.length === 0,
+            "0178: once every member is in the staging room, a shared crossing owns entry to the target");
+        routingSq.travelToRoom = realTravelSq;
+        Game.map.findRoute = realFindRouteSq;
+        delete Memory.rooms.StageMid;
+        delete REG.stageA;
+        delete REG.stageB;
+
+        // --- ROADMAP 0179: recover a squad split across the doorway ------
+        const crossingSearch = PathFinder.search;
+        const crossingRoute = Game.map.findRoute;
+        const crossFrom = { ...squadRoom, name: "W30N30" };
+        const crossTo = { ...squadRoom, name: "W29N30" };
+        Game.rooms[crossFrom.name] = crossFrom;
+        Game.rooms[crossTo.name] = crossTo;
+        Game.map.findRoute = () => [{ exit: RIGHT, room: crossTo.name }];
+        PathFinder.search = () => ({ incomplete: false, path: [
+            new RoomPosition(49, 25, crossFrom.name),
+            ...[0, 1, 2, 3, 4, 5].map((x) => new RoomPosition(x, 25, crossTo.name)),
+        ] });
+        const crossLead = mkSquadCreep("crossLead", 48, 25, crossFrom);
+        const crossMedic = mkSquadCreep("crossMedic", 0, 23, crossTo);
+        const crossOrders = [];
+        crossMedic.moveTo = (t, o) => { crossOrders.push({ t, o }); return OK; };
+        Memory.squads.cross = {
+            mission: "combat", room: crossTo.name, from: "W1N1", target: { room: crossTo.name },
+            members: [crossLead.id, crossMedic.id], leader: crossLead.id,
+            shape: "column", state: "advancing", staged: true,
+        };
+        Game.time++;
+        squadMod.advance(crossMedic, "cross");
+        assert(crossOrders.length && crossOrders[0].t.roomName === crossTo.name,
+            "0179: a follower entering first never moves back to the previous room");
+        const occupiedEntry = Memory.squads.cross.crossing.entry;
+        crossMedic.pos = new RoomPosition(occupiedEntry.x, occupiedEntry.y, crossTo.name);
+        crossOrders.length = 0;
+        Game.time++;
+        squadMod.advance(crossMedic, "cross");
+        assert(crossOrders.length === 1 && crossOrders[0].t.roomName === crossTo.name &&
+            (crossOrders[0].t.x !== occupiedEntry.x || crossOrders[0].t.y !== occupiedEntry.y) && crossOrders[0].o.range === 0,
+            "0179: a follower arriving first vacates the leader parking tile without leaving the target");
+
+        // Exercise the whole phase in every direction, including leader-first
+        // arrival, border clearance, fatigue and per-tick decision ordering.
+        const directions = [
+            { dir: RIGHT, start: [47, 25], behind: [46, 25], exit: [49, 25], door: [0, 25], inside: [4, 25], path: [[48, 25], [49, 25]] },
+            { dir: LEFT, start: [2, 25], behind: [3, 25], exit: [0, 25], door: [49, 25], inside: [45, 25], path: [[1, 25], [0, 25]] },
+            { dir: TOP, start: [25, 2], behind: [25, 3], exit: [25, 0], door: [25, 49], inside: [25, 45], path: [[25, 1], [25, 0]] },
+            { dir: BOTTOM, start: [25, 47], behind: [25, 46], exit: [25, 49], door: [25, 0], inside: [25, 4], path: [[25, 48], [25, 49]] },
+        ];
+        for (const fixture of directions) {
+            let searches = 0;
+            PathFinder.search = (origin, goal, opts) => {
+                searches++;
+                assert(opts.maxRooms === 2 && opts.maxOps === 20000 &&
+                    opts.roomCallback("UnrelatedRoom") === false && opts.roomCallback(crossTo.name).get(10, 10) < 255,
+                    "0179: crossing search is bounded to the two rooms and uses their blocking matrices");
+                const inward = { x: Math.sign(fixture.inside[0] - fixture.door[0]), y: Math.sign(fixture.inside[1] - fixture.door[1]) };
+                return { incomplete: false, path: [
+                    ...fixture.path.map(([x, y]) => new RoomPosition(x, y, crossFrom.name)),
+                    ...[0, 1, 2, 3, 4, 5].map((n) => new RoomPosition(fixture.door[0] + n * inward.x, fixture.door[1] + n * inward.y, crossTo.name)),
+                ] };
+            };
+            Game.map.findRoute = () => [{ exit: fixture.dir, room: crossTo.name }];
+            crossLead.room = crossFrom;
+            crossMedic.room = crossFrom;
+            crossLead.pos = new RoomPosition(...fixture.start, crossFrom.name);
+            crossMedic.pos = new RoomPosition(...fixture.behind, crossFrom.name);
+            crossMedic.fatigue = 1;
+            const orders = [];
+            crossLead.moveTo = (t, o) => { orders.push({ id: crossLead.id, t, o }); return OK; };
+            crossMedic.moveTo = (t, o) => { orders.push({ id: crossMedic.id, t, o }); return OK; };
+            Memory.squads.cross = {
+                mission: "combat", room: crossTo.name, from: "W1N1", target: { room: crossTo.name },
+                members: [crossLead.id, crossMedic.id], leader: crossLead.id,
+                state: "advancing", staged: true,
+            };
+            Game.time++;
+            squadMod.advance(crossLead, "cross");
+            squadMod.advance(crossMedic, "cross");
+            assert(Memory.squads.cross.crossing.phase === "gather" && !orders.length && searches === 1,
+                "0179: gather waits for fatigue and shares one plan (dir=" + fixture.dir + ")");
+            crossMedic.fatigue = 0;
+            Game.time++;
+            squadMod.advance(crossLead, "cross");
+            squadMod.advance(crossMedic, "cross");
+            const doorCosts = orders[0].o.costCallback(crossFrom.name);
+            assert(orders.length === 2 && orders.every((o) => o.t.roomName === crossTo.name) &&
+                doorCosts.get(...fixture.exit) < 255 && doorCosts.get(0, 0) === 255,
+                "0179: gather releases through one shared doorway (dir=" + fixture.dir + ")");
+            const entry = Memory.squads.cross.crossing.entry;
+            crossLead.room = crossTo;
+            crossLead.pos = new RoomPosition(entry.x, entry.y, crossTo.name);
+            orders.length = 0;
+            Game.time++;
+            squadMod.advance(crossMedic, "cross");
+            squadMod.advance(crossLead, "cross");
+            assert(Memory.squads.cross.crossing && orders.length === 1 && orders[0].id === crossMedic.id &&
+                orders[0].t.roomName === crossTo.name,
+                "0179: leader first waits inside until every member has crossed (dir=" + fixture.dir + ")");
+            crossMedic.room = crossTo;
+            crossMedic.pos = new RoomPosition(...fixture.door, crossTo.name);
+            orders.length = 0;
+            Game.time++;
+            squadMod.advance(crossMedic, "cross");
+            assert(orders.length === 1 && orders[0].t.roomName === crossTo.name && Memory.squads.cross.crossing,
+                "0179: the last member must clear the border before formation resumes (dir=" + fixture.dir + ")");
+            crossMedic.pos = new RoomPosition(entry.x + (fixture.dir === LEFT ? 1 : fixture.dir === RIGHT ? -1 : 0),
+                entry.y + (fixture.dir === TOP ? 1 : fixture.dir === BOTTOM ? -1 : 0), crossTo.name);
+            Game.time++;
+            squadMod.advance(crossLead, "cross");
+            squadMod.advance(crossMedic, "cross");
+            assert(!Memory.squads.cross.crossing && Memory.squads.cross.crossingDoneTick === Game.time &&
+                Memory.squads.cross.dir === null && searches === 1,
+                "0179: all four directions finish inside before tactical formation resumes (dir=" + fixture.dir + ")");
+        }
+        // Hot adoption also works when the leader is already in the target.
+        const eastPath = () => ({ incomplete: false, path: [
+            new RoomPosition(49, 25, crossFrom.name),
+            ...[0, 1, 2, 3, 4, 5].map((x) => new RoomPosition(x, 25, crossTo.name)),
+        ] });
+        PathFinder.search = eastPath;
+        Game.map.findRoute = () => [{ exit: RIGHT, room: crossTo.name }];
+        crossLead.room = crossTo;
+        crossLead.pos = new RoomPosition(0, 25, crossTo.name);
+        crossMedic.room = crossFrom;
+        crossMedic.pos = new RoomPosition(48, 25, crossFrom.name);
+        Memory.squads.cross = {
+            mission: "combat", room: crossTo.name, from: "W1N1", target: { room: crossTo.name },
+            members: [crossLead.id, crossMedic.id], leader: crossLead.id, state: "advancing", staged: true,
+        };
+        crossOrders.length = 0;
+        crossLead.moveTo = (t, o) => { crossOrders.push({ t, o }); return OK; };
+        Game.time++;
+        squadMod.advance(crossLead, "cross");
+        assert(Memory.squads.cross.crossing.phase === "cross" && crossOrders[0].t.roomName === crossTo.name &&
+            crossOrders[0].t.x >= 4,
+            "0179: hot adoption with the leader first advances into the target instead of waiting on its border");
+
+        // Clear precisely the origin disproved by a complete path. Preserve
+        // another room's blacklist and members' unrelated exclusions.
+        Memory.rooms[crossFrom.name] = { routeDeadEndUntil: Game.time + 10000 };
+        Memory.rooms.CrossUnrelated = { routeDeadEndUntil: Game.time + 10000 };
+        crossLead.memory._routeAvoid = [crossFrom.name, "CrossUnrelated"];
+        crossMedic.memory._routeAvoid = [crossFrom.name];
+        crossLead.memory._routeRetreatTo = crossFrom.name;
+        crossLead.memory._move = { path: "bad" };
+        delete Memory.squads.cross.crossing;
+        Game.time++;
+        squadMod.advance(crossLead, "cross");
+        assert(!Memory.rooms[crossFrom.name].routeDeadEndUntil && Memory.rooms.CrossUnrelated.routeDeadEndUntil &&
+            crossLead.memory._routeAvoid.join() === "CrossUnrelated" && crossMedic.memory._routeAvoid.length === 0 &&
+            !crossLead.memory._routeRetreatTo && !crossLead.memory._move,
+            "0179: a validated passage clears only its contaminated origin route state");
+
+        // A blocked path must not repeat the full search for every member/tick,
+        // nor turn formation delay into a shared routing dead end.
+        crossLead.room = crossFrom;
+        crossLead.pos = new RoomPosition(48, 25, crossFrom.name);
+        crossMedic.room = crossFrom;
+        crossMedic.pos = new RoomPosition(47, 25, crossFrom.name);
+        let blockedSearches = 0;
+        PathFinder.search = () => { blockedSearches++; return { incomplete: true, path: [] }; };
+        Memory.squads.cross = {
+            mission: "combat", room: crossTo.name, from: "W1N1", target: { room: crossTo.name },
+            members: [crossLead.id, crossMedic.id], leader: crossLead.id, state: "advancing", staged: true,
+        };
+        for (let i = 0; i <= 50; i++) {
+            Game.time++;
+            squadMod.advance(crossLead, "cross");
+            squadMod.advance(crossMedic, "cross");
+        }
+        assert(Memory.squads.cross.state === "retreating" && Memory.squads.cross.target.room === "W1N1" &&
+            Memory.squads.cross.crossingFailure.reason === "noProgress" && blockedSearches === 5 &&
+            !Memory.rooms[crossFrom.name].routeDeadEndUntil && !Memory.rooms[crossTo.name]?.routeDeadEndUntil,
+            "0179: blocked crossing retries with a bound and never creates a global dead end");
+        assert(crossLead.memory._routeAvoid.join() === "CrossUnrelated",
+            "0179: crossing failure preserves unrelated avoid state without adding either passage room");
+
+        // No route from the room graph is bounded by the same stall guard.
+        Game.map.findRoute = () => ERR_NO_PATH;
+        delete Memory.squads.cross.crossing;
+        Memory.squads.cross.state = "advancing";
+        Memory.squads.cross.target = { room: crossTo.name };
+        Game.time++;
+        squadMod.advance(crossLead, "cross");
+        Game.time += 51;
+        squadMod.advance(crossLead, "cross");
+        assert(Memory.squads.cross.state === "retreating",
+            "0179: an absent room route cannot leave the squad waiting forever");
+
+        // One member arriving home is insufficient to dissolve a retreat.
+        Game.map.findRoute = () => [{ exit: RIGHT, room: crossTo.name }];
+        PathFinder.search = eastPath;
+        Memory.squads.cross = {
+            mission: "combat", room: crossFrom.name, from: crossTo.name, target: { room: crossTo.name },
+            members: [crossLead.id, crossMedic.id], leader: crossLead.id, state: "retreating", staged: true,
+        };
+        crossLead.room = crossTo;
+        crossLead.pos = new RoomPosition(4, 25, crossTo.name);
+        crossMedic.room = crossFrom;
+        crossMedic.pos = new RoomPosition(48, 25, crossFrom.name);
+        Game.time++;
+        squadMod.advance(crossLead, "cross");
+        assert(Memory.squads.cross && Memory.squads.cross.crossing,
+            "0179: retreat keeps the squad until every survivor is home");
+        crossMedic.room = crossTo;
+        crossMedic.pos = new RoomPosition(0, 25, crossTo.name);
+        Game.time++;
+        squadMod.advance(crossLead, "cross");
+        assert(Memory.squads.cross, "0179: retreat cannot disband with its last member on the home border");
+        crossMedic.pos = new RoomPosition(3, 25, crossTo.name);
+        Game.time++;
+        squadMod.advance(crossMedic, "cross");
+        assert(!Memory.squads.cross, "0179: retreat disbands once all survivors are inside home");
+
+        // A narrow corridor needs room for a full recipe, without applying
+        // 2x2 slots at the doorway or producing out-of-room coordinates.
+        const extraA = mkSquadCreep("crossExtraA", 46, 25, crossFrom);
+        const extraB = mkSquadCreep("crossExtraB", 45, 25, crossFrom);
+        crossLead.room = crossMedic.room = crossFrom;
+        crossLead.pos = new RoomPosition(48, 25, crossFrom.name);
+        crossMedic.pos = new RoomPosition(47, 25, crossFrom.name);
+        const narrowOrders = [];
+        for (const c of [crossLead, crossMedic, extraA, extraB]) {
+            c.moveTo = (t, o) => { narrowOrders.push({ t, o }); return OK; };
+        }
+        squadWalls = [mkWall(4, 24), mkWall(4, 26)];
+        Memory.squads.cross = {
+            mission: "combat", room: crossTo.name, from: "W1N1", target: { room: crossTo.name },
+            members: [crossLead.id, crossMedic.id, extraA.id, extraB.id], leader: crossLead.id, state: "advancing", staged: true,
+        };
+        Game.time++;
+        for (const c of [extraB, crossMedic, crossLead, extraA]) squadMod.advance(c, "cross");
+        assert(narrowOrders.length === 4 && narrowOrders.every(({ t }) =>
+            t.roomName === crossTo.name && t.x === 4 && t.y === 25) &&
+            narrowOrders[0].o.costCallback(crossTo.name).get(4, 24) === 255,
+            "0179: four members use the same narrow corridor without cross-room formation slots");
+        squadWalls = [];
+        delete REG.crossExtraA;
+        delete REG.crossExtraB;
+
+        // Recover a pre-existing squad entirely in the destination, with its
+        // last member still on the border and no crossing state to resume.
+        crossLead.room = crossMedic.room = crossTo;
+        crossLead.pos = new RoomPosition(4, 25, crossTo.name);
+        crossMedic.pos = new RoomPosition(0, 25, crossTo.name);
+        Memory.squads.cross.members = [crossLead.id, crossMedic.id];
+        delete Memory.squads.cross.crossing;
+        PathFinder.search = () => ({ incomplete: false, path: [1, 2, 3, 4, 5].map((x) => new RoomPosition(x, 25, crossTo.name)) });
+        narrowOrders.length = 0;
+        Game.time++;
+        squadMod.advance(crossMedic, "cross");
+        assert(Memory.squads.cross.crossing.from === crossTo.name && narrowOrders[0].t.x === 4,
+            "0179: hot adoption clears a remaining border member even when everyone already reached the target room");
+
+        // Progress prevents a stall but does not disable the total deadline.
+        Memory.squads.cross.crossing.started = Game.time - 301;
+        crossMedic.pos = new RoomPosition(1, 25, crossTo.name);
+        Game.time++;
+        squadMod.advance(crossLead, "cross");
+        assert(Memory.squads.cross.state === "retreating" && Memory.squads.cross.crossingFailure.reason === "timeout",
+            "0179: moving in circles cannot bypass the total crossing deadline");
+
+        delete Memory.rooms[crossFrom.name];
+        delete Memory.rooms.CrossUnrelated;
+        PathFinder.search = crossingSearch;
+        Game.map.findRoute = crossingRoute;
+        delete Game.rooms[crossFrom.name];
+        delete Game.rooms[crossTo.name];
+        delete REG.crossLead;
+        delete REG.crossMedic;
+        delete Memory.squads.cross;
+
+        // --- ROADMAP 0178: medic heal priority ----------------------------
+        const healLog = [];
+        const medic = mkSquadCreep("healMedic", 20, 20);
+        const pointMan = mkSquadCreep("healLead", 21, 20);
+        const backLine = mkSquadCreep("healBack", 23, 20);
+        medic.heal = (t) => { healLog.push("heal:" + t.id); return OK; };
+        medic.rangedHeal = (t) => { healLog.push("rangedHeal:" + t.id); return OK; };
+        Memory.squads.sq9 = {
+            mission: "combat", room: "SquadRoom", from: "W1N1", target: { room: "SquadRoom" },
+            members: ["healLead", "healMedic", "healBack"], leader: "healLead",
+            shape: "block", state: "advancing",
+        };
+        medic.hits = 95; pointMan.hits = 90; backLine.hits = 60;
+        Game.time++;
+        squadMod.heal(medic, "sq9");
+        assert(healLog.join() === "rangedHeal:healBack",
+            "0178: the medic heals the squad member that lost the most hits first, not itself (got " +
+                healLog.join() + ")");
+        medic.hits = 100; pointMan.hits = 100; backLine.hits = 100;
+        healLog.length = 0;
+        squadWalls = [Object.assign(new Structure(), {
+            id: "sqTower", structureType: STRUCTURE_TOWER, my: false, pos: new RoomPosition(40, 40, "SquadRoom"),
+            store: { energy: 500 }, isActive: () => true,
+        })];
+        Game.time++;
+        squadMod.heal(medic, "sq9");
+        assert(healLog.join() === "heal:healLead",
+            "0178: with nobody hurt but an active tower able to fire, the medic pre-heals the leader (got " +
+                healLog.join() + ")");
+        squadWalls = [];
+        healLog.length = 0;
+        Game.time++;
+        squadMod.heal(medic, "sq9");
+        assert(healLog.length === 0, "0178: nobody hurt and no threat - no heal spent");
+        for (const id of ["healMedic", "healLead", "healBack"]) delete REG[id];
+
         delete Memory.squads;
         delete Memory.rooms.SquadRoom;
         delete Memory.rooms.SafeExitRoom;
         delete Memory.rooms.DangerExitRoom;
         for (const id of ["a", "b", "lead", "f1", "f2", "f3", "leadHome"]) delete REG[id];
+    }
+
+    // --- ROADMAP 0180: weighted, complete routes through destructible walls
+    {
+        const breachMod = require(path.join(PROJECT, "src/utils/squadBreach"));
+        const sqMod = require(path.join(PROJECT, "src/utils/squad"));
+        const fireRole = require(path.join(PROJECT, "src/roles/defenderStriker"));
+        const workRole = require(path.join(PROJECT, "src/roles/squadDismantler"));
+        const roomName = "BreachRoom0180";
+        const open = new Set();
+        for (let x = 2; x <= 25; x++) open.add(x + ":10");
+        for (let x = 2; x <= 22; x++) open.add(x + ":14");
+        for (let y = 10; y <= 14; y++) for (const x of [2, 22]) open.add(x + ":" + y);
+        open.add("4:9"); // weak wall in a dead-end branch, not a way to the tower
+        let structures = [];
+        let finds = 0;
+        const bRoom = {
+            name: roomName,
+            getTerrain: () => ({ get: (x, y) => open.has(x + ":" + y) ? 0 : TERRAIN_MASK_WALL }),
+            find: (type) => {
+                if (type === FIND_HOSTILE_STRUCTURES) { finds++; return structures; }
+                return type === FIND_STRUCTURES ? structures : [];
+            },
+        };
+        function structure(id, type, x, y, hits) {
+            const s = { id, structureType: type, pos: new RoomPosition(x, y, roomName), hits, my: false,
+                store: type === STRUCTURE_TOWER ? { energy: 100 } : undefined };
+            REG[id] = s;
+            return s;
+        }
+        const weakDeadEnd = structure("bWeak", STRUCTURE_WALL, 4, 9, 1);
+        const directA = structure("bDirectA", STRUCTURE_WALL, 10, 10, 600);
+        const directB = structure("bDirectB", STRUCTURE_WALL, 15, 10, 600);
+        const breachWall = structure("bBreach", STRUCTURE_WALL, 12, 14, 900);
+        const tower = structure("bTower", STRUCTURE_TOWER, 25, 10, 3000);
+        structures = [weakDeadEnd, directA, directB, breachWall, tower];
+        const orders = [];
+        function attacker(id, role, x, y) {
+            const c = Object.assign(Object.create(Creep.prototype), {
+                id, memory: { role, squadId: "breach0180" }, room: bRoom,
+                pos: new RoomPosition(x, y, roomName), hits: 100, hitsMax: 100,
+                body: [{ type: role === "squadDismantler" ? WORK : RANGED_ATTACK, hits: 100 }],
+                move: noop, moveTo: noop, rangedAttack: (s) => { orders.push(id + ">" + s.id); return OK; },
+                dismantle: (s) => { orders.push(id + ">" + s.id); return OK; },
+            });
+            REG[id] = c;
+            return c;
+        }
+        const a = attacker("bLead", "defenderStriker", 2, 10);
+        const b = attacker("bSecond", "defenderStriker", 3, 10);
+        const sq = { mission: "combat", room: roomName, from: "W1N1", target: { room: roomName },
+            leader: a.id, members: [a.id, b.id], state: "advancing", shape: "block", staged: true };
+        Memory.squads = { breach0180: sq };
+        Game.rooms[roomName] = bRoom;
+        Game.time++;
+        const initial = breachMod.get(sq);
+        assert(initial && initial.target === breachWall && initial.objective === tower,
+            "0180: choose the cheapest complete breach route, not the weakest isolated wall");
+        assert(initial.path.some((p) => p.y === 14) && !initial.path.some((p) => p.x === 10 && p.y === 10),
+            "0180: total barrier damage beats per-tile saturation or greedy wall choice");
+        assert(initial.approach.getRangeTo(breachWall) <= 3 && initial.approach.x < 12 &&
+            open.has(initial.approach.x + ":" + initial.approach.y),
+            "0180: route stops at an accessible firing position before the first blocker");
+        const shared = breachMod.get(sq);
+        assert(shared.path === initial.path && finds === 1 && !sq.path && !sq.breach,
+            "0180: members share a heap-only plan and one hostile-structure scan per tick");
+        a.pos = new RoomPosition(9, 14, roomName);
+        b.pos = new RoomPosition(9, 13, roomName);
+        fireRole.run(a);
+        fireRole.run(b);
+        assert(orders.join() === "bLead>bBreach,bSecond>bBreach",
+            "0180: all ranged attackers focus the first blocker instead of an unreachable tower");
+
+        // The same blocker is used by WORK attackers; adding a capable member
+        // changes the damage key and replans using its shorter attack range.
+        directA.hits = directB.hits = 100000000;
+        const work = attacker("bWork", "squadDismantler", 11, 14);
+        sq.members.push(work.id);
+        orders.length = 0;
+        Game.time++;
+        workRole.run(work);
+        assert(orders.includes("bWork>bBreach"),
+            "0180: the dismantler attacks the shared blocker rather than the first structure in find order");
+
+        // Boosts and destroyed parts change the real offensive capability.
+        const oldBoosts = BOOSTS[RANGED_ATTACK];
+        BOOSTS[RANGED_ATTACK] = { testBreach: { rangedAttack: 4 } };
+        const power = breachMod.damage([
+            { memory: { role: "defenderStriker" }, body: [
+                { type: RANGED_ATTACK, hits: 100, boost: "testBreach" }, { type: RANGED_ATTACK, hits: 0 },
+            ] },
+            { memory: { role: "squadDismantler" }, body: [{ type: WORK, hits: 100 }] },
+        ]);
+        assert(power.dps === 90 && power.range === 1,
+            "0180: active boosted parts determine structural DPS");
+        BOOSTS[RANGED_ATTACK] = oldBoosts;
+
+        // Removing the selected barrier invalidates before the TTL expires.
+        structures = structures.filter((s) => s !== breachWall);
+        delete REG.bBreach;
+        Game.time++;
+        const after = breachMod.get(sq);
+        assert(after.target === tower && after.path !== initial.path,
+            "0180: destroyed blocker invalidates the plan immediately");
+        const cover = structure("bCover", STRUCTURE_RAMPART, 25, 10, 5000);
+        cover.isPublic = true;
+        structures.push(cover);
+        Game.time++;
+        assert(breachMod.get(sq).target === cover,
+            "0180: a rampart protecting the objective is attacked before the objective, including public ramparts");
+
+        // Closed corridor, then own/ally blockers: no partial or arbitrary plan.
+        structures = [tower, directA, directB, breachWall];
+        directA.my = true;
+        breachWall.my = true;
+        Game.time++;
+        const protectedPlan = breachMod.get(sq);
+        assert(!protectedPlan.target && protectedPlan.reason === "noRoute",
+            "0180: natural walls and own structures remain impassable");
+        const oldAllies = Memory.settings.allies;
+        Memory.settings.allies = ["BreachAlly"];
+        directA.my = false; breachWall.my = false;
+        directA.owner = breachWall.owner = { username: "BreachAlly" };
+        Game.time++;
+        assert(!breachMod.get(sq).target, "0180: allied barriers remain impassable and are never attack targets");
+        Memory.settings.allies = oldAllies;
+        directA.owner = breachWall.owner = undefined;
+        a.body = b.body = work.body = [];
+        Game.time++;
+        assert(breachMod.get(sq).reason === "noDamage" && !sqMod.attackTarget(a, "breach0180"),
+            "0180: no damage never produces an arbitrary breach target");
+
+        const numeric = new Float64Array(2500).fill(Infinity);
+        for (let x = 2; x <= 10; x++) numeric[10 * 50 + x] = 1;
+        numeric[10 * 50 + 5] = 1000000;
+        const exact = breachMod.search(numeric, { x: 2, y: 10 }, { x: 10, y: 10 }, 0, 2304);
+        assert(exact && exact.cost === 1000007 && !breachMod.search(numeric, { x: 2, y: 10 }, { x: 10, y: 10 }, 0, 1),
+            "0180: full numeric breach cost is preserved and exhausted search never returns a partial plan");
+        for (const id of ["bWeak", "bDirectA", "bDirectB", "bBreach", "bTower", "bCover", "bLead", "bSecond", "bWork"]) delete REG[id];
+        delete Game.rooms[roomName];
+        delete Memory.squads;
     }
 
     // --- Fase 4: raidSquad() + spawnPendingSquad() + registerPending() -
@@ -6324,39 +7112,64 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
         delete Memory.squads;
         Memory.rooms.E77N77 = { lastVisit: Game.time, hasInvaderCore: true }; // O2, PvE-eligible
 
-        global.raidSquad("E77N77", "combat");
+        const firstParallel = global.raidSquad("E77N77", "combat");
+        const secondParallel = global.raidSquad("E77N77", "combat");
+        assert(firstParallel && secondParallel && firstParallel !== secondParallel &&
+            Memory.pendingSquads && Memory.pendingSquads[firstParallel] && Memory.pendingSquads[secondParallel],
+            "0181: repeated commands for the same destination return distinct queued IDs");
+        delete Memory.pendingSquad;
+        delete Memory.pendingSquads;
+
+        const queuedId = global.raidSquad("E77N77", "combat");
+        const queued = Memory.pendingSquads[queuedId];
         assert(
-            Memory.pendingSquad && Memory.pendingSquad.room === "E77N77" &&
-                Memory.pendingSquad.from === "W1N1" &&
-                JSON.stringify(Memory.pendingSquad.need) ===
+            queued && queued.room === "E77N77" &&
+                queued.from === "W1N1" &&
+                JSON.stringify(queued.need) ===
                     JSON.stringify(["defenderStriker", "defenderStriker", "defenderMedic", "defenderMedic"]),
             "raidSquad('combat') queues the right 4-member recipe"
         );
 
-        global.raidSquad("E77N77", "combat");
-        assert(Memory.pendingSquad.spawned.length === 0,
-            "a second raidSquad() call while one is already assembling is refused");
+        const secondQueued = global.raidSquad("E77N77", "combat");
+        assert(secondQueued !== queuedId && Memory.pendingSquads[secondQueued] && queued.spawned.length === 0,
+            "0181: another assembly preserves the first group's independent recipe and registration");
 
         const data = raidingMod2.spawnPendingSquad(room);
-        assert(data && data.memory.role === "defenderStriker" && data.memory.pendingSquad === "E77N77",
+        assert(data && data.memory.role === "defenderStriker" && data.memory.pendingSquad === queuedId,
             "spawnPendingSquad() returns the next needed role's spawn data, tagged pendingSquad");
 
+        // ROADMAP 0178: two strikers already exist (still spawning, not yet
+        // registered) - the next request must be a medic, not a third striker
+        Game.creeps.sqSpawningA = { name: "sqSpawningA", room: { name: "W1N1" }, spawning: true, memory: { role: "defenderStriker", pendingSquad: queuedId } };
+        Game.creeps.sqSpawningB = { name: "sqSpawningB", room: { name: "W1N1" }, spawning: true, memory: { role: "defenderStriker", pendingSquad: queuedId } };
+        Game.time++; // census.all() caches by Game.time
+        const nextData = raidingMod2.spawnPendingSquad(room);
+        assert(nextData && nextData.memory.role === "defenderMedic",
+            "0178: spawnPendingSquad() counts members that already exist but haven't registered yet - " +
+                "no duplicate from a second idle spawn (got " + (nextData && nextData.memory.role) + ")");
+        delete Game.creeps.sqSpawningA;
+        delete Game.creeps.sqSpawningB;
+        Game.time++;
+
         const pend1 = Object.assign(Object.create(Creep.prototype), {
-            id: "pend1", memory: { role: "defenderStriker", pendingSquad: "E77N77" },
+            id: "pend1", memory: { role: "defenderStriker", pendingSquad: queuedId },
         });
         REG.pend1 = pend1;
         squadMod2.registerPending(pend1);
-        assert(Memory.pendingSquad.spawned.indexOf("pend1") !== -1,
-            "registerPending() records the creep in Memory.pendingSquad.spawned");
+        assert(queued.spawned.indexOf("pend1") !== -1,
+            "registerPending() records the creep in its own assembly's spawned list");
         assert(!Memory.squads || !Object.keys(Memory.squads).length,
             "not promoted yet - only 1 of the 4 needed members exists so far");
 
-        ["pend2", "pend3", "pend4"].forEach((id) => {
-            const c = Object.assign(Object.create(Creep.prototype), { id, memory: { pendingSquad: "E77N77" } });
+        ["pend2", "pend3", "pend4"].forEach((id, index) => {
+            const c = Object.assign(Object.create(Creep.prototype), { id, memory: {
+                pendingSquad: queuedId, role: index === 0 ? "defenderStriker" : "defenderMedic",
+            } });
             REG[id] = c;
             squadMod2.registerPending(c);
         });
-        assert(!Memory.pendingSquad, "Memory.pendingSquad is gone once all 4 needed members are registered");
+        assert(!Memory.pendingSquads[queuedId] && Memory.pendingSquads[secondQueued],
+            "0181: promoting one assembly removes only its own queue entry");
         const squadIds = Object.keys(Memory.squads || {});
         assert(squadIds.length === 1, "exactly one squad got promoted from the pending queue");
         const promoted = Memory.squads[squadIds[0]];
@@ -6371,8 +7184,106 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
             "every member is tagged with the new squadId and its pendingSquad marker is cleared"
         );
 
+        const whileActive = global.raidSquad("E77N77", "combat");
+        assert(whileActive && Memory.squads[queuedId] && Memory.pendingSquads[whileActive],
+            "0181: an active squad does not block another request");
+        const extraIds = [];
+        function assembleMember(entryId, id, role, spawning) {
+            const entry = Memory.pendingSquads[entryId];
+            const c = Object.assign(Object.create(Creep.prototype), {
+                id, name: id, room: { name: entry.from }, spawning: !!spawning,
+                memory: { role, pendingSquad: entryId },
+            });
+            Game.creeps[id] = REG[id] = c;
+            extraIds.push(id);
+            return c;
+        }
+        function recipe(entryId, prefix, spawning) {
+            return Memory.pendingSquads[entryId].need.map((role, i) =>
+                assembleMember(entryId, prefix + i, role, spawning));
+        }
+        const siegeId = global.raidSquad("E77N77", "siege");
+        const combatRecipe = recipe(secondQueued, "multiCombat", false);
+        const siegeRecipe = recipe(siegeId, "multiSiege", false);
+        Game.time++;
+        squadMod2.registerPending(combatRecipe[3]); // medic runs before striker
+        squadMod2.registerPending(siegeRecipe[3]);
+        assert(Memory.squads[secondQueued] && Memory.squads[siegeId] && secondQueued !== siegeId &&
+            Memory.squads[secondQueued].members.every((id) => id.startsWith("multiCombat")) &&
+            Memory.squads[siegeId].members.every((id) => id.startsWith("multiSiege")),
+            "0181: promotions in the same tick keep distinct identities and never borrow members sharing the destination");
+        assert(Memory.squads[secondQueued].leader === combatRecipe[0].id && Memory.squads[siegeId].leader === siegeRecipe[0].id,
+            "0181: recipe order keeps a striker or dismantler leading even when a medic registers first");
+
+        const otherMother = global.raidSquad("E77N77", "siege", "W2N2");
+        const later = global.raidSquad("E77N77", "combat");
+        assert(raidingMod2.spawnPendingSquad(room).memory.pendingSquad === whileActive &&
+            raidingMod2.spawnPendingSquad({ name: "W2N2", energyAvailable: 300 }).memory.pendingSquad === otherMother,
+            "0181: mothers select their own oldest incomplete recipe");
+        const waiting = recipe(whileActive, "multiWaiting", true);
+        Game.time++;
+        squadMod2.registerPending(waiting[0]);
+        assert(Memory.pendingSquads[whileActive] && !Memory.squads[whileActive] &&
+            raidingMod2.spawnPendingSquad(room).memory.pendingSquad === later,
+            "0181: a fully spawned recipe still finishing bodies waits for promotion while the next assembly can start");
+        delete Game.creeps[waiting[0].name];
+        delete REG[waiting[0].id];
+        Game.time++;
+        const replaceAssemblyMember = raidingMod2.spawnPendingSquad(room);
+        assert(replaceAssemblyMember.memory.pendingSquad === whileActive && replaceAssemblyMember.memory.role === "defenderStriker",
+            "0181: a death during assembly reopens that role in the same group without consuming another group's members");
+
+        Memory.squads.fullyDead = { members: ["noSuchMember"], leader: "noSuchMember" };
+        Memory.squads.lostLeader = { members: ["noSuchMember", "pend1"], leader: "noSuchMember" };
+        Memory.pendingSquads[whileActive].spawned = ["noSuchMember"];
+        squadMod2.maintain();
+        assert(!Memory.squads.fullyDead && Memory.squads.lostLeader.leader === "pend1" &&
+            Memory.pendingSquads[whileActive].spawned.length === 0,
+            "0181: maintenance removes a fully dead squad without a survivor running and prunes dead assembly IDs");
+
+        // Migrate a live singleton alongside new queued groups. Legacy room
+        // markers belong only to this entry, including a creep still spawning.
+        Memory.pendingSquad = {
+            mission: "combat", room: "E77N77", from: "W3N3",
+            need: ["defenderStriker", "defenderStriker", "defenderMedic", "defenderMedic"],
+            spawned: ["legacyMemberA", "noSuchLegacyMember"],
+        };
+        const temporaryLegacyId = whileActive;
+        const legacyA = assembleMember(temporaryLegacyId, "legacyMemberA", "defenderStriker", false);
+        const legacyB = assembleMember(temporaryLegacyId, "legacyMemberB", "defenderStriker", true);
+        legacyA.room = legacyB.room = { name: "W3N3" };
+        legacyA.memory.pendingSquad = legacyB.memory.pendingSquad = "E77N77";
+        Game.time++;
+        squadMod2.maintain();
+        const legacyId = legacyA.memory.pendingSquad;
+        const legacyEntry = Memory.pendingSquads[legacyId];
+        const legacyRequest = raidingMod2.spawnPendingSquad({ name: "W3N3", energyAvailable: 300 });
+        assert(!Memory.pendingSquad && legacyEntry && legacyB.memory.pendingSquad === legacyId &&
+            legacyEntry.spawned.join() === "legacyMemberA" && legacyRequest.memory.role === "defenderMedic" &&
+            legacyRequest.memory.pendingSquad === legacyId && Memory.pendingSquads[later],
+            "0181: legacy pending squad and spawning markers migrate without loss or mixing with new groups");
+        const legacyLate = assembleMember(legacyId, "legacyLate", "defenderMedic", false);
+        legacyLate.memory.pendingSquad = "E77N77"; // late old marker after migration
+        const legacyLast = assembleMember(legacyId, "legacyLast", "defenderMedic", false);
+        legacyB.spawning = false;
+        Game.time++;
+        squadMod2.registerPending(legacyLate);
+        assert(Memory.squads[legacyId] && legacyLate.memory.squadId === legacyId &&
+            legacyLast.memory.squadId === legacyId && Memory.pendingSquads[later],
+            "0181: a late legacy marker resolves only its own migrated assembly");
+
+        const assemblyPath = require.resolve(path.join(PROJECT, "src/utils/squadAssembly"));
+        delete require.cache[assemblyPath];
+        const reloadedAssembly = require(assemblyPath);
+        const afterReset = reloadedAssembly.create("combat", "E77N77", "W1N1", queued.need);
+        assert(afterReset !== later && Memory.pendingSquads[afterReset] && Memory.squads[legacyId],
+            "0181: assembly IDs remain distinct across a heap-module reset in the same tick");
+
+        for (const id of extraIds) { delete REG[id]; delete Game.creeps[id]; }
+
         for (const id of ["pend1", "pend2", "pend3", "pend4"]) delete REG[id];
         delete Memory.squads;
+        delete Memory.pendingSquads;
         delete Memory.rooms.E77N77;
     }
 
@@ -6386,16 +7297,18 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
         const d1 = Object.assign(Object.create(Creep.prototype), {
             id: "dismantler1", memory: {},
             room: { name: "SquadRoom2", find: (type, opts) => {
-                let list = type === FIND_HOSTILE_STRUCTURES ? [core] : [];
+                let list = type === FIND_HOSTILE_STRUCTURES || type === FIND_STRUCTURES ? [core] : [];
                 if (opts && typeof opts.filter === "function") list = list.filter(opts.filter);
                 return list;
-            } },
+            }, getTerrain: () => ({ get: () => 0 }) },
             pos: new RoomPosition(25, 25, "SquadRoom2"),
             moveTo: noop, move: noop,
             dismantle: (t) => { dismantled = t; return OK; },
         });
         core.pos = new RoomPosition(25, 25, "SquadRoom2"); // adjacent (same tile is fine for range check)
         REG.dismantler1 = d1;
+        REG.coreX = core;
+        d1.body = [{ type: WORK, hits: 100 }];
 
         // no squadId, no pendingSquad - nothing else this role is for
         let suicided = false;
@@ -6411,12 +7324,13 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
                 shape: "block", state: "advancing",
             },
         };
-        d1.memory = { squadId: "sqd1" };
+        d1.memory = { squadId: "sqd1", role: "squadDismantler" };
         Game.time++;
         dismantlerMod.run(d1);
         assert(dismantled === core, "squadDismantler dismantles the hostile structure once adjacent");
 
         delete REG.dismantler1;
+        delete REG.coreX;
         delete Memory.squads;
     }
 
@@ -6660,7 +7574,101 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
         bootstrap.run(bootstrapCreep);
         assert(bootstrapCreep._to === "spawn1",
             "bootstrap delivers to a critical spawn before link/container (0091)");
+
+        const originalRoomFind = room.find;
+        const bootstrapDrop = Object.assign(new RoomObject(), {
+            id: "bootstrap-salvage-drop", resourceType: RESOURCE_ENERGY, amount: 100,
+            pos: new RoomPosition(20, 20, "W1N1"),
+        });
+        room.find = (type, opts) => {
+            if (type === FIND_DROPPED_RESOURCES) return [bootstrapDrop];
+            if (type === FIND_STRUCTURES || type === FIND_TOMBSTONES || type === FIND_RUINS) return [];
+            return originalRoomFind(type, opts);
+        };
+        const bootstrapSalvagePos = new RoomPosition(20, 20, "W1N1");
+        bootstrapSalvagePos.findClosestByRange = () => null;
+        bootstrapSalvagePos.findClosestByPath = (piles) => piles[0] || null;
+        let bootstrapPicked = null;
+        let bootstrapHarvested = false;
+        const bootstrapSalvageCreep = Object.assign(Object.create(Creep.prototype), {
+            id: "bootstrap-salvage", room, pos: bootstrapSalvagePos,
+            body: [{ type: WORK }, { type: CARRY }, { type: MOVE }],
+            memory: { role: "bootstrap", source: source.id },
+            store: store(0, 100),
+            pickup: (target) => { bootstrapPicked = target; return OK; },
+            harvest: () => { bootstrapHarvested = true; return OK; },
+            withdraw: () => OK, moveTo: () => OK, drop: () => OK,
+        });
+        Game.time++;
+        bootstrap.run(bootstrapSalvageCreep);
+        assert(bootstrapPicked === bootstrapDrop && !bootstrapHarvested,
+            "bootstrap salvages dropped energy before harvesting a source");
+        room.find = originalRoomFind;
         spawn.store = savedSpawnStoreBootstrap;
+
+        // full with nothing to fill: spend the energy instead of dropping it
+        // (a dropped pile fed a drop -> salvage -> drop loop live in W9N49)
+        function mkFullBootstrap(level, sites, ownController) {
+            const actions = [];
+            const controller = { my: ownController !== false, level, pos: new RoomPosition(30, 30, "WBootSpend") };
+            const spendRoom = {
+                name: "WBootSpend", controller, energyAvailable: 300, energyCapacityAvailable: 300,
+                find: (type) => (type === FIND_MY_CONSTRUCTION_SITES ? sites : []),
+            };
+            const spendPos = new RoomPosition(20, 20, "WBootSpend");
+            spendPos.findClosestByRange = (what) => (Array.isArray(what) ? what[0] || null : null);
+            spendPos.findClosestByPath = () => null;
+            const c = Object.assign(Object.create(Creep.prototype), {
+                id: "bootstrap-spend", room: spendRoom, pos: spendPos,
+                body: [{ type: WORK }, { type: CARRY }, { type: MOVE }],
+                memory: { role: "bootstrap" },
+                store: store(50, 50),
+                upgradeController: () => { actions.push("upgrade"); return OK; },
+                build: () => { actions.push("build"); return OK; },
+                drop: () => { actions.push("drop"); return OK; },
+                transfer: () => { actions.push("transfer"); return OK; },
+                moveTo: () => OK, move: () => OK,
+            });
+            return { c, actions };
+        }
+        Memory.rooms.WBootSpend = {};
+        const spendSite = { id: "spendSite1", structureType: STRUCTURE_ROAD, pos: new RoomPosition(21, 20, "WBootSpend") };
+        let spend = mkFullBootstrap(1, [spendSite]);
+        Game.time++;
+        bootstrap.run(spend.c);
+        assert(spend.actions.join() === "upgrade",
+            "bootstrap with nothing to fill upgrades an RCL1 controller first (got " + spend.actions.join() + ")");
+        spend = mkFullBootstrap(2, [spendSite]);
+        Game.time++;
+        bootstrap.run(spend.c);
+        assert(spend.actions.join() === "build",
+            "bootstrap with nothing to fill builds the closest construction site past RCL1 (got " + spend.actions.join() + ")");
+        spend = mkFullBootstrap(2, []);
+        Game.time++;
+        bootstrap.run(spend.c);
+        assert(spend.actions.join() === "upgrade",
+            "bootstrap with nothing to fill and no site upgrades the controller (got " + spend.actions.join() + ")");
+        spend = mkFullBootstrap(2, [], false);
+        Game.time++;
+        bootstrap.run(spend.c);
+        assert(spend.actions.join() === "drop",
+            "bootstrap only drops its energy when there is nothing to fill, build or upgrade (got " + spend.actions.join() + ")");
+        spend = mkFullBootstrap(2, [spendSite]);
+        Game.time++;
+        bootstrap.run(spend.c);
+        spend.c.store = store(30, 50); // partly spent - no longer full
+        Game.time++;
+        bootstrap.run(spend.c);
+        assert(spend.actions.join() === "build,build" && spend.c.memory.spending === true,
+            "a spending bootstrap keeps building until empty instead of going back to refill (got " +
+                spend.actions.join() + ")");
+        spend.c.store = store(0, 50);
+        spend.c.harvest = () => OK;
+        Game.time++;
+        bootstrap.run(spend.c);
+        assert(!spend.c.memory.spending && spend.actions.join() === "build,build",
+            "an empty bootstrap drops the spending flag and goes back to collecting");
+        delete Memory.rooms.WBootSpend;
     }
 
     // --- ROADMAP 0091: optional mineral jobs are preemptible only before
@@ -6838,9 +7846,20 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
             my: false,
             isPublic: true,
         };
+        const extension = {
+            id: "struct-extension",
+            structureType: STRUCTURE_EXTENSION,
+            pos: { x: 13, y: 10 },
+            my: true,
+        };
+        const container = {
+            id: "struct-container",
+            structureType: STRUCTURE_CONTAINER,
+            pos: { x: 14, y: 10 },
+        };
         const visibleRoom = new Room(visibleRoomName);
         visibleRoom.find = (type) => (type === FIND_STRUCTURES
-            ? [blockingWall, privateRampart, publicRampart]
+            ? [blockingWall, privateRampart, publicRampart, extension, container]
             : []);
         Game.rooms[visibleRoomName] = visibleRoom;
 
@@ -6867,6 +7886,11 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
             "avoidCostCallback blocks a known private rampart in another player's room (AC3)");
         assert(outCm2.get(12, 10) !== 255,
             "avoidCostCallback keeps another player's public rampart walkable (AC3)");
+        assert(outCm2.get(13, 10) === 255,
+            "avoidCostCallback blocks an extension - the returned matrix replaces the engine's, " +
+                "so every non-walkable structure must be an obstacle in it");
+        assert(outCm2.get(14, 10) !== 255,
+            "avoidCostCallback keeps a container walkable");
 
         // AC1
         const realSearch2 = PathFinder.search;
@@ -8939,6 +9963,40 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
     Game.time++;
     assert(pioneeringMod.mothersFor("PNew").length === 0,
         "mothersFor() is empty when every candidate is beyond pioneer.maxDistance");
+
+    // ROADMAP 0174: reach is travel time (~100 ticks/hop loaded), not 30 hops
+    const hopsRoute = (table) => (from, to) => {
+        const n = table[from + ">" + to] !== undefined ? table[from + ">" + to] : 1;
+        return _.range(n).map(() => ({ exit: 1, room: to }));
+    };
+    Game.map.findRoute = hopsRoute({ "PMother>PNew": 11, "PMother2>PNew": 11 });
+    Game.time++;
+    assert(pioneeringMod.mothersFor("PNew").length === 0,
+        "0174: 11 hops (~1100 ticks loaded) leaves less than minWorkTicks of a 1500-tick life - no rescue");
+    Game.map.findRoute = hopsRoute({ "PMother>PNew": 9, "PMother2>PNew": 9 });
+    Game.time++;
+    assert(pioneeringMod.mothersFor("PNew").length === 2,
+        "0174: 9 hops (~900 ticks) is still within reach");
+    Game.map.findRoute = hopsRoute({ "PMother>PNew": 2, "PMother2>PNew": 6 });
+    Game.time++;
+    assert(pioneeringMod.mothersFor("PNew").map((r) => r.name).join() === "PMother",
+        "0174: a mother more than motherSlackHops (2) farther than the nearest one doesn't send pioneers");
+    Game.map.findRoute = hopsRoute({ "PMother>PNew": 2, "PMother2>PNew": 4 });
+    Game.time++;
+    assert(pioneeringMod.mothersFor("PNew").length === 2,
+        "0174: mothers within motherSlackHops of the nearest one all still help");
+
+    // in transit: keep going to the child room when it's still reachable,
+    // otherwise divert to the nearest owned room with a spawn it can reach
+    Game.map.findRoute = hopsRoute({ "PTransit>PNew": 5, "PTransit>PMother": 1, "PTransit>PMother2": 3 });
+    Game.time++;
+    const transit = (ttl) => ({ ticksToLive: ttl, room: { name: "PTransit" } });
+    assert(pioneeringMod.divertTarget(transit(1000), "PNew") === null,
+        "0174: a pioneer that can still reach the child room with useful life keeps going (preferred)");
+    assert(pioneeringMod.divertTarget(transit(400), "PNew") === "PMother",
+        "0174: a pioneer that can't reach the child room in time diverts to the nearest reachable owned room");
+    assert(pioneeringMod.divertTarget(transit(100), "PNew") === null,
+        "0174: with nowhere reachable in time, it keeps heading to the child room");
     Game.map.findRoute = realFindRoute;
     Game.time++;
 
@@ -9088,6 +10146,9 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
                 if (type === FIND_STRUCTURES) list = opts.structures || [];
                 if (type === FIND_MY_CONSTRUCTION_SITES) list = opts.sites || [];
                 if (type === FIND_SOURCES) list = opts.sources || [];
+                if (type === FIND_DROPPED_RESOURCES) list = opts.dropped || [];
+                if (type === FIND_TOMBSTONES) list = opts.tombstones || [];
+                if (type === FIND_RUINS) list = opts.ruins || [];
                 if (findOpts && typeof findOpts.filter === "function") list = list.filter(findOpts.filter);
                 return list;
             },
@@ -9113,7 +10174,7 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
     }
 
     function mkPioneerCreep(opts) {
-        let moveToArg = null, withdrawn = null, built = null, suicided = false;
+        let moveToArg = null, withdrawn = null, picked = null, built = null, suicided = false;
         let harvested = null;
         const cap = opts.capacity !== undefined ? opts.capacity : 100;
         const energyNow = opts.energy || 0;
@@ -9132,13 +10193,14 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
             memory: { role: "pioneer", targetRoom: opts.targetRoom, home: opts.home },
             moveTo: (t, o) => { moveToArg = { t, o }; return OK; },
             withdraw: (t) => { withdrawn = t; return OK; },
+            pickup: (t) => { picked = t; return OK; },
             build: (t) => { built = t; return OK; },
             harvest: (t) => { harvested = t; return OK; },
             suicide: () => { suicided = true; return OK; },
         });
         return {
             creep,
-            movedTo: () => moveToArg, withdrew: () => withdrawn,
+            movedTo: () => moveToArg, withdrew: () => withdrawn, pickedUp: () => picked,
             built: () => built, retired: () => suicided,
             harvested: () => harvested,
         };
@@ -9199,6 +10261,20 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
     assert(pc.withdrew() && pc.withdrew().id === "nearpile1",
         "pioneer withdraws once adjacent to an energy pile in the home room");
 
+    const homeEnergyDrop = Object.assign(new RoomObject(), {
+        id: "homeEnergyDrop1", resourceType: RESOURCE_ENERGY, amount: 100,
+        pos: new RoomPosition(25, 25, homeRoomName),
+    });
+    Game.time++;
+    pc = mkPioneerCreep({
+        room: mkRoom(homeRoomName, { dropped: [homeEnergyDrop] }),
+        pos: new RoomPosition(25, 25, homeRoomName),
+        targetRoom: targetRoomName, home: homeRoomName, energy: 0,
+    });
+    pioneerMod.run(pc.creep);
+    assert(pc.pickedUp() === homeEnergyDrop && !pc.withdrew(),
+        "pioneer uses pickup for dropped energy instead of calling withdraw on a Resource");
+
     Game.time++;
     pc = mkPioneerCreep({
         room: mkRoom(homeRoomName), pos: new RoomPosition(25, 25, homeRoomName),
@@ -9220,6 +10296,35 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
     } finally { Game.cpu.bucket = pioneerTripBucket; }
 
     const targetNoSpawn = mkRoom(targetRoomName, {});
+    const targetEnergyDrop = Object.assign(new RoomObject(), {
+        id: "targetEnergyDrop1", resourceType: RESOURCE_ENERGY, amount: 100,
+        pos: new RoomPosition(25, 25, targetRoomName),
+    });
+    Game.time++;
+    pc = mkPioneerCreep({
+        room: mkRoom(targetRoomName, { dropped: [targetEnergyDrop] }),
+        pos: new RoomPosition(25, 25, targetRoomName),
+        targetRoom: targetRoomName, home: homeRoomName, energy: 0,
+    });
+    pioneerMod.run(pc.creep);
+    assert(pc.pickedUp() === targetEnergyDrop && !pc.harvested() &&
+        !(pc.movedTo() && pc.movedTo().t.roomName === homeRoomName),
+        "pioneer salvages safe dropped energy in the target room before harvest or returning home");
+
+    const oldOwnerEnergyStore = Object.assign(new StructureContainer(), {
+        id: "oldOwnerEnergyStore1", structureType: STRUCTURE_CONTAINER, my: false,
+        pos: new RoomPosition(25, 25, targetRoomName), store: store(100, 2000),
+    });
+    Game.time++;
+    pc = mkPioneerCreep({
+        room: mkRoom(targetRoomName, { structures: [oldOwnerEnergyStore] }),
+        pos: new RoomPosition(25, 25, targetRoomName),
+        targetRoom: targetRoomName, home: homeRoomName, energy: 0,
+    });
+    pioneerMod.run(pc.creep);
+    assert(pc.withdrew() === oldOwnerEnergyStore && !pc.harvested(),
+        "pioneer withdraws energy left in a structure in the target room before harvest");
+
     Game.time++;
     pc = mkPioneerCreep({
         room: targetNoSpawn, pos: new RoomPosition(25, 25, targetRoomName),
@@ -9503,6 +10608,28 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
         assert(!ran.terminalOps && !ran.craftPlanner && !ran.marketFlip && !ran.swingTrade &&
             !critical.spawn && !critical.defense && !critical.creep && critical.terminalOps && critical.craftPlanner,
             "0162: critical band runs only tier 0 (skipped " + Object.keys(critical).join() + ")");
+        // cpu.throttle (ARK-235): below the full band a throttled role runs one tick in two
+        {
+            const rolesMod = require(path.join(PROJECT, "src/roles"));
+            const realRun = rolesMod.builder.run, realHauler = rolesMod.hauler.run;
+            const seen = { builder: 0, hauler: 0 };
+            rolesMod.builder.run = () => { seen.builder++; };
+            rolesMod.hauler.run = () => { seen.hauler++; };
+            const savedCreeps = Game.creeps;
+            // the loop drops Memory.creeps of creeps missing from Game.creeps - keep the fixture's
+            const savedCreepMem = Object.assign({}, Memory.creeps);
+            const mk = (n, role) => ({ name: n, memory: { role }, pos: { x: 1, y: 1, roomName: "W1N1" }, room: { name: "W1N1" }, fatigue: 0 });
+            Game.creeps = { TB1: mk("TB1", "builder"), TB2: mk("TB2", "builder"), TH1: mk("TH1", "hauler") };
+            loopAt(500); loopAt(500);
+            const critSeen = Object.assign({}, seen);
+            seen.builder = 0; seen.hauler = 0;
+            loopAt(9900); loopAt(9900);
+            Game.creeps = savedCreeps;
+            Object.assign(Memory.creeps, savedCreepMem);
+            rolesMod.builder.run = realRun; rolesMod.hauler.run = realHauler;
+            assert(critSeen.builder === 2 && critSeen.hauler === 2 && seen.builder === 4 && seen.hauler === 2,
+                "cpu.throttle: builders run one tick in two below the full band, haulers every tick (" + JSON.stringify(critSeen) + " / " + JSON.stringify(seen) + ")");
+        }
         const low = loopAt(1500);
         assert(ran.terminalOps && !ran.marketFlip && !ran.swingTrade && !ran.craftPlanner,
             "0162: default tiers keep the legacy shed behaviour (ran " + Object.keys(ran).join() + ")");
@@ -9531,6 +10658,28 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
             "0162: full band enables tier 3 and boost");
         Game.cpu.bucket = 5000; Game.time++;
         assert(!tier.runs(3) && tier.scaled("observer.exploreInterval", 10) === 10, "0162: no boost outside the full band");
+
+        // critical/low bands: cpu.shed slows the configured intervals down (2026-10-22)
+        const cfgShed = require(path.join(PROJECT, "src/utils/config"));
+        const baseOf = (k, f) => cfgShed.get(k, f);
+        tier.reset();
+        Game.cpu.bucket = 500; Game.time++;
+        const shedCritical = tier.band() === "critical" && tier.scaled("needs.cacheTicks", 10) === 3 * baseOf("needs.cacheTicks", 10) &&
+            tier.scaled("hauler.idleRecheckTicks", 5) === 2 * baseOf("hauler.idleRecheckTicks", 5) &&
+            tier.scaled("builder.idleSpendRecheckTicks", 10) === 3 * baseOf("builder.idleSpendRecheckTicks", 10) &&
+            tier.scaled("craft.scanInterval", 300) === 2 * baseOf("craft.scanInterval", 300) &&
+            tier.scaled("observer.exploreInterval", 10) === 3 * baseOf("observer.exploreInterval", 10);
+        tier.reset();
+        Game.cpu.bucket = 2000; Game.time++;
+        const shedLow = tier.band() === "low" && tier.scaled("needs.cacheTicks", 10) === 3 * baseOf("needs.cacheTicks", 10);
+        const savedShedSettings = Memory.settings;
+        Memory.settings = Object.assign({}, savedShedSettings, { needs: { cacheTicks: 10 }, cpu: { shed: { "needs.cacheTicks": { factor: 2, kind: "budget" } } } });
+        const shedBudget = tier.scaled("needs.cacheTicks", 10) === 5;
+        Memory.settings = savedShedSettings;
+        assert(shedCritical && shedLow && shedBudget, "cpu.shed: critical/low bands multiply intervals and divide budgets (" +
+            shedCritical + "/" + shedLow + "/" + shedBudget + ")");
+        tier.reset();
+        Game.cpu.bucket = 5000; Game.time++;
 
         // configurable: moving a label to another tier changes the gate on the next tick
         const savedTierSettings = Memory.settings;
@@ -10173,6 +11322,40 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
         spawnMod(idleRoom); // the verdict does not carry over to this tick: new roomCache, same needs object
         assert(firstChecks > 0 && spawnChecks === firstChecks,
             "spawning: a second tick with nothing wanted re-checks no role (" + firstChecks + " checks, then " + spawnChecks + ")");
+        const assemblyIdle = require(path.join(PROJECT, "src/utils/squadAssembly"));
+        const idleAssemblyId = assemblyIdle.create("combat", "E77N77", "Idle1",
+            ["defenderStriker", "defenderStriker", "defenderMedic", "defenderMedic"]);
+        let attemptedAssembly = null;
+        const savedIdleSpawnCreep = idleSpawn.spawnCreep;
+        idleSpawn.spawnCreep = (body, name, opts) => {
+            if (!opts.dryRun) attemptedAssembly = opts.memory.pendingSquad;
+            return OK;
+        };
+        Game.time++;
+        spawnMod(idleRoom);
+        assert(attemptedAssembly === idleAssemblyId,
+            "0181: queued assembly bypasses a cached idle spawn verdict");
+        idleSpawn.spawnCreep = savedIdleSpawnCreep;
+        delete Memory.pendingSquads[idleAssemblyId];
+        Game.time++;
+        spawnMod(idleRoom); // prime the idle verdict again before a console request
+        Memory.lootTargets = Memory.lootTargets || {};
+        const idleLootId = "loot-idle-regression";
+        Memory.lootTargets[idleLootId] = { id: idleLootId, room: "E77N78", from: "Idle1" };
+        const stubLooterSpawn = logicIdle.looter.spawn;
+        logicIdle.looter.spawn = savedSpawnFns.looter;
+        let attemptedLoot = null;
+        idleSpawn.spawnCreep = (body, name, opts) => {
+            if (!opts.dryRun) attemptedLoot = opts.memory.lootId;
+            return OK;
+        };
+        Game.time++;
+        spawnMod(idleRoom);
+        assert(attemptedLoot === idleLootId,
+            "0183: a new loot mission bypasses a cached idle spawn verdict");
+        logicIdle.looter.spawn = stubLooterSpawn;
+        idleSpawn.spawnCreep = savedIdleSpawnCreep;
+        delete Memory.lootTargets[idleLootId];
         needsIdle.invalidate("Idle1"); // console override: needs recomputed -> new object
         Game.time++;
         spawnMod(idleRoom);
@@ -10598,6 +11781,49 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
     assert(squadMod2.missionComplete({ mission: "siege", room: "CombatRoom" }) === true,
         "missionComplete('siege') only cares about hostile structures, not creeps");
 
+    // --- ROADMAP 0175: offensive structure priority ------------------------
+    {
+        const combatMod = require(path.join(PROJECT, "src/utils/combat"));
+        const at = (x) => new RoomPosition(x, 10, "PrioStructRoom");
+        const mkStruct = (id, type, x, energy) => ({
+            id, structureType: type, pos: at(x),
+            store: energy === undefined ? undefined : { [RESOURCE_ENERGY]: energy },
+        });
+        const ext = mkStruct("pExt", STRUCTURE_EXTENSION, 11, 50);
+        const storage = mkStruct("pStorage", STRUCTURE_STORAGE, 12, 100000);
+        const spawnS = mkStruct("pSpawn", STRUCTURE_SPAWN, 30, 300);
+        const liveTower = mkStruct("pTowerLive", STRUCTURE_TOWER, 40, 500);
+        const emptyTower = mkStruct("pTowerEmpty", STRUCTURE_TOWER, 13, 0);
+        let structs = [ext, storage, emptyTower, spawnS, liveTower];
+        const prioRoom = { name: "PrioStructRoom", find: (type) => (type === FIND_HOSTILE_STRUCTURES ? structs : []) };
+        const from = at(10);
+        assert(combatMod.structureTarget(prioRoom, from) === liveTower,
+            "0175: a tower with energy is the first structure target, even farther than spawn/extension/storage");
+        structs = [ext, storage, emptyTower, spawnS];
+        Game.time++;
+        assert(combatMod.structureTarget(prioRoom, from) === spawnS,
+            "0175: with no tower able to fire, the spawn comes next (ahead of an empty tower)");
+        structs = [ext, storage, emptyTower];
+        Game.time++;
+        assert(combatMod.structureTarget(prioRoom, from) === emptyTower,
+            "0175: an empty tower is still a target after spawns");
+        structs = [ext, storage];
+        Game.time++;
+        assert(combatMod.structureTarget(prioRoom, from) === null,
+            "0175: extensions and storage are never structure targets");
+
+        Memory.rooms.PrioStructRoom = { enemies: 0, enemyStructures: 2 };
+        Game.rooms.PrioStructRoom = prioRoom;
+        assert(squadMod2.missionComplete({ mission: "combat", room: "PrioStructRoom" }) === true,
+            "0175: with vision, a combat squad is done once only extensions/storage are left");
+        structs = [ext, spawnS];
+        Game.time++;
+        assert(squadMod2.missionComplete({ mission: "combat", room: "PrioStructRoom" }) === false,
+            "0175: a combat squad keeps going while a spawn still stands");
+        delete Game.rooms.PrioStructRoom;
+        delete Memory.rooms.PrioStructRoom;
+    }
+
     // --- advance(): heads home once nothing is left to fight ---------------
     const csLead = Object.assign(Object.create(Creep.prototype), {
         id: "csLead", pos: new RoomPosition(25, 25, "CombatRoom"),
@@ -10633,16 +11859,19 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
         room: {
             name: "CombatRoom",
             find: (type, opts) => {
-                let list = type === FIND_HOSTILE_STRUCTURES ? [hostileTower] : [];
+                let list = type === FIND_HOSTILE_STRUCTURES || type === FIND_STRUCTURES ? [hostileTower] : [];
                 if (opts && typeof opts.filter === "function") list = list.filter(opts.filter);
                 return list;
-            },
+            }, getTerrain: () => ({ get: () => 0 }),
         },
         pos: new RoomPosition(25, 25, "CombatRoom"),
         moveTo: noop, move: noop,
         rangedAttack: (t) => { strikerAttacked = t; return OK; },
     });
     REG.combatStriker1 = strikerCreep2;
+    REG.hostileTower1 = hostileTower;
+    strikerCreep2.body = [{ type: RANGED_ATTACK, hits: 100 }];
+    strikerCreep2.memory.role = "defenderStriker";
     Memory.squads = {
         csq2: {
             mission: "combat", room: "CombatRoom", from: "W1N1",
@@ -10670,6 +11899,7 @@ assert(!Memory.rooms.E1N46.routeDeadEndUntil,
 
     delete Memory.squads;
     delete REG.combatStriker1;
+    delete REG.hostileTower1;
     delete Memory.rooms.CombatRoom;
 }
 
@@ -11132,6 +12362,7 @@ function mineralStore(resources, freeCap) {
 // part of pickMineralJob's single-resource-type cascade any more.
 {
     const lootTomb = { id: "lootTomb1", store: mineralStore({ energy: 100, U: 80 }, 0) };
+    lootTomb.pos = new RoomPosition(10, 10, "LootJobRoom");
     const lootContainer = Object.assign(new StructureContainer(), {
         id: "lootContainer1", structureType: STRUCTURE_CONTAINER, pos: new RoomPosition(10, 10, "LootJobRoom"),
         store: mineralStore({ H: 50 }, 1950),
@@ -11158,9 +12389,9 @@ function mineralStore(resources, freeCap) {
     Game.time++;
     const lootJob = hauler.battlefieldLootJob(lootRoom);
     assert(
-        lootJob && !lootJob.resourceType &&
+        lootJob && !lootJob.dropped && lootJob.resourceType === RESOURCE_ENERGY &&
             lootJob.from === lootTomb && lootJob.to === lootStorage,
-        "battlefieldLootJob() targets a tombstone holding energy + a mineral compound, straight to storage, no single resourceType"
+        "battlefieldLootJob() targets a tombstone holding energy + a mineral compound as one multi-resource trip"
     );
 
     // pickMineralJob() itself no longer knows about tombstone/ruin loot at
@@ -11240,6 +12471,114 @@ function mineralStore(resources, freeCap) {
         noLootJob === null,
         "battlefieldLootJob() returns null once no tombstone/ruin loot remains"
     );
+
+    const salvageDrop = Object.assign(new RoomObject(), {
+        id: "salvageDrop1", resourceType: "Z", amount: 90,
+        pos: new RoomPosition(12, 10, "SalvageJobRoom"),
+    });
+    const salvageStore = Object.assign(new StructureContainer(), {
+        id: "salvageStore1", structureType: STRUCTURE_CONTAINER, my: false,
+        pos: new RoomPosition(20, 20, "SalvageJobRoom"),
+        store: mineralStore({ X: 120 }, 1880),
+    });
+    const protectedStore = Object.assign(new StructureContainer(), {
+        id: "protectedStore1", structureType: STRUCTURE_CONTAINER, my: false,
+        pos: new RoomPosition(30, 30, "SalvageJobRoom"),
+        store: mineralStore({ Y: 150 }, 1850),
+    });
+    const hostileRampart = Object.assign(new Structure(), {
+        id: "hostileRampart1", structureType: STRUCTURE_RAMPART, my: false,
+        pos: new RoomPosition(30, 30, "SalvageJobRoom"),
+    });
+    const salvageRoom = {
+        name: "SalvageJobRoom", storage: lootStorage, terminal: null,
+        find: (type) => {
+            if (type === FIND_STRUCTURES) return [salvageStore, protectedStore, hostileRampart];
+            if (type === FIND_DROPPED_RESOURCES) return [salvageDrop];
+            return [];
+        },
+    };
+    Game.time++;
+    const droppedJob = hauler.battlefieldLootJob(salvageRoom);
+    assert(droppedJob && droppedJob.dropped && droppedJob.from === salvageDrop &&
+        droppedJob.resourceType === "Z",
+        "battlefieldLootJob() recovers non-energy dropped resources");
+
+    // floor first: a decaying drop outranks a tombstone listed before it
+    const salvageTomb = Object.assign(new RoomObject(), {
+        id: "salvageTomb1", deathTime: Game.time - 5,
+        pos: new RoomPosition(11, 10, "SalvageJobRoom"),
+        store: mineralStore({ X: 200 }, 0),
+    });
+    const findBeforeTomb = salvageRoom.find;
+    salvageRoom.find = (type) => (type === FIND_TOMBSTONES ? [salvageTomb] : findBeforeTomb(type));
+    Game.time++;
+    const floorFirstJob = hauler.battlefieldLootJob(salvageRoom);
+    assert(floorFirstJob && floorFirstJob.from === salvageDrop,
+        "battlefieldLootJob() takes dropped salvage before a tombstone (drops decay every tick)");
+    salvageRoom.find = findBeforeTomb;
+    Game.time++;
+
+    const salvageUtil = require(path.join(PROJECT, "src/utils/salvage"));
+    const decayStore = { id: "decayStore", store: {} };
+    const decayRuin = { id: "decayRuin", destroyTime: 1, store: {} };
+    const decayDrop = { id: "decayDrop", resourceType: RESOURCE_ENERGY, amount: 60 };
+    const searched = [];
+    const decayCreep = { pos: { findClosestByPath: (list) => { searched.push(list.map((o) => o.id)); return list[0] || null; } } };
+    assert(salvageUtil.closestDecayFirst(decayCreep, [decayStore, decayRuin, decayDrop]) === decayDrop &&
+        searched.length === 1 && searched[0][0] === "decayDrop",
+        "closestDecayFirst() picks a dropped pile before a ruin or a store, whatever the distance");
+    assert(salvageUtil.closestDecayFirst(decayCreep, [decayStore, decayRuin]) === decayRuin,
+        "closestDecayFirst() takes a ruin/tombstone before a structure store");
+    const unreachableDrop = { pos: { findClosestByPath: (list) => list.find((o) => o.id !== "decayDrop") || null } };
+    assert(salvageUtil.closestDecayFirst(unreachableDrop, [decayStore, decayDrop]) === decayStore,
+        "closestDecayFirst() falls through to the next tier when no dropped pile is reachable");
+
+    salvageDrop.amount = 90;
+    REG[salvageDrop.id] = salvageDrop;
+    REG[lootStorage.id] = lootStorage;
+    const dropHauler = Object.assign(new Creep(), {
+        pos: new RoomPosition(12, 10, "SalvageJobRoom"),
+        room: salvageRoom,
+        memory: { lootJob: { fromId: salvageDrop.id, toId: lootStorage.id, dropped: true } },
+        store: capacityStore({}, 300),
+    });
+    dropHauler.pos.inRangeTo = () => true;
+    let pickedSalvage = null;
+    dropHauler.pickup = (target) => {
+        pickedSalvage = target;
+        dropHauler.store.Z = target.amount;
+        target.amount = 0;
+        return OK;
+    };
+    dropHauler.transfer = (target, resourceType) => {
+        target.store[resourceType] = (target.store[resourceType] || 0) + dropHauler.store[resourceType];
+        dropHauler.store[resourceType] = 0;
+        return OK;
+    };
+    hauler.runLootJob(dropHauler);
+    assert(pickedSalvage === salvageDrop && dropHauler.store.Z === 90,
+        "runLootJob() uses pickup for a dropped non-energy resource");
+    hauler.runLootJob(dropHauler);
+    assert(lootStorage.store.Z === 90 && dropHauler.store.getUsedCapacity() === 0,
+        "runLootJob() delivers dropped salvage to the approved stock destination");
+
+    salvageRoom.find = (type) => {
+        if (type === FIND_STRUCTURES) return [salvageStore, protectedStore, hostileRampart];
+        return [];
+    };
+    Game.time++;
+    const oldOwnerStoreJob = hauler.battlefieldLootJob(salvageRoom);
+    assert(oldOwnerStoreJob && oldOwnerStoreJob.from === salvageStore &&
+        oldOwnerStoreJob.resourceType === "X",
+        "battlefieldLootJob() withdraws non-energy resources from an accessible old-owner store");
+
+    salvageRoom.find = (type) =>
+        type === FIND_STRUCTURES ? [protectedStore, hostileRampart] : [];
+    Game.time++;
+    const protectedJob = hauler.battlefieldLootJob(salvageRoom);
+    assert(protectedJob === null,
+        "battlefieldLootJob() ignores an old-owner store behind a hostile rampart");
 }
 
 // --- hauler.spawnsAndExtensionsFull() gates the mineral-job cascade ------
@@ -12095,9 +13434,487 @@ function mineralStore(resources, freeCap) {
         "once every other role's minimum is satisfied, the pioneer is free to spawn (got: " +
             caseB.calls.join(", ") + ")");
 
+    // Case C (ROADMAP 0173): a pending defendRoom() is not luxury - the
+    // raider spawns even while the upgrader still wants one.
+    stubAllRolesFalse();
+    roles.upgrader.spawn = () => true;
+    roles.upgrader.spawnData = () => ({ name: "PrioUp2", body: [WORK], memory: { role: "upgrader" } });
+    const savedDefendPending = roles.raider.defendPending;
+    roles.raider.defendPending = () => true;
+    roles.raider.spawn = () => true;
+    roles.raider.spawnData = () => ({ name: "PrioDef1", body: [RANGED_ATTACK, MOVE], memory: { role: "raider", mission: "defend" } });
+    const caseC = mkPrioRoom("PrioRoomC");
+    spawnCreeps(caseC.room);
+    roles.raider.defendPending = savedDefendPending;
+    assert(caseC.calls[0] === "raider",
+        "0173: a pending defendRoom() raider spawns ahead of ordinary roles like the upgrader (got: " +
+            caseC.calls.join(", ") + ")");
+
     restoreRoleFns();
     delete Memory.rooms.PrioRoomA;
     delete Memory.rooms.PrioRoomB;
+    delete Memory.rooms.PrioRoomC;
+}
+
+// --- ROADMAP 0177: lootRoom() / looter role ------------------------------
+{
+    const looting = require(path.join(PROJECT, "src/rooms/looting"));
+    const looterMod = require(path.join(PROJECT, "src/roles/looter"));
+    const routingMod = require(path.join(PROJECT, "src/utils/routing"));
+    const quiet = (fn) => {
+        const log = console.log;
+        console.log = () => {};
+        try { return fn(); } finally { console.log = log; }
+    };
+    const RN = "LootTarget";
+    const currentLoot = () => looting.findMission(RN, "LootMother");
+    const pos = (x) => new RoomPosition(x, 20, RN);
+    const enemyStorage = { id: "lStorage", structureType: STRUCTURE_STORAGE, owner: { username: "Rival1" }, my: false, pos: pos(30), store: { energy: 5000, Z: 200 } };
+    const myContainer = { id: "lMine", structureType: STRUCTURE_CONTAINER, my: true, pos: pos(31), store: { energy: 100 } };
+    const nuker = { id: "lNuker", structureType: STRUCTURE_NUKER, owner: { username: "Rival1" }, my: false, pos: pos(32), store: { energy: 100 } };
+    const coveredTerminal = { id: "lTerm", structureType: STRUCTURE_TERMINAL, owner: { username: "Rival1" }, my: false, pos: pos(33), store: { H: 50 } };
+    const coverRampart = { id: "lRamp", structureType: STRUCTURE_RAMPART, owner: { username: "Rival1" }, my: false, pos: pos(33) };
+    const emptyExt = { id: "lExt", structureType: STRUCTURE_EXTENSION, owner: { username: "Rival1" }, my: false, pos: pos(34), store: { energy: 0 } };
+    const drop = { id: "lDrop", resourceType: "Z", amount: 40, pos: pos(21) };
+    const tower = { id: "lTower", structureType: STRUCTURE_TOWER, owner: { username: "Rival1" }, my: false, pos: pos(35), store: { energy: 0 } };
+    let lootStructs = [enemyStorage, myContainer, nuker, coveredTerminal, coverRampart, emptyExt, tower];
+    let lootDrops = [drop];
+    let lootHostiles = [];
+    const lootRoomObj = {
+        name: RN,
+        controller: { owner: { username: "Rival1" }, level: 5 },
+        find: (type, o) => {
+            let list = type === FIND_STRUCTURES ? lootStructs
+                : type === FIND_DROPPED_RESOURCES ? lootDrops : type === FIND_HOSTILE_CREEPS ? lootHostiles : [];
+            if (o && typeof o.filter === "function") list = list.filter(o.filter);
+            return list;
+        },
+    };
+    Game.time++;
+    const piles = looting.lootablePiles(lootRoomObj).map((p) => p.id).sort().join();
+    assert(piles === "lDrop,lStorage",
+        "0177: lootable = drops and foreign stores; never mine, a nuker, an empty store or a rampart-covered one (got " + piles + ")");
+
+    const initialLootStructs = lootStructs;
+    const initialLootDrops = lootDrops;
+    lootStructs = [1, 29, 30].map((energy) => ({
+        id: "lootSpawn" + energy, structureType: STRUCTURE_SPAWN,
+        owner: { username: "Rival1" }, pos: pos(25), store: { energy },
+    }));
+    lootDrops = [1, 29, 30].map((amount) => ({
+        id: "lootEnergy" + amount, resourceType: RESOURCE_ENERGY, amount, pos: pos(21),
+    }));
+    lootDrops.push({ id: "lootTinyMineral", resourceType: "Z", amount: 1, pos: pos(22) });
+    Game.time++;
+    assert(looting.lootablePiles(lootRoomObj).map((p) => p.id).sort().join() ===
+        "lootEnergy30,lootSpawn30,lootTinyMineral",
+        "0184: energy sources below 30 are ignored while exactly 30 and tiny minerals remain lootable");
+    lootStructs = initialLootStructs;
+    lootDrops = initialLootDrops;
+    Game.time++;
+
+    // lootRoom(): refusals and a valid request
+    Memory.rooms[RN] = { lastVisit: 1, owner: "Rival1" };
+    const lootMother = {
+        name: "LootMother", controller: { my: true },
+        storage: { id: "lmStorage", pos: new RoomPosition(25, 25, "LootMother"), store: { getFreeCapacity: () => 100000 } },
+        find: (type) => (type === FIND_MY_SPAWNS ? [{ id: "lmSpawn" }] : []),
+    };
+    Game.rooms.LootMother = lootMother;
+    Memory.rooms.LootUnseen = {};
+    quiet(() => global.lootRoom("LootUnseen", "LootMother"));
+    assert(!currentLoot(), "0177: lootRoom() refuses a room that hasn't been scouted");
+    const noStorage = Object.assign({}, lootMother, { name: "LootNoStore", storage: undefined, terminal: undefined });
+    Game.rooms.LootNoStore = noStorage;
+    quiet(() => global.lootRoom(RN, "LootNoStore"));
+    assert(!currentLoot(), "0177: lootRoom() refuses a mother with nowhere to deliver (no storage/terminal)");
+    quiet(() => global.lootRoom(RN, "LootMother"));
+    assert(currentLoot() && currentLoot().room === RN && currentLoot().from === "LootMother",
+        "0177: lootRoom() records the loot from a mother with spawn + storage");
+    Memory.rooms.LootSecond = { lastVisit: 1, owner: "Rival1" };
+    quiet(() => global.lootRoom("LootSecond", "LootMother"));
+    assert(Memory.lootTargets && Object.values(Memory.lootTargets).some((m) => m.room === RN) &&
+        Object.values(Memory.lootTargets).some((m) => m.room === "LootSecond"),
+        "0183: a second loot room preserves the first mission");
+    quiet(() => global.cancelLoot());
+    quiet(() => global.lootRoom(RN, "LootMother"));
+    assert(looting.lootersWanted(lootMother) === 3,
+        "0177: the mother wants loot.maxHaulers (3) looters while none is out");
+    {
+        const tier = require(path.join(PROJECT, "src/utils/cpuTier"));
+        const savedBucket = Game.cpu.bucket;
+        Game.cpu.bucket = 500; tier.reset();
+        const pausedWanted = looting.lootersWanted(lootMother);
+        Game.cpu.bucket = savedBucket; tier.reset();
+        assert(pausedWanted === 0 && looting.lootersWanted(lootMother) === 3,
+            "cpu: no new looters in the critical CPU band, the mission resumes above it (" + pausedWanted + ")");
+    }
+
+    // looter in the target room
+    const realTravel = routingMod.travelToRoom;
+    let travelledTo = null;
+    let travelOptions = null;
+    routingMod.travelToRoom = (c, roomName, opts) => { travelledTo = roomName; travelOptions = opts; return OK; };
+    const mkLooter = (roomObj, used, free) => {
+        const actions = [];
+        const lpos = new RoomPosition(20, 20, roomObj.name);
+        lpos.findClosestByPath = (list) => list[0] || null;
+        lpos.findClosestByRange = () => null;
+        lpos.isNearTo = () => true;
+        const store = Object.assign({}, used, {
+            getUsedCapacity: () => _.sum(Object.values(used)),
+            getFreeCapacity: () => free,
+        });
+        const c = Object.assign(Object.create(Creep.prototype), {
+            name: "looterTest", room: roomObj, pos: lpos, store, ticksToLive: 1400, hits: 100, hitsMax: 100,
+            memory: { role: "looter", targetRoom: RN, home: "LootMother", lootId: currentLoot() && currentLoot().id },
+            pickup: (t) => { actions.push("pickup:" + t.id); return OK; },
+            withdraw: (t, r) => { actions.push("withdraw:" + t.id + ":" + r); return OK; },
+            transfer: (t, r) => { actions.push("transfer:" + t.id + ":" + r); return OK; },
+            moveTo: () => OK, suicide: noop,
+        });
+        return { c, actions };
+    };
+    Game.time++;
+    let lt = mkLooter(lootRoomObj, {}, 500);
+    looterMod.run(lt.c);
+    assert(lt.actions.join() === "pickup:lDrop",
+        "0177: a looter takes the decaying drop before the storage (got " + lt.actions.join() + ")");
+
+    lootDrops = [];
+    Game.time++;
+    lt = mkLooter(lootRoomObj, {}, 500);
+    looterMod.run(lt.c);
+    assert(lt.actions.join() === "withdraw:lStorage:energy",
+        "0177: then it withdraws from the enemy storage (got " + lt.actions.join() + ")");
+
+    tower.store = { energy: 500 };
+    lootHostiles = [{ id: "lootArmed", pos: pos(22), owner: { username: "Rival1" }, body: [{ type: ATTACK, hits: 100 }] }];
+    Game.time++;
+    lt = mkLooter(lootRoomObj, { Z: 40 }, 460);
+    quiet(() => looterMod.run(lt.c));
+    assert(currentLoot() && !currentLoot().pausedUntil && lt.actions.length > 0,
+        "0182: towers and armed creeps do not stop a healthy looter");
+    assert(looting.lootersWanted(lootMother) === 3,
+        "0182: towers and armed creeps do not suppress replacement");
+    currentLoot().pausedUntil = Game.time + 300;
+    assert(looting.lootersWanted(lootMother) === 3 && !currentLoot().pausedUntil,
+        "0182: legacy pausedUntil no longer prevents replacement");
+    currentLoot().pausedUntil = Game.time + 300;
+    lt = mkLooter(lootRoomObj, {}, 500);
+    lt.c.hits = 51;
+    Game.time++;
+    looterMod.run(lt.c);
+    assert(currentLoot() && !currentLoot().pausedUntil && lt.actions.length === 1,
+        "0182: 51 percent continues collecting and ignores a legacy cooldown");
+
+    lt = mkLooter(lootRoomObj, { Z: 40 }, 460);
+    lt.c.hits = 50;
+    travelledTo = null;
+    quiet(() => looterMod.run(lt.c));
+    assert(!currentLoot() && travelledTo === "LootMother" && lt.c.memory.unloading && !lt.actions.length,
+        "0182: exactly 50 percent cancels the mission before collecting and returns with cargo");
+    assert(looting.lootersWanted(lootMother) === 0 && travelOptions.blockHostiles === false,
+        "0182: cancellation stops replacement and navigation has no preventive hostile-room filter");
+    const survivor = mkLooter(lootRoomObj, { Z: 20 }, 480);
+    travelledTo = null;
+    looterMod.run(survivor.c);
+    assert(travelledTo === "LootMother" && survivor.c.memory.unloading && !survivor.actions.length,
+        "0182: a healthy survivor also returns with cargo after the mission is cancelled");
+
+    Game.time++;
+    lt = mkLooter(lootMother, { Z: 40, energy: 10 }, 0);
+    lt.c.memory.unloading = true;
+    looterMod.run(lt.c);
+    assert(lt.actions.length === 1 && lt.actions[0].indexOf("transfer:lmStorage:") === 0,
+        "0177: at home a full looter unloads into the storage (got " + lt.actions.join() + ")");
+
+    quiet(() => global.lootRoom(RN, "LootMother"));
+    lt = mkLooter(lootRoomObj, {}, 500);
+    lt.c.hits = 49;
+    quiet(() => looterMod.run(lt.c));
+    assert(!currentLoot() && !lt.actions.length && travelledTo === "LootMother",
+        "0182: below 50 percent cancels even when the looter is empty");
+
+    quiet(() => global.lootRoom(RN, "LootMother"));
+    const injured = mkLooter(lootRoomObj, {}, 500).c;
+    injured.name = "healthBadLoot";
+    injured.hits = 50;
+    Game.creeps.healthBadLoot = injured;
+    Game.time++;
+    const healthyFirst = mkLooter(lootRoomObj, {}, 500);
+    quiet(() => looterMod.run(healthyFirst.c));
+    assert(!currentLoot() && !healthyFirst.actions.length,
+        "0182: a healthy role running first still cancels for another mission member at 50 percent");
+    quiet(() => global.lootRoom(RN, "LootMother"));
+    injured.memory.lootId = currentLoot().id;
+    assert(quiet(() => looting.lootersWanted(lootMother)) === 0 && !currentLoot(),
+        "0182: health is checked before generating replacement requests");
+    injured.memory.home = "OtherMother";
+    quiet(() => global.lootRoom(RN, "LootMother"));
+    injured.memory.lootId = currentLoot().id;
+    assert(looting.lootersWanted(lootMother) === 3 && currentLoot(),
+        "0182: an injured looter from another mother cannot cancel this mission");
+    injured.memory.home = "LootMother";
+    injured.memory.targetRoom = "OtherTarget";
+    assert(looting.lootersWanted(lootMother) === 3 && currentLoot(),
+        "0182: an injured looter from another target cannot cancel this mission");
+    delete Game.creeps.healthBadLoot;
+    Game.time++;
+    lt = mkLooter(lootMother, { Z: 40 }, 460);
+    lt.c.memory.unloading = true;
+    lt.c.hits = 50;
+    quiet(() => looterMod.run(lt.c));
+    assert(!currentLoot() && lt.actions[0].startsWith("transfer:lmStorage:"),
+        "0182: health is checked before unloading at home without discarding the cargo");
+
+    quiet(() => global.lootRoom(RN, "LootMother"));
+    lt = mkLooter(lootMother, {}, 500);
+    looterMod.run(lt.c);
+    assert(travelledTo === RN && travelOptions.blockHostiles === false,
+        "0182: a healthy looter heads to the target without blocking hostile rooms");
+
+    tower.store = { energy: 0 };
+    lootStructs = [myContainer, tower];
+    Game.time++;
+    lt = mkLooter(lootRoomObj, {}, 500);
+    quiet(() => looterMod.run(lt.c));
+    assert(!currentLoot(),
+        "0177: an emptied room finishes its loot mission");
+
+    // --- ROADMAP 0183: independent simultaneous missions ---------------
+    lootMother.energyAvailable = lootMother.energyCapacityAvailable = 300;
+    const otherMother = { ...lootMother, name: "LootOtherMother" };
+    Game.rooms.LootOtherMother = otherMother;
+    lootDrops = [drop];
+    lootStructs = [enemyStorage];
+    const secondDrop = { id: "secondLootDrop", resourceType: "Z", amount: 50,
+        pos: new RoomPosition(21, 20, "LootSecond") };
+    const secondRoom = { name: "LootSecond", find: (type) => type === FIND_DROPPED_RESOURCES ? [secondDrop] : [] };
+    const missionA = quiet(() => global.lootRoom(RN, "LootMother"));
+    const missionB = quiet(() => global.lootRoom("LootSecond", "LootMother"));
+    const repeated = quiet(() => global.lootRoom(RN, "LootMother"));
+    const otherId = quiet(() => global.lootRoom(RN, "LootOtherMother"));
+    assert(missionA === repeated && missionA !== missionB && otherId !== missionA &&
+        Object.keys(Memory.lootTargets).length === 3,
+        "0183: repeated target and mother is idempotent while a different mother stays independent");
+    assert(looting.lootersWanted(lootMother) === 6 && looting.lootersWanted(otherMother) === 3,
+        "0183: each mission has its own quota and each mother counts only its missions");
+    assert(looterMod.spawnData(lootMother).memory.lootId === missionA,
+        "0183: an empty population tie starts with the oldest mission");
+    const multiIds = [];
+    function missionLooter(name, missionId, roomObj, cargo = {}) {
+        const result = mkLooter(roomObj, cargo, 500);
+        const mission = Memory.lootTargets[missionId];
+        result.c.name = result.c.id = name;
+        result.c.memory = { role: "looter", home: mission.from, targetRoom: mission.room, lootId: missionId };
+        Game.creeps[name] = REG[name] = result.c;
+        multiIds.push(name);
+        return result;
+    }
+    const a1 = missionLooter("multiLootA1", missionA, lootRoomObj);
+    a1.c.spawning = true;
+    Game.time++;
+    assert(looterMod.spawnData(lootMother).memory.lootId === missionB && looting.lootersWanted(lootMother) === 5,
+        "0183: spawn selection balances destinations and counts looters still spawning");
+    const a2 = missionLooter("multiLootA2", missionA, lootRoomObj, { Z: 20 });
+    const a3 = missionLooter("multiLootA3", missionA, lootRoomObj);
+    const b1 = missionLooter("multiLootB1", missionB, secondRoom);
+    missionLooter("multiLootB2", missionB, secondRoom);
+    Game.time++;
+    assert(looting.lootersWanted(lootMother) === 1 && looterMod.spawnData(lootMother).memory.lootId === missionB,
+        "0183: a full mission does not consume another destination's replacement quota");
+    delete Game.creeps[a3.c.name]; delete REG[a3.c.id];
+    Game.time++;
+    assert(looting.lootersWanted(lootMother) === 2 && looterMod.spawnData(lootMother).memory.lootId === missionA,
+        "0183: a death reopens only the missing member's mission quota");
+
+    a2.c.hits = 50;
+    quiet(() => looting.lootersWanted(lootMother));
+    assert(!Memory.lootTargets[missionA] && Memory.lootTargets[missionB] && Memory.lootTargets[otherId],
+        "0183: damage in one room leaves other missions active");
+    looterMod.run(b1.c);
+    looterMod.run(a2.c);
+    assert(b1.actions.join() === "pickup:secondLootDrop" && a2.c.memory.unloading && travelledTo === "LootMother",
+        "0183: another destination keeps collecting while cancelled survivors return with cargo");
+
+    const restarted = quiet(() => global.lootRoom(RN, "LootMother"));
+    assert(restarted !== missionA && looting.lootersWanted(lootMother) === 4 && Memory.lootTargets[restarted] &&
+        looterMod.spawnData(lootMother).memory.lootId === restarted,
+        "0183: retired mission members cannot cancel or fill a new mission with the same target");
+    secondRoom.find = () => [];
+    Game.time++;
+    quiet(() => looterMod.run(b1.c));
+    assert(!Memory.lootTargets[missionB] && Memory.lootTargets[restarted] && Memory.lootTargets[otherId],
+        "0183: completion in one room leaves other missions active");
+    quiet(() => global.cancelLoot(RN, "LootMother"));
+    assert(!Memory.lootTargets[restarted] && Memory.lootTargets[otherId],
+        "0183: cancelLoot can restrict cancellation to a target and mother");
+    quiet(() => global.cancelLoot(RN));
+    assert(!Memory.lootTargets[otherId], "0183: cancelLoot with a room cancels every mother serving that room");
+    quiet(() => global.lootRoom(RN, "LootMother"));
+    quiet(() => global.lootRoom("LootSecond", "LootMother"));
+    assert(quiet(() => global.lootStatus()).length === 2 && quiet(() => global.lootStatus(RN)).length === 1,
+        "0183: lootStatus lists all missions and filters by destination");
+    quiet(() => global.cancelLoot());
+    assert(Object.keys(Memory.lootTargets).length === 0 && quiet(() => global.lootStatus()).length === 0,
+        "0183: cancelLoot without arguments cancels all missions");
+
+    // A singleton from the previous build keeps its looters and coexists
+    // with new requests; unrelated retired IDs never get adopted.
+    const beforeMigration = quiet(() => global.lootRoom("LootSecond", "LootMother"));
+    Memory.lootTarget = { room: RN, from: "LootMother", pausedUntil: Game.time + 300 };
+    const legacyLoot = mkLooter(lootRoomObj, {}, 500).c;
+    delete legacyLoot.memory.lootId;
+    legacyLoot.name = legacyLoot.id = "legacyLoot0183";
+    legacyLoot.spawning = true;
+    Game.creeps[legacyLoot.name] = REG[legacyLoot.id] = legacyLoot;
+    multiIds.push(legacyLoot.name);
+    Game.time++;
+    const migratedLoot = looting.findMission(RN, "LootMother");
+    assert(!Memory.lootTarget && migratedLoot && !migratedLoot.pausedUntil &&
+        looting.lootersWanted(lootMother) === 5 && legacyLoot.memory.lootId === migratedLoot.id &&
+        Memory.lootTargets[beforeMigration],
+        "0183: legacy singleton and existing looters migrate without restarting or replacing another mission");
+    const lateLegacy = mkLooter(lootRoomObj, {}, 500).c;
+    delete lateLegacy.memory.lootId;
+    assert(looting.forCreep(lateLegacy).id === migratedLoot.id && lateLegacy.memory.lootId === migratedLoot.id,
+        "0183: a late untagged legacy looter adopts only the migrated mission");
+    quiet(() => global.cancelLoot());
+    for (const name of multiIds) { delete Game.creeps[name]; delete REG[name]; }
+    delete Game.rooms.LootOtherMother;
+
+    // ROADMAP 0184: pickup minimum and nearest owned delivery, independent of mother.
+    const originalGameRooms = Game.rooms;
+    const originalLootRoute = Game.map.findRoute;
+    let depotStorageFree = 1000;
+    let depotContainerFree = 1000;
+    let motherStorageFree = 1000;
+    const depotName = "LootDepot";
+    const depotStorage = { id: "lootDepotStorage", structureType: STRUCTURE_STORAGE,
+        pos: new RoomPosition(30, 20, depotName), store: { getFreeCapacity: () => depotStorageFree } };
+    const depotContainer = { id: "lootDepotContainer", structureType: STRUCTURE_CONTAINER,
+        pos: new RoomPosition(21, 20, depotName), store: { getFreeCapacity: () => depotContainerFree } };
+    const depot = { name: depotName, controller: { my: true }, storage: depotStorage,
+        terminal: { id: "lootDepotTerminal", store: { getFreeCapacity: () => 10000 } },
+        find: (type) => type === FIND_STRUCTURES ? [depotContainer] :
+            type === FIND_MY_SPAWNS ? [{ id: "lootDepotSpawn" }] : [] };
+    lootMother.storage.store.getFreeCapacity = () => motherStorageFree;
+    Game.rooms = { LootMother: lootMother, LootDepot: depot,
+        LootEnemyDepot: Object.assign({}, depot, { name: "LootEnemyDepot", controller: { my: false } }),
+        LootNeutralDepot: Object.assign({}, depot, { name: "LootNeutralDepot", controller: undefined }) };
+    Game.map.findRoute = (from, to) => from === to ? [] :
+        Array.from({ length: to === "LootMother" ? 4 : 1 }, () => ({ room: to }));
+    Game.time++;
+    quiet(() => global.lootRoom(RN, "LootMother"));
+    lt = mkLooter(lootRoomObj, { energy: 500 }, 0);
+    travelledTo = null;
+    looterMod.run(lt.c);
+    assert(travelledTo === depotName && lt.c.memory.home === "LootMother" && lt.c.memory.unloading,
+        "0184: a full looter travels to the nearest owned delivery room without changing its mission mother");
+    lt = mkLooter(depot, { energy: 500 }, 0);
+    looterMod.run(lt.c);
+    assert(lt.actions.join() === "transfer:lootDepotStorage:energy",
+        "0184: storage wins over a closer container in the delivery room");
+    depotStorageFree = 499;
+    depotContainerFree = 500;
+    assert(looting.deliveryDestination(lt.c, RESOURCE_ENERGY).id === "lootDepotContainer",
+        "ARK-234: a container fitting the entire load wins over storage with only partial space");
+    depotContainerFree = 499;
+    lt = mkLooter(lootRoomObj, { energy: 500 }, 0);
+    travelledTo = null;
+    looterMod.run(lt.c);
+    assert(travelledTo === "LootMother",
+        "ARK-234: a room with only partially available stores is skipped for a room fitting the entire load");
+    depotStorageFree = 500;
+    assert(looting.deliveryDestination(lt.c, RESOURCE_ENERGY).id === "lootDepotStorage",
+        "ARK-234: exactly enough free capacity accepts the whole load");
+    depotStorageFree = 400;
+    depotContainerFree = 500;
+    lt = mkLooter(depot, { energy: 300, Z: 200 }, 0);
+    assert(looting.deliveryDestination(lt.c, RESOURCE_ENERGY).id === "lootDepotContainer",
+        "ARK-234: delivery capacity covers the total mixed cargo rather than just the first resource");
+    depotContainerFree = 499;
+    motherStorageFree = 499;
+    looterMod.run(lt.c);
+    assert(!lt.actions.length && lt.c.memory.unloading,
+        "ARK-234: cargo is preserved when no single destination can accept the complete load");
+    depotContainerFree = 1000;
+    motherStorageFree = 1000;
+    depotStorageFree = 0;
+    lt = mkLooter(lootRoomObj, { Z: 100 }, 0);
+    travelledTo = null;
+    looterMod.run(lt.c);
+    assert(travelledTo === depotName,
+        "0184: a nearby container wins over a distant storage when local storage is full");
+    lt = mkLooter(depot, { Z: 100 }, 0);
+    looterMod.run(lt.c);
+    assert(lt.actions.join() === "transfer:lootDepotContainer:Z",
+        "0184: containers receive minerals as well as energy and terminal is not a fallback");
+    depotContainerFree = 0;
+    assert(looting.deliveryDestination(lt.c, "Z").id === "lmStorage",
+        "0184: a full delivery room immediately reroutes to another owned storage");
+    motherStorageFree = 0;
+    travelledTo = null;
+    lt = mkLooter(depot, { Z: 100 }, 0);
+    looterMod.run(lt.c);
+    assert(!travelledTo && !lt.actions.length && lt.c.memory.unloading,
+        "0184: no capacity preserves cargo instead of choosing terminal, hostile or neutral rooms");
+    depotContainerFree = 1000;
+    depot.storage = undefined;
+    Game.time++;
+    assert(looting.deliveryDestination(lt.c, "Z").id === "lootDepotContainer" &&
+        !looting.refusalReason(RN, depotName),
+        "0184: a room without storage can receive loot and originate a mission using containers");
+    travelledTo = null;
+    lt = mkLooter(depot, {}, 500);
+    lt.c.memory.unloading = true;
+    looterMod.run(lt.c);
+    assert(travelledTo === RN && !lt.c.memory.unloading && currentLoot(),
+        "0184: after unloading outside its mother a healthy looter returns to the active target");
+    lt = mkLooter(lootRoomObj, { energy: 40 }, 460);
+    lt.c.ticksToLive = 125; // 1-hop depot = 100 incl margin, mother = 250
+    lootDrops = [{ id: "lootSmallEnergy", resourceType: RESOURCE_ENERGY, amount: 30, pos: pos(21) }];
+    Game.time++;
+    looterMod.run(lt.c);
+    assert(lt.actions.join() === "pickup:lootSmallEnergy" && !lt.c.memory.unloading,
+        "0184: TTL delivery margin uses the nearby destination rather than the distant mother");
+    lt.c.ticksToLive = 99;
+    travelledTo = null;
+    looterMod.run(lt.c);
+    assert(travelledTo === depotName && lt.c.memory.unloading,
+        "0184: insufficient TTL starts delivery to the nearby room before the looter expires");
+    lt = mkLooter(lootRoomObj, { Z: 50 }, 450);
+    lt.c.hits = 50;
+    travelledTo = null;
+    quiet(() => looterMod.run(lt.c));
+    assert(!currentLoot() && travelledTo === depotName,
+        "0184: a health cancellation delivers survivors cargo to the nearest room");
+    quiet(() => global.lootRoom(RN, "LootMother"));
+    lootDrops = [];
+    lootStructs = [{ id: "lootMixed", structureType: STRUCTURE_SPAWN,
+        pos: pos(25), store: { energy: 1, Z: 1 } }];
+    Game.time++;
+    lt = mkLooter(lootRoomObj, {}, 500);
+    looterMod.run(lt.c);
+    assert(lt.actions.join() === "withdraw:lootMixed:Z",
+        "0184: a mixed store skips subthreshold energy and withdraws its tiny mineral");
+    lootStructs[0].store = { energy: 29 };
+    Game.time++;
+    lt = mkLooter(lootRoomObj, {}, 500);
+    quiet(() => looterMod.run(lt.c));
+    assert(!currentLoot() && !lt.actions.length,
+        "0184: a room containing only energy dust finishes instead of draining spawn regeneration forever");
+    Game.rooms = originalGameRooms;
+    Game.map.findRoute = originalLootRoute;
+    Game.time++;
+
+    routingMod.travelToRoom = realTravel;
+    delete Game.rooms.LootMother;
+    delete Game.rooms.LootNoStore;
+    delete Memory.rooms[RN];
+    delete Memory.rooms.LootUnseen;
+    delete Memory.rooms.LootSecond;
 }
 
 // --- ROADMAP 0052: notifyWhenAttacked(false) for routine-exposure roles --

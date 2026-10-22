@@ -12,6 +12,7 @@ const roomCache = require("../utils/roomCache");
 const { takeCover, isDangerous, excludeDangerZone } = require("../utils/combat");
 const { roomNeeds } = require("../rooms/needs");
 const reservations = require("../utils/reservations");
+const salvage = require("../utils/salvage");
 const config = require("../utils/config");
 const resourceTiers = require("../utils/resourceTiers");
 const nonEnergyLogistics = require("../utils/nonEnergyLogistics");
@@ -20,6 +21,7 @@ const names = require("../utils/names");
 const terminalOps = require("../utils/terminalOps");
 const stockPolicy = require("../utils/resourcePolicy");
 const cpuTier = require("../utils/cpuTier");
+const noStorageEconomy = require("../rooms/noStorageEconomy");
 
 // Per-tick, per-room cache for the filtered structure lists below - every
 // hauler in a room was independently re-running the same filter over
@@ -429,12 +431,11 @@ function estimatedDropAmount(creep, resource) {
 // hauler.bigDropLoad (500) BY THE TIME IT'D ARRIVE (decay-aware, see
 // estimatedDropAmount) - `tier: "bigDrop"` on the return value, so run()
 // knows to short-circuit straight to it, skipping even battlefield loot.
-// Tombstone/ruin loot (any resource, energy included) is NOT part of this
-// function at all any more - it's a single all-in-one trip handled by
-// battlefieldLootJob/runLootJob (checked by run() right after bigDrop,
-// before falling through to the rest of the cascade below), since a
-// hauler grabbing loot off a body now takes everything sitting there and
-// delivers straight to storage, not just the energy slice.
+// Tombstone/ruin loot, foreign-owner stores and non-energy drops are NOT part
+// of this function - they are handled by battlefieldLootJob/runLootJob
+// (checked by run() right after bigDrop, before the rest of the cascade).
+// An assigned loot job drains its source before returning, including every
+// resource in a tombstone or ruin rather than only the energy slice.
 // Below bigDrop: the terminal (only the withdrawable slice of it, see
 // terminalWithdrawable above - tagged `dest: "storage"` so the delivery
 // side routes it straight to storage instead of the normal spawn/tower/lab
@@ -511,10 +512,10 @@ function pickLoadNow(creep) {
     });
     if (bigDrop) return { id: bigDrop.id, act: "pickup", tier: "bigDrop" };
 
-    // Tombstone/ruin loot (energy included) is handled entirely by
-    // battlefieldLootJob/runLootJob below (ROADMAP 0107, user request: one
-    // trip grabs everything a body's holding, straight to storage) - not
-    // this energy-only pipeline, so there's no separate tier for it here
+    // Tombstone/ruin and foreign-store loot is handled by
+    // battlefieldLootJob/runLootJob below (ROADMAP 0107/0169). Non-energy
+    // drops use that same job; energy drops remain in this energy-only
+    // pipeline, so there is no separate tier for them here.
     // any more.
 
     if (creep.room.terminal) {
@@ -895,6 +896,7 @@ function idleSkip(creep) {
     const mark = idleChecks[creep.name];
     if (!mark || mark.room !== creep.room.name || Game.time < mark.tick || Game.time - mark.tick >= every) return false;
     if (creep.store.getUsedCapacity() > 0) return false;
+    if (cpuTier.band() === "critical" && config.get("cpu.idleSkipWhenHungry", true)) return true;
     const d = derived(creep.room);
     if (d.spawnHungry === undefined) d.spawnHungry = !spawnsAndExtensionsFull(creep.room);
     return !d.spawnHungry;
@@ -1173,24 +1175,56 @@ function spawnsAndExtensionsFull(room) {
 // vanish for good before a hauler gets around to it.
 function battlefieldLootJob(room) {
     const minLoot = config.get("hauler.minLootLoad", 50);
-    // ROADMAP 0107 follow-up (user request): this is exactly the scenario
-    // that motivated excludeDangerZone - a dead invader's own tombstone
-    // sitting right where the fight happened, with a second, still-live
-    // invader guarding the spot. Filtered before .find() so a pile still
-    // being fought over loses out to the next-best one (or none) instead of
-    // sending a hauler straight into it.
-    const piles = excludeDangerZone(
-        roomCache.tombstones(room).concat(roomCache.ruins(room)),
+    let piles = roomCache.tombstones(room).concat(roomCache.ruins(room));
+
+    if (config.get("salvage.enabled", true)) {
+        // Energy drops stay in the energy-only load pipeline. Other dropped
+        // resources and structures with a known foreign owner are salvage.
+        // Unowned containers are included only for non-energy resources so
+        // active source containers never replace their miner/link contract.
+        piles = piles.concat(
+            roomCache.droppedResources(room).filter(
+                (drop) => drop.resourceType !== RESOURCE_ENERGY && drop.amount > minLoot
+            ),
+            roomCache.structures(room).filter((structure) => {
+                if (!structure.store || structure.my === true) return false;
+                const hasLoot = Object.keys(structure.store).some(
+                    (resource) => structure.store[resource] > minLoot
+                );
+                if (!hasLoot) return false;
+                if (structure.owner) return true;
+                return structure.structureType === STRUCTURE_CONTAINER &&
+                    Object.keys(structure.store).some(
+                        (resource) => resource !== RESOURCE_ENERGY && structure.store[resource] > minLoot
+                    );
+            })
+        );
+    }
+
+    // floor first, then tombstones/ruins, then stores - by how fast each decays
+    const safePiles = salvage.byDecay(excludeDangerZone(
+        salvage.excludeProtected(piles, room),
         room
-    );
-    const pile = piles.find((p) =>
-        Object.keys(p.store).some((k) => p.store[k] > minLoot)
+    ));
+    const pile = safePiles.find((candidate) =>
+        candidate.resourceType
+            ? candidate.resourceType !== RESOURCE_ENERGY && candidate.amount > minLoot
+            : candidate.store &&
+              Object.keys(candidate.store).some(
+                  (resource) => candidate.store[resource] > minLoot
+              )
     );
     if (!pile) return null;
-    const first = Object.keys(pile.store).find((r) => pile.store[r] > 0);
-    const to = config.get("stockPolicy.enabled", true) ? stockPolicy.destination(room, first) : room.storage;
-    if (!to || to.store.getFreeCapacity() <= 0) return null;
-    return { kind: "battlefieldLoot", from: pile, to };
+
+    const dropped = pile.resourceType !== undefined;
+    const resourceType = dropped
+        ? pile.resourceType
+        : Object.keys(pile.store).find((resource) => pile.store[resource] > 0);
+    const to = config.get("stockPolicy.enabled", true)
+        ? stockPolicy.destination(room, resourceType)
+        : room.storage;
+    if (!to || to.store.getFreeCapacity(resourceType) <= 0) return null;
+    return { kind: "battlefieldLoot", from: pile, to, dropped, resourceType };
 }
 
 function clearLootJob(creep) {
@@ -1201,7 +1235,12 @@ function clearLootJob(creep) {
 function assignLootJob(creep, job) {
     if (!job || !nonEnergyLogistics.claim(creep)) return false;
     reservations.release(creep);
-    creep.memory.lootJob = { fromId: job.from.id, toId: job.to.id };
+    creep.memory.lootJob = {
+        fromId: job.from.id,
+        toId: job.to.id,
+        dropped: job.dropped === true,
+        resourceType: job.resourceType,
+    };
     return true;
 }
 
@@ -1217,10 +1256,17 @@ function assignLootJob(creep, job) {
 function runLootJob(creep) {
     const job = creep.memory.lootJob;
     const from = Game.getObjectById(job.fromId);
-    const pileHasLoot = from && _.some(from.store, (n) => n > 0);
+    const pileHasLoot = job.dropped
+        ? from && from.amount > 0
+        : from && _.some(from.store, (amount) => amount > 0);
 
     if (creep.store.getFreeCapacity() > 0 && pileHasLoot) {
-        const resourceType = _.findKey(from.store, (n) => n > 0);
+        if (job.dropped) {
+            const status = creep.pickup(from);
+            if (status === ERR_NOT_IN_RANGE) creep.moveTo(from, { range: 1 });
+            return;
+        }
+        const resourceType = _.findKey(from.store, (amount) => amount > 0);
         const status = creep.withdraw(from, resourceType);
         if (status === ERR_NOT_IN_RANGE) creep.moveTo(from, { range: 1 });
         return;
@@ -1231,18 +1277,20 @@ function runLootJob(creep) {
         return;
     }
 
-    const resourceType = _.findKey(creep.store, (n) => n > 0);
-    const to = config.get("stockPolicy.enabled", true) ? stockPolicy.destination(creep.room, resourceType) : Game.getObjectById(job.toId) || creep.room.storage;
-    if (!to || to.store.getFreeCapacity() <= 0) {
-        // nowhere to dump it right now - hold near storage and wait rather
-        // than lose it, same fail-soft spirit as runMineralJob's
-        // preserveMineralCargo (storage-only here, so no terminal anchor)
+    const resourceType = _.findKey(creep.store, (amount) => amount > 0);
+    const to = config.get("stockPolicy.enabled", true)
+        ? stockPolicy.destination(creep.room, resourceType)
+        : Game.getObjectById(job.toId) || creep.room.storage;
+    if (!to || to.store.getFreeCapacity(resourceType) <= 0) {
+        // Preserve cargo and wait near storage when no safe destination exists.
         if (creep.room.storage && !creep.pos.inRangeTo(creep.room.storage, 1)) {
             creep.moveTo(creep.room.storage, { range: 1, reusePath: 10 });
         }
         return;
     }
-    const max = to === creep.room.terminal && config.get("stockPolicy.enabled", true) ? stockPolicy.terminalFree(creep.room) : to.store.getFreeCapacity(resourceType);
+    const max = to === creep.room.terminal && config.get("stockPolicy.enabled", true)
+        ? stockPolicy.terminalFree(creep.room)
+        : to.store.getFreeCapacity(resourceType);
     const status = creep.transfer(to, resourceType, Math.min(creep.store[resourceType], max));
     if (status === ERR_NOT_IN_RANGE) creep.moveTo(to, { range: 1 });
 }
@@ -1556,6 +1604,8 @@ var hauler = {
         if (creep.memory.role === "harvester") creep.memory.role = "hauler";
 
         if (cpuMeter.span("hauler.cover", () => takeCover(creep))) return;
+        // ROADMAP 0185: an excess hauler of a storage-less room goes back to the spawn
+        if (creep.memory.recycle && noStorageEconomy.recycle(creep)) return;
         if (cpuMeter.span("hauler.terminalJob", () => terminalOps.runHauler(creep))) return;
 
         // ROADMAP 0107 (user request): an in-progress battlefield loot trip
@@ -1657,9 +1707,9 @@ var hauler = {
                 return;
             }
 
-            // Tombstone/ruin loot (every resource a body is holding, energy
-            // included - ROADMAP 0107, user request) is the next tier - it
-            // decays away for good if nobody grabs it in time, so it
+            // Tombstone/ruin/foreign-store loot and non-energy drops
+            // (ROADMAP 0107/0169) are the next tier - they can disappear or
+            // remain unused if nobody grabs them, so this
             // outranks the regular pressuredJob/terminal/essentialConsumer
             // cascade below, but never the bigDrop pile above. Only while
             // the tank's empty - already carrying energy rules out starting
@@ -1711,6 +1761,11 @@ var hauler = {
                     pickMineralJob(creep.room);
                 if (assignMineralJob(creep, mineralJob)) {
                     runMineralJob(creep);
+                    return;
+                }
+                if (noStorageEconomy.isExcessHauler(creep, roomNeeds(creep.room).hauler)) {
+                    creep.memory.recycle = true;
+                    noStorageEconomy.recycle(creep);
                     return;
                 }
                 markIdle(creep);

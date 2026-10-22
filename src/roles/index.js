@@ -14,6 +14,7 @@ let creepLogic = {
     mineralMiner: require("./mineralMiner"),
     scout: require("./scout"),
     raider: require("./raider"),
+    looter: require("./looter"), // ROADMAP 0177
     squadDismantler: require("./squadDismantler"),
 };
 

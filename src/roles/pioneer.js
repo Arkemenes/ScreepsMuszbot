@@ -3,6 +3,7 @@ const { energyPiles } = require("../utils/energy");
 const census = require("../utils/census");
 const roomCache = require("../utils/roomCache");
 const reservations = require("../utils/reservations");
+const salvage = require("../utils/salvage");
 const routing = require("../utils/routing");
 const remotes = require("../rooms/remotes");
 const pioneering = require("../rooms/pioneering");
@@ -63,6 +64,41 @@ const pioneer = {
             return;
         }
 
+        // ROADMAP 0174: keep going to the child room whenever it can still
+        // be reached with useful life left (pioneering.divertTarget); if not,
+        // work in the nearest owned room it CAN reach instead of dying on the
+        // road. Checked once per room entered - findRoute isn't free.
+        if (creep.memory.divertTo) {
+            if (creep.room.name === creep.memory.divertTo) {
+                creep.memory.role = "bootstrap";
+                delete creep.memory.divertTo;
+                delete creep.memory.targetRoom;
+                delete creep.memory.home;
+                delete creep.memory.returning;
+                bootstrap.run(creep);
+                return;
+            }
+            cpuMeter.span("pioneer.travel", () =>
+                routing.travelToRoom(creep, creep.memory.divertTo, { range: 20 }));
+            return;
+        }
+        if (
+            creep.room.name !== targetRoomName &&
+            creep.room.name !== home &&
+            creep.memory._reachCheckRoom !== creep.room.name
+        ) {
+            creep.memory._reachCheckRoom = creep.room.name;
+            const divert = pioneering.divertTarget(creep, targetRoomName);
+            if (divert) {
+                creep.memory.divertTo = divert;
+                console.log(
+                    `[pioneer] ${creep.name} can't reach ${targetRoomName} with useful life left ` +
+                        `(ttl ${creep.ticksToLive}) - working in ${divert} instead`
+                );
+                return;
+            }
+        }
+
         const spawnBuilt =
             creep.room.name === targetRoomName &&
             roomCache.structuresByType(creep.room, STRUCTURE_SPAWN).length > 0;
@@ -111,8 +147,10 @@ const pioneer = {
                 if (creep.pos.isNearTo(pile)) {
                     const trackBoost = Memory.rooms && Memory.rooms[creep.room.name] && Memory.rooms[creep.room.name].labBoostReservations;
                     const amount = trackBoost ? Math.min(pile.store && pile.store[RESOURCE_ENERGY] || 0, creep.store.getFreeCapacity(RESOURCE_ENERGY)) : 0;
-                    const status = creep.withdraw(pile, RESOURCE_ENERGY);
-                    if (status === OK && trackBoost)
+                    const status = pile.resourceType === RESOURCE_ENERGY
+                        ? creep.pickup(pile)
+                        : creep.withdraw(pile, RESOURCE_ENERGY);
+                    if (status === OK && trackBoost && pile.resourceType !== RESOURCE_ENERGY)
                         require("../utils/boostLogistics").energyWithdrawn(creep, pile, amount);
                 } else {
                     creep.moveTo(pile, { reusePath: 5 });
@@ -121,6 +159,33 @@ const pioneer = {
             return;
         }
         reservations.release(creep);
+
+        // In the target room, use free energy before continuing local mining
+        // or honoring a return-home decision made on an earlier tick.
+        if (
+            creep.room.name === targetRoomName &&
+            config.get("salvage.enabled", true) &&
+            creep.store.getFreeCapacity(RESOURCE_ENERGY) > 0 &&
+            (!creep.store[RESOURCE_ENERGY] || creep.memory.miningLocal)
+        ) {
+            // floor first: dropped energy decays every tick
+            const pile = cpuMeter.span("pioneer.salvage", () =>
+                salvage.closestDecayFirst(
+                    creep,
+                    reservations.usable(creep, energyPiles(creep.room))
+                )
+            );
+            if (pile) {
+                reservations.claim(creep, pile.id);
+                if (creep.pos.isNearTo(pile)) {
+                    if (pile.resourceType === RESOURCE_ENERGY) creep.pickup(pile);
+                    else creep.withdraw(pile, RESOURCE_ENERGY);
+                } else {
+                    creep.moveTo(pile, { range: 1, reusePath: 5 });
+                }
+                return;
+            }
+        }
 
         // Sticky "heading home to refill" flag. Without it, the choice
         // between "go to target" and "go home" is re-derived every tick

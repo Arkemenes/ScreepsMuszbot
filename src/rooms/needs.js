@@ -14,6 +14,7 @@ const pioneering = require("./pioneering");
 const autoscale = require("../utils/autoscale");
 const nonEnergyLogistics = require("../utils/nonEnergyLogistics");
 const onDemandPopulation = require("./onDemandPopulation");
+const noStorageEconomy = require("./noStorageEconomy");
 
 let builtTick = -1;
 let cache = {};
@@ -373,10 +374,23 @@ function compute(room) {
     const miners = census.count(name, "miner", 0);
     const haulers = census.count(name, "hauler", 0);
 
+    // ROADMAP 0185: no storage, no links - haulers by measured demand, surplus to upgraders
+    let noStorage = null;
+    if (containers && noStorageEconomy.applies(room)) {
+        const minLoad = config.get("hauler.minContainerLoad", 1000);
+        const spawnsFull = room.energyAvailable >= room.energyCapacityAvailable;
+        const pressure = !spawnsFull && srcContainers.some((c) => (c.store[RESOURCE_ENERGY] || 0) >= minLoad);
+        const surplus = spawnsFull && sourceContainersFull(room);
+        // base upgrader tier without storage is 1 (see below)
+        noStorage = noStorageEconomy.observe(room, Memory.rooms[name] || (Memory.rooms[name] = {}), pressure, surplus, 1);
+    }
+
     // --- hauler / carrier ---
     let hauler;
     if (!containers && !room.storage) {
         hauler = 0; // pre-container: the bootstrap carries energy
+    } else if (noStorage) {
+        hauler = Math.min(noStorage.hauler, containers + 1);
     } else if (links) {
         // a full link network teleports the bulk of the energy; one hauler
         // handles the last mile (base link -> spawn/ext, drops, controller),
@@ -392,7 +406,9 @@ function compute(room) {
     // worth hauling and somewhere (storage) to put it, so mineral hauling
     // doesn't come entirely out of the room's own energy throughput.
     if (room.storage) mineralMarginal[name] = Math.max(0, config.get("hauler.minCountWithMineral", 2) - hauler);
-    if (room.storage && mineralOperationActive(room)) {
+    // critical CPU band: mineral hauling is optional - no extra hauler for it
+    const mineralFloor = !(config.get("cpu.dropMineralHaulerInCritical", true) && require("../utils/cpuTier").band() === "critical");
+    if (mineralFloor && room.storage && mineralOperationActive(room)) {
         hauler = Math.max(hauler, config.get("hauler.minCountWithMineral", 2));
     }
     hauler = Math.max(hauler, pressuredOutputHaulerFloor(room, haulers));
@@ -441,6 +457,7 @@ function compute(room) {
     } else {
         upgrader = 1;
     }
+    if (noStorage && upgrader > 0) upgrader += noStorage.upgraderExtra;
 
     // --- builder: demand from the construction/repair backlog, capped by the
     //     energy actually available to pick up (no point spawning builders that
@@ -463,6 +480,11 @@ function compute(room) {
 
     let builder = Math.min(byBacklog, byEnergy, 1);
     if (rcl < 2) builder = Math.min(builder, 1);
+    // critical CPU band: the "one for repairs" builder of a room with nothing to build is
+    // dropped while towers can cover repairs and nothing is at critical hits
+    if (!sites.length && rcl >= 3 && config.get("cpu.dropIdleBuilderInCritical", true) &&
+        require("../utils/cpuTier").band() === "critical" &&
+        !require("../utils/damagedStructures").critical(room).length) builder = 0;
 
     // --- defender: solo fallback, or a striker+medic pair per unit of
     //     threat once the room can actually afford a real pair (ROADMAP
@@ -555,13 +577,26 @@ function compute(room) {
     // creepSeen-style abandon check - rooms/raiding.js's raidRoom()/
     // findWeakTarget() simply get asked again (console, or next autoRaid
     // scan) rather than a single Memory-tracked mission retrying forever.
-    const raiderPending =
+    // ROADMAP 0173: a raider guarding one of my rooms (mission "defend")
+    // doesn't block a raid, and vice versa - see roles/raider.js
+    // defendPending(), inlined here because raider.js requires this file.
+    const raiders = census.all("raider");
+    const raidPending =
         !mem.defenseActive &&
         Memory.raidTarget &&
         Memory.raidTarget.from === name &&
-        !census.all("raider").length
+        !raiders.some((c) => c.memory.mission !== "defend")
             ? 1
             : 0;
+    const defendTarget = Memory.defendTarget;
+    const defendPending =
+        !mem.defenseActive &&
+        defendTarget &&
+        defendTarget.from === name &&
+        !raiders.some((c) => c.memory.mission === "defend" && c.memory.targetRoom === defendTarget.room)
+            ? 1
+            : 0;
+    const raiderPending = raidPending + defendPending;
 
     // pioneer (ROADMAP 0037): this room sends pioneers to every owned,
     // spawnless, hostile-free sister room whose nearest rescuer (with a
@@ -639,7 +674,7 @@ function roomNeeds(room) {
         cache = {};
     }
     if (cache[room.name]) return cache[room.name];
-    const ttl = Number(config.get("needs.cacheTicks", 5)) || 1;
+    const ttl = Number(require("../utils/cpuTier").scaled("needs.cacheTicks", 5)) || 1;
     const mem = Memory.rooms && Memory.rooms[room.name];
     const hit = heapNeeds[room.name];
     if (hit && ttl > 1 && Game.time >= hit.tick && Game.time - hit.tick < ttl && !(mem && mem.defenseActive)) {

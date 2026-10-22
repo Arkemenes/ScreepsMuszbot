@@ -40,29 +40,76 @@ function candidateMothers() {
     return _.filter(Game.myRooms, hasSpawn);
 }
 
-// Every room that can rescue `targetRoomName` - within pioneer.maxDistance
-// room-hops (same route-hop metric claim/raid already use via
-// remotes.roomDistance). Not just the nearest one: every owned room with a
-// spawn in range pitches in its own pioneers independently, each capped at
-// pioneer.maxConcurrent for this target (see pioneersWanted below) - a
-// disaster near several sister rooms gets help from all of them at once,
-// not a queue behind whichever one happens to be closest.
+// ROADMAP 0174 - travel time, not just hop count. A pioneer body is always
+// balanced WORK/CARRY/MOVE (roles/pioneer.js spawnData) and travels loaded:
+// 2 non-MOVE parts per MOVE -> 2 ticks per plain tile, ~50 tiles a room.
+// 30 hops (the old only limit) was 3000+ ticks for a 1500-tick creep - live,
+// pioneers from 15-16 rooms away died on the road.
+function ticksPerHop() {
+    return config.get("pioneer.tilesPerHop", 50) * config.get("pioneer.ticksPerTile", 2);
+}
+
+function travelTicks(fromRoomName, toRoomName) {
+    const hops = remotes.roomDistance(fromRoomName, toRoomName);
+    return hops === Infinity ? Infinity : hops * ticksPerHop();
+}
+
+// A mother can send a pioneer only if it arrives with at least
+// pioneer.minWorkTicks of life left to actually build (spawn time and the
+// loading trip are what the margin absorbs).
+function withinReach(fromRoomName, toRoomName) {
+    const lifetime = typeof CREEP_LIFE_TIME === "number" ? CREEP_LIFE_TIME : 1500;
+    const hops = remotes.roomDistance(fromRoomName, toRoomName);
+    return hops <= config.get("pioneer.maxDistance", 30) &&
+        travelTicks(fromRoomName, toRoomName) <= lifetime - config.get("pioneer.minWorkTicks", 500);
+}
+
+// Every room that should rescue `targetRoomName`: within reach (above), and
+// no more than pioneer.motherSlackHops farther than the closest such room.
+// Several near sister rooms still help at once, each capped at
+// pioneer.maxConcurrent for this target (see pioneersWanted below); a far
+// room no longer sends slow help when a near one is already on it.
 function mothersFor(targetRoomName) {
-    const maxDist = config.get("pioneer.maxDistance", 30);
+    const reachable = _.filter(candidateMothers(), (room) => withinReach(room.name, targetRoomName));
+    if (!reachable.length) return [];
+    const hops = (room) => remotes.roomDistance(room.name, targetRoomName);
+    const nearest = _.min(reachable.map(hops));
+    const slack = config.get("pioneer.motherSlackHops", 2);
+    return _.filter(reachable, (room) => hops(room) <= nearest + slack);
+}
+
+// Every spawnless room `motherRoom` should help - the mirror of mothersFor().
+function targetsFor(motherRoom) {
     return _.filter(
-        candidateMothers(),
-        (room) => remotes.roomDistance(room.name, targetRoomName) <= maxDist
+        spawnlessRooms(),
+        (r) => _.some(mothersFor(r.name), (m) => m.name === motherRoom.name)
     );
 }
 
-// Every spawnless room `motherRoom` is within range to help - the mirror of
-// mothersFor(), same distance test from the other side.
-function targetsFor(motherRoom) {
-    const maxDist = config.get("pioneer.maxDistance", 30);
-    return _.filter(
-        spawnlessRooms(),
-        (r) => remotes.roomDistance(motherRoom.name, r.name) <= maxDist
-    );
+// ROADMAP 0174, in transit: the user's preference is a pioneer working in
+// the child room - it's a bigger worker than that room can spawn itself -
+// so it keeps going whenever it can still arrive with
+// pioneer.minUsefulTicks of life (even if the target got its spawn
+// meanwhile). Only when it can't does it divert to the nearest owned room
+// with a spawn it CAN reach in time, to work there instead of dying on the
+// road. Returns that room's name, or null to keep going.
+function divertTarget(creep, targetRoomName) {
+    const ttl = creep.ticksToLive;
+    if (!ttl) return null;
+    const useful = config.get("pioneer.minUsefulTicks", 150);
+    const arrives = (roomName) => travelTicks(creep.room.name, roomName) + useful <= ttl;
+    if (arrives(targetRoomName)) return null;
+    let best = null;
+    let bestHops = Infinity;
+    for (const room of candidateMothers()) {
+        if (room.name === targetRoomName || !arrives(room.name)) continue;
+        const hops = remotes.roomDistance(creep.room.name, room.name);
+        if (hops < bestHops) {
+            bestHops = hops;
+            best = room.name;
+        }
+    }
+    return best;
 }
 
 // Pioneers `motherRoom` itself has out (or spawning) for `targetRoomName` -
@@ -150,7 +197,11 @@ function previewQueue(room) {
 global.pioneerStatus = function () {
     const maxDist = config.get("pioneer.maxDistance", 30);
     const maxConcurrent = config.get("pioneer.maxConcurrent", 2);
-    console.log(`[pioneer] maxDistance=${maxDist} maxConcurrent=${maxConcurrent}`);
+    console.log(
+        `[pioneer] maxDistance=${maxDist} maxConcurrent=${maxConcurrent} ` +
+            `ticksPerHop=${ticksPerHop()} minWorkTicks=${config.get("pioneer.minWorkTicks", 500)} ` +
+            `motherSlackHops=${config.get("pioneer.motherSlackHops", 2)}`
+    );
 
     const owned = Game.myRooms || [];
     console.log(`[pioneer] Game.myRooms: ${owned.map((r) => r.name).join(", ") || "(none)"}`);
@@ -177,7 +228,10 @@ global.pioneerStatus = function () {
         }
         const mothers = mothersFor(room.name);
         if (!mothers.length) {
-            console.log(`${line} - no owned room with a spawn is within ${maxDist} hops`);
+            console.log(
+                `${line} - no owned room with a spawn can get a pioneer there with ` +
+                    `minWorkTicks of life left (max ${maxDist} hops)`
+            );
             continue;
         }
         console.log(
@@ -226,4 +280,6 @@ module.exports = {
     pioneersWanted,
     hasPendingTarget,
     nextTarget,
+    withinReach,
+    divertTarget,
 };
