@@ -10,6 +10,10 @@ let ownIds = new Map();
 let territories = new Map();
 let territoryVersion = 0;
 let epoch;
+const emptyAggressors = {};
+let learnedCacheTick = -1;
+let learnedCacheSource = null;
+let learnedCache = [];
 
 function manualPlayers() {
     const list = config.get("routing.avoidPlayers", []);
@@ -22,14 +26,24 @@ function avoidTicks() {
 }
 
 function learnedPlayers() {
-    const records = Memory.routingAggressors || {};
-    return Object.keys(records).filter((name) => {
+    const records = Memory.routingAggressors || emptyAggressors;
+    if (learnedCacheTick === Game.time && learnedCacheSource === records) return learnedCache;
+    learnedCacheTick = Game.time;
+    learnedCacheSource = records;
+    learnedCache = Object.keys(records).filter((name) => {
         const record = records[name];
         if (record && Number.isFinite(record.tick) && Game.time >= record.tick &&
             Game.time - record.tick < avoidTicks()) return true;
         delete records[name];
         return false;
     });
+    return learnedCache;
+}
+
+function invalidateLearnedPlayers() {
+    learnedCacheTick = -1;
+    learnedCacheSource = null;
+    learnedCache = [];
 }
 
 function roomPlayer(roomName) {
@@ -104,6 +118,7 @@ function observeRoom(room) {
         // Define an own property so arbitrary player names cannot hit Object.prototype.
         Object.defineProperty(records, attacker, { enumerable: true, configurable: true,
             writable: true, value: { room: room.name, tick: Game.time - 1 } });
+        invalidateLearnedPlayers();
         if (!active) console.log(`[transit] ${attacker} attacked our creep in ${room.name}; avoiding known territory for ${avoidTicks()} ticks`);
     }
 }
@@ -123,6 +138,7 @@ global.allowPlayer = function (name) {
     Memory.settings.routing = Memory.settings.routing || {};
     Memory.settings.routing.avoidPlayers = manualPlayers().filter((player) => player !== name);
     if (Memory.routingAggressors) delete Memory.routingAggressors[name];
+    invalidateLearnedPlayers();
     console.log(`[transit] transit allowed for ${name}; a new confirmed attack can block it again`);
     return true;
 };
@@ -143,6 +159,7 @@ function reset() {
     territories = new Map();
     territoryVersion = 0;
     epoch = undefined;
+    invalidateLearnedPlayers();
 }
 
 module.exports = { observeRoom, isBlockedRoom, policyKey, restrictionKey, reset };

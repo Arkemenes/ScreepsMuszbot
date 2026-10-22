@@ -298,6 +298,9 @@ reconhece vítimas mortas no tick anterior enquanto há visão/evento disponíve
 `Memory.routingAggressors[autor] = {room, tick}` guarda somente a evidência;
 novos ataques renovam o prazo `routing.allyAttackAvoidTicks` (10000 ticks).
 Expiração permite tentar trânsito normal novamente, sem despachar probes.
+`learnedPlayers()` monta e limpa a lista uma vez por `Game.time` no heap; uma
+gravação/remoção de evidência invalida essa lista imediatamente, e a substituição
+do objeto em `Memory.routingAggressors` é detectada pela referência.
 
 `routing.js` exclui propriedade/reserva conhecida desses autores em todos os
 callbacks e nas buscas de rota, inclusive destinos e modo nativo. A origem
@@ -798,9 +801,47 @@ Buscas repetidas (0152, defaults ligados): `hauler` ocioso busca ao ficar ocioso
 válido e nada de maior prioridade (spawn/extension com fome, torre crítica, storage abaixo da reserva) apareceu. Contadores nos spans:
 `hauler.idleSkip`, `builder.idleSkip`, `hauler.deliverKept`.
 
+Salvage de hauler (0186): `battlefieldLootJob()` reutiliza a lista estrutural
+ordenada por decaimento no heap de `derived(room)`, limitada por sala/tick e
+pelos limites `hauler.minLootLoad` / `salvage.enabled`. Quantidade disponível,
+proteção por hostile rampart, zona perigosa e destino econômico são revistos a
+cada decisão; como só atribui o primeiro pile válido, `excludeDangerZone` para
+no primeiro seguro em vez de percorrer os candidatos restantes.
+`hauler.battlefieldLoot` mede o caminho. `pickLoadNow()` também
+reutiliza a lista de energy drops de `roomCache` fora de tiles de container;
+estimativa de quantidade, reservas, perigo e busca de caminho permanecem por
+creep. A estimativa, disponibilidade e segurança de um drop são memoizadas
+somente dentro da chamada atual de `pickLoadNow()`, para o fall-through entre
+`bigDrop` e drop comum, e descartadas ao retornar.
+Os resultados de `reservations.available` também são compartilhados por ID
+entre tiers de `pickLoadNow()` que examinam o mesmo drop, link, terminal ou
+container; uma nova decisão lê as reservas novamente.
+Subspans `hauler.pickLoad.*` medem separadamente os caminhos de drop grande e
+comum, terminal, links, consumidor essencial e container para orientar novas
+otimizações.
+Quando `pickLoadNow()` só precisa saber se há demanda essencial, consulta a
+presença nas listas cacheadas de produção/torres sem procurar o alvo mais
+próximo; os consumidores que precisam do objeto mantêm `essentialConsumer()`.
+`pickDeliverNow()` percorre spawns/extensions em ordem estável para escolher
+um alvo adjacente com reserva disponível; sem alvo adjacente, avalia o conjunto
+completo e mantém `findClosestByPath()`. A disponibilidade de reserva por alvo
+é memoizada por ID somente dentro da decisão, inclusive na cascata opcional;
+novas decisões consultam reservas novamente.
+Miner (0186): `nearbyTargets(near)` classifica container, collector link e tower
+em uma passagem, compartilhada pela validação de depósito e distribuição. O
+índice `energyDropTiles` conserva o primeiro energy drop de cada tile na ordem
+de `roomCache`, descartado a cada tick; miners consultam só os nove tiles
+adjacentes. `miner.nearbyTargets` mede a classificação movida para antes da
+validação de harvest; a comparação de CPU usa a soma com `miner.distribute`.
+
 Preço e energia: energyLedger resolve slots WORK aceitos e limites compartilhados, com gasto/efeito separados e qualidade explícita; continua estimado, sem confirmação geral do servidor.
 `orderBook.byResource` agrupa o livro por recurso uma vez por tick (o scan do swing deixou de filtrar o livro inteiro por cotação);
 `craftLedger.warehouseMany` calcula o que as estruturas da cadeia guardam uma vez por cadeia (usado por `resourcePolicy.commitments`).
+
+Builder (0186): `opportunisticWorkNow()` percorre uma vez os reparos críticos e
+construction sites no range 3 e mantém o maior ratio de dano/progresso; empate
+mantém o primeiro candidato. Isso substitui `inRangeOf()` mais `sortBy()` sem
+mudar reparo antes de construção, tiers ou limiares.
 
 ### `src/utils/`
 

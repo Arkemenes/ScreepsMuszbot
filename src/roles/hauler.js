@@ -165,6 +165,12 @@ function essentialConsumer(creep) {
     );
 }
 
+function hasEssentialConsumer(room) {
+    const production = spawnExtNeedingEnergy(room);
+    const towers = criticalTowers(room);
+    return production.length > 0 || towers.length > 0;
+}
+
 // Lab / factory / power spawn / controller container - genuinely optional,
 // so unlike essentialConsumer above these DO respect the room's reserve
 // (resourceTiers.aboveReserve, checked by the caller) before pulling.
@@ -211,18 +217,15 @@ function controllerContainerCandidates(room) {
     return d.controllerContainers;
 }
 
-function optionalConsumer(creep) {
+function optionalConsumer(creep, availableDeliver) {
+    const available = availableDeliver || ((s) => reservations.availableDeliver(creep, s));
     const lab = creep.pos.findClosestByRange(
-        labFactoryPowerSpawnNeedingEnergy(creep.room).filter(
-            (s) => reservations.availableDeliver(creep, s) > 0
-        )
+        labFactoryPowerSpawnNeedingEnergy(creep.room).filter((s) => available(s) > 0)
     );
     if (lab) return lab;
 
     if (!creep.room.controller) return null;
-    return controllerContainerCandidates(creep.room).find(
-        (s) => reservations.availableDeliver(creep, s) > 0
-    );
+    return controllerContainerCandidates(creep.room).find((s) => available(s) > 0);
 }
 
 // A non-critical tower still worth topping off (towerDeliverable) - also
@@ -241,11 +244,10 @@ function toppableTowers(room) {
     return d.toppableTowers;
 }
 
-function toppableTower(creep) {
+function toppableTower(creep, availableDeliver) {
+    const available = availableDeliver || ((s) => reservations.availableDeliver(creep, s));
     return creep.pos.findClosestByRange(
-        toppableTowers(creep.room).filter(
-            (s) => reservations.availableDeliver(creep, s) > 0
-        )
+        toppableTowers(creep.room).filter((s) => available(s) > 0)
     );
 }
 
@@ -259,8 +261,8 @@ function toppableTower(creep) {
 // once no tower does. (An earlier version of this function compared the
 // two by distance instead - user corrected that same-day: towers are
 // priority, not just equal footing.)
-function satisfactoryConsumer(creep) {
-    return toppableTower(creep) || optionalConsumer(creep);
+function satisfactoryConsumer(creep, availableDeliver) {
+    return toppableTower(creep, availableDeliver) || optionalConsumer(creep, availableDeliver);
 }
 
 // Energy that arrived in the terminal since we last looked, backed by a
@@ -402,13 +404,23 @@ function dropUnderContainer(room, drop) {
     return d.containerTiles.has(drop.pos.y * 50 + drop.pos.x);
 }
 
+function energyDropCandidates(room) {
+    const d = derived(room);
+    if (!d.energyDrops) {
+        d.energyDrops = roomCache.droppedResources(room).filter(
+            (drop) => drop.resourceType === RESOURCE_ENERGY && !dropUnderContainer(room, drop)
+        );
+    }
+    return d.energyDrops;
+}
+
 function biggestEnergyDrop(room) {
     const d = derived(room);
     if (d.biggestDrop === undefined) {
         let best = 0;
-        const drops = roomCache.droppedResources(room);
+        const drops = energyDropCandidates(room);
         for (let i = 0; i < drops.length; i++) {
-            if (drops[i].resourceType === RESOURCE_ENERGY && drops[i].amount > best && !dropUnderContainer(room, drops[i])) best = drops[i].amount;
+            if (drops[i].amount > best) best = drops[i].amount;
         }
         d.biggestDrop = best;
     }
@@ -502,14 +514,37 @@ function pickLoad(creep) {
 
 function pickLoadNow(creep) {
     const bigDropMin = config.get("hauler.bigDropLoad", 500);
-    const bigDrop = biggestEnergyDrop(creep.room) <= bigDropMin ? null : creep.pos.findClosestByPath(FIND_DROPPED_RESOURCES, {
-        filter: (r) =>
-            r.resourceType === RESOURCE_ENERGY &&
-            !dropUnderContainer(creep.room, r) &&
-            estimatedDropAmount(creep, r) > bigDropMin &&
-            reservations.available(creep, r) >= 50 &&
-            !isDangerous(r.pos, creep.room),
-    });
+    const drops = energyDropCandidates(creep.room);
+    let reservationChecks;
+    const availableToWithdraw = (target) => {
+        if (!reservationChecks) reservationChecks = Object.create(null);
+        const id = target.id;
+        if (reservationChecks[id] === undefined) {
+            reservationChecks[id] = reservations.available(creep, target);
+        }
+        return reservationChecks[id];
+    };
+    let dropChecks;
+    const eligibleDrop = (resource, minimum) => {
+        if (!dropChecks) dropChecks = Object.create(null);
+        let check = dropChecks[resource.id];
+        if (!check) check = dropChecks[resource.id] = {};
+        if (check.estimated === undefined) {
+            check.estimated = estimatedDropAmount(creep, resource);
+        }
+        if (check.estimated <= minimum) return false;
+        if (availableToWithdraw(resource) < 50) return false;
+        if (check.dangerous === undefined) {
+            check.dangerous = isDangerous(resource.pos, creep.room);
+        }
+        return !check.dangerous;
+    };
+    const bigDrop = biggestEnergyDrop(creep.room) <= bigDropMin ? null : cpuMeter.span(
+        "hauler.pickLoad.bigDropPath",
+        () => creep.pos.findClosestByPath(drops, {
+            filter: (r) => eligibleDrop(r, bigDropMin),
+        })
+    );
     if (bigDrop) return { id: bigDrop.id, act: "pickup", tier: "bigDrop" };
 
     // Tombstone/ruin and foreign-store loot is handled by
@@ -520,10 +555,13 @@ function pickLoadNow(creep) {
 
     if (creep.room.terminal) {
         const minTerminal = config.get("hauler.minTerminalLoad", 100);
-        const withdrawable = terminalWithdrawable(creep.room, undefined, minTerminal);
+        const withdrawable = cpuMeter.span(
+            "hauler.pickLoad.terminalCheck",
+            () => terminalWithdrawable(creep.room, undefined, minTerminal)
+        );
         if (
             withdrawable >= minTerminal &&
-            reservations.available(creep, creep.room.terminal) >= 50
+            availableToWithdraw(creep.room.terminal) >= 50
         ) {
             return {
                 id: creep.room.terminal.id,
@@ -555,9 +593,12 @@ function pickLoadNow(creep) {
     // essentialConsumer on purpose (user's call): unclogging the room's own
     // energy pipeline outranks a single delivery cycle to spawn/ext.
     if (containersBackedUp(creep.room)) {
-        const backedUpLink = creep.pos.findClosestByRange(
-            nonCollectorLinksWithEnergy(creep.room).filter(
-                (s) => reservations.available(creep, s) >= 50
+        const backedUpLink = cpuMeter.span(
+            "hauler.pickLoad.backedUpLink",
+            () => creep.pos.findClosestByRange(
+                nonCollectorLinksWithEnergy(creep.room).filter(
+                    (s) => availableToWithdraw(s) >= 50
+                )
             )
         );
         if (backedUpLink) {
@@ -576,10 +617,17 @@ function pickLoadNow(creep) {
     // cascade below (which still tries link/storage, just later) is
     // unchanged - dropped/tombstone/ruin energy decaying away is worth
     // grabbing first when nothing is actually urgent.
-    if (essentialConsumer(creep)) {
-        const urgentLink = creep.pos.findClosestByRange(
-            nonCollectorLinksWithEnergy(creep.room).filter(
-                (s) => reservations.available(creep, s) >= 50
+    const essential = cpuMeter.span(
+        "hauler.pickLoad.essentialCheck",
+        () => hasEssentialConsumer(creep.room)
+    );
+    if (essential) {
+        const urgentLink = cpuMeter.span(
+            "hauler.pickLoad.urgentLink",
+            () => creep.pos.findClosestByRange(
+                nonCollectorLinksWithEnergy(creep.room).filter(
+                    (s) => availableToWithdraw(s) >= 50
+                )
             )
         );
         if (urgentLink) return { id: urgentLink.id, act: "withdraw" };
@@ -606,26 +654,27 @@ function pickLoadNow(creep) {
     }
 
     const minDrop = config.get("hauler.minDropLoad", 100);
-    const dropped = biggestEnergyDrop(creep.room) <= minDrop ? null : creep.pos.findClosestByPath(FIND_DROPPED_RESOURCES, {
-        filter: (r) =>
-            r.resourceType === RESOURCE_ENERGY &&
-            !dropUnderContainer(creep.room, r) &&
-            estimatedDropAmount(creep, r) > minDrop &&
-            reservations.available(creep, r) >= 50 &&
-            !isDangerous(r.pos, creep.room),
-    });
+    const dropped = biggestEnergyDrop(creep.room) <= minDrop ? null : cpuMeter.span(
+        "hauler.pickLoad.commonDropPath",
+        () => creep.pos.findClosestByPath(drops, {
+            filter: (r) => eligibleDrop(r, minDrop),
+        })
+    );
     if (dropped) return { id: dropped.id, act: "pickup" };
 
-    const link = creep.pos.findClosestByRange(
-        nonCollectorLinksWithEnergy(creep.room).filter(
-            (s) => reservations.available(creep, s) >= 50
+    const link = cpuMeter.span(
+        "hauler.pickLoad.linkSearch",
+        () => creep.pos.findClosestByRange(
+            nonCollectorLinksWithEnergy(creep.room).filter(
+                (s) => availableToWithdraw(s) >= 50
+            )
         )
     );
     if (link) return { id: link.id, act: "withdraw" };
 
     if (creep.room.storage && creep.room.storage.store[RESOURCE_ENERGY] > 0) {
         if (
-            essentialConsumer(creep) ||
+            cpuMeter.span("hauler.pickLoad.storageEssentialCheck", () => hasEssentialConsumer(creep.room)) ||
             (resourceTiers.aboveReserve(creep.room) &&
                 satisfactoryConsumer(creep))
         ) {
@@ -640,11 +689,14 @@ function pickLoadNow(creep) {
     // near-empty container is better left to fill up more before someone
     // comes for it.
     const minLoad = config.get("hauler.minContainerLoad", 1000);
-    const container = creep.pos.findClosestByPath(sourceContainers(creep.room), {
-        filter: (c) =>
-            c.store[RESOURCE_ENERGY] > minLoad &&
-            reservations.available(creep, c) >= 50,
-    });
+    const container = cpuMeter.span(
+        "hauler.pickLoad.containerPath",
+        () => creep.pos.findClosestByPath(sourceContainers(creep.room), {
+            filter: (c) =>
+                c.store[RESOURCE_ENERGY] > minLoad &&
+                availableToWithdraw(c) >= 50,
+        })
+    );
     if (container) {
         return { id: container.id, act: "withdraw" };
     }
@@ -752,19 +804,49 @@ function pickDeliver(creep) {
 }
 
 function pickDeliverNow(creep) {
+    const checkedAvailability = Object.create(null);
+    const availableDeliver = (candidate) => {
+        const id = candidate.id;
+        if (checkedAvailability[id] === undefined) {
+            checkedAvailability[id] = reservations.availableDeliver(creep, candidate);
+        }
+        return checkedAvailability[id];
+    };
+
     // Production continuity comes before optional defense refill: a hungry
     // spawn/extension must win over a tower sitting below its refill ratio.
-    const productionTargets = spawnExtNeedingEnergy(creep.room).filter(
-        (s) => reservations.availableDeliver(creep, s) > 0
-    );
-    // A consumer already in transfer range needs no path selection.
-    let target = productionTargets.find((s) => creep.pos.isNearTo(s));
-    if (!target && productionTargets.length) target = creep.pos.findClosestByPath(productionTargets);
+    let target = cpuMeter.span("hauler.pickDeliver.production", () => {
+        const productionCandidates = spawnExtNeedingEnergy(creep.room);
+        let selected = null;
+        // Preserve candidate order while avoiding reservation checks on farther
+        // production targets once an adjacent eligible consumer is found.
+        for (let i = 0; i < productionCandidates.length; i++) {
+            const candidate = productionCandidates[i];
+            if (
+                creep.pos.isNearTo(candidate) &&
+                availableDeliver(candidate) > 0
+            ) {
+                selected = candidate;
+                break;
+            }
+        }
+        // A consumer farther away still uses the full eligible set and native
+        // path search, with the same reservation rules as before.
+        if (!selected) {
+            const productionTargets = productionCandidates.filter(
+                (s) => availableDeliver(s) > 0
+            );
+            if (productionTargets.length) selected = creep.pos.findClosestByPath(productionTargets);
+        }
+        return selected;
+    });
     if (target) { deliverRank = 0; return target.id; }
 
-    target = creep.pos.findClosestByRange(
-        criticalTowers(creep.room).filter(
-            (s) => reservations.availableDeliver(creep, s) > 0
+    target = cpuMeter.span("hauler.pickDeliver.critical", () =>
+        creep.pos.findClosestByRange(
+            criticalTowers(creep.room).filter(
+                (s) => availableDeliver(s) > 0
+            )
         )
     );
     if (target) { deliverRank = 1; return target.id; }
@@ -785,7 +867,11 @@ function pickDeliverNow(creep) {
     // already carrying a resource finishes its current delivery; this gate
     // only controls selecting a new optional destination.
     const economy = resourceTiers.getEconomySnapshot(creep.room);
-    if (economy.state !== "critical") target = satisfactoryConsumer(creep);
+    if (economy.state !== "critical") {
+        target = cpuMeter.span("hauler.pickDeliver.optional", () =>
+            satisfactoryConsumer(creep, availableDeliver)
+        );
+    }
     if (target) { deliverRank = 3; return target.id; }
 
     if (
@@ -805,9 +891,11 @@ function pickDeliverNow(creep) {
     // capacity - not worth a dedicated trip, but with the hauler already
     // idle and nothing else to do, topping one off anyway beats sitting
     // full nearby.
-    target = creep.pos.findClosestByRange(
-        fallbackTowers(creep.room).filter(
-            (s) => reservations.availableDeliver(creep, s) > 0
+    target = cpuMeter.span("hauler.pickDeliver.fallback", () =>
+        creep.pos.findClosestByRange(
+            fallbackTowers(creep.room).filter(
+                (s) => availableDeliver(s) > 0
+            )
         )
     );
     if (target) { deliverRank = 5; return target.id; }
@@ -874,6 +962,10 @@ function computeMinerFeedTower(room, tower) {
 }
 
 function idleNear(creep) {
+    return cpuMeter.span("hauler.idleNear", () => idleNearNow(creep));
+}
+
+function idleNearNow(creep) {
     const anchor = creep.room.storage || roomCache.mySpawns(creep.room)[0];
     if (anchor && !creep.pos.inRangeTo(anchor, 3)) {
         creep.moveTo(anchor, { range: 3 });
@@ -912,6 +1004,10 @@ function markIdle(creep) {
 }
 
 function waitForEnergy(creep) {
+    return cpuMeter.span("hauler.waitForEnergy", () => waitForEnergyNow(creep));
+}
+
+function waitForEnergyNow(creep) {
     const link = receivingLink(creep.room, creep.pos, {
         awayFromController: true,
     });
@@ -1173,47 +1269,69 @@ function spawnsAndExtensionsFull(room) {
 // ahead of the rest of the mineral cascade (pickMineralJob), because,
 // unlike a container/lab/factory backlog, a decaying tombstone really can
 // vanish for good before a hauler gets around to it.
-function battlefieldLootJob(room) {
-    const minLoot = config.get("hauler.minLootLoad", 50);
-    let piles = roomCache.tombstones(room).concat(roomCache.ruins(room));
-
-    if (config.get("salvage.enabled", true)) {
-        // Energy drops stay in the energy-only load pipeline. Other dropped
-        // resources and structures with a known foreign owner are salvage.
-        // Unowned containers are included only for non-energy resources so
-        // active source containers never replace their miner/link contract.
-        piles = piles.concat(
-            roomCache.droppedResources(room).filter(
-                (drop) => drop.resourceType !== RESOURCE_ENERGY && drop.amount > minLoot
-            ),
-            roomCache.structures(room).filter((structure) => {
-                if (!structure.store || structure.my === true) return false;
-                const hasLoot = Object.keys(structure.store).some(
-                    (resource) => structure.store[resource] > minLoot
-                );
-                if (!hasLoot) return false;
-                if (structure.owner) return true;
-                return structure.structureType === STRUCTURE_CONTAINER &&
-                    Object.keys(structure.store).some(
-                        (resource) => resource !== RESOURCE_ENERGY && structure.store[resource] > minLoot
-                    );
-            })
-        );
+function battlefieldLootCandidates(room, minLoot, salvageEnabled) {
+    const d = derived(room);
+    const cached = d.battlefieldPiles;
+    if (cached && cached.minLoot === minLoot && cached.salvageEnabled === salvageEnabled) {
+        return cached;
     }
 
-    // floor first, then tombstones/ruins, then stores - by how fast each decays
-    const safePiles = salvage.byDecay(excludeDangerZone(
-        salvage.excludeProtected(piles, room),
-        room
-    ));
-    const pile = safePiles.find((candidate) =>
-        candidate.resourceType
-            ? candidate.resourceType !== RESOURCE_ENERGY && candidate.amount > minLoot
-            : candidate.store &&
-              Object.keys(candidate.store).some(
-                  (resource) => candidate.store[resource] > minLoot
-              )
+    let piles = roomCache.tombstones(room).concat(roomCache.ruins(room));
+    const unownedContainers = new Set();
+    if (salvageEnabled) {
+        // Cache structural candidates only. Their resource amounts are read
+        // on every decision below because haulers may drain them this tick.
+        const drops = roomCache.droppedResources(room).filter(
+            (drop) => drop.resourceType !== RESOURCE_ENERGY
+        );
+        const structures = roomCache.structures(room).filter((structure) => {
+            if (!structure.store || structure.my === true) return false;
+            if (structure.owner) return true;
+            if (structure.structureType === STRUCTURE_CONTAINER) {
+                unownedContainers.add(structure);
+                return true;
+            }
+            return false;
+        });
+        piles = piles.concat(drops, structures);
+    }
+
+    // Keep the source order stable within each decay tier: drops, tombstones
+    // and ruins, then foreign stores.
+    const result = {
+        minLoot,
+        salvageEnabled,
+        ordered: salvage.byDecay(piles),
+        unownedContainers,
+    };
+    d.battlefieldPiles = result;
+    return result;
+}
+
+function battlefieldLootJob(room) {
+    const minLoot = config.get("hauler.minLootLoad", 50);
+    const salvageEnabled = config.get("salvage.enabled", true);
+    const candidates = battlefieldLootCandidates(room, minLoot, salvageEnabled);
+    const eligible = candidates.ordered.filter((candidate) => {
+        if (candidate.resourceType) {
+            return candidate.resourceType !== RESOURCE_ENERGY && candidate.amount > minLoot;
+        }
+        if (!candidate.store) return false;
+        const hasLoot = Object.keys(candidate.store).some(
+            (resource) => candidate.store[resource] > minLoot
+        );
+        if (!hasLoot) return false;
+        if (!candidates.unownedContainers.has(candidate)) return true;
+        return Object.keys(candidate.store).some(
+            (resource) => resource !== RESOURCE_ENERGY && candidate.store[resource] > minLoot
+        );
+    });
+    const safePiles = excludeDangerZone(
+        salvage.excludeProtected(eligible, room),
+        room,
+        true
     );
+    const pile = safePiles[0];
     if (!pile) return null;
 
     const dropped = pile.resourceType !== undefined;
@@ -1560,6 +1678,10 @@ function runMineralJobNow(creep) {
 }
 
 function loadEnergy(creep, src) {
+    return cpuMeter.span("hauler.loadEnergy", () => loadEnergyNow(creep, src));
+}
+
+function loadEnergyNow(creep, src) {
     const target = Game.getObjectById(src.id);
     if (!target) return false;
     let borrowed = 0;
@@ -1613,11 +1735,14 @@ var hauler = {
         // holding, then dump it all in storage - before anything else below
         // gets a look in, same as the mineralJob commitment right after.
         if (creep.memory.lootJob) {
-            runLootJob(creep);
+            cpuMeter.span("hauler.runLootJob", () => runLootJob(creep));
             return;
         }
 
-        if (bootstrapStorage.runHauler(creep, () => !!essentialConsumer(creep))) return;
+        if (cpuMeter.span(
+            "hauler.bootstrapStorage",
+            () => bootstrapStorage.runHauler(creep, () => !!essentialConsumer(creep))
+        )) return;
 
         // ROADMAP 0051: finish an in-progress non-energy job before
         // touching energy logic again - see the block's own comment above.
@@ -1716,9 +1841,12 @@ var hauler = {
             // a fresh lootJob mid-trip (runLootJob commits to finishing one
             // it's already on, same as the rest of this file's job idiom).
             if (creep.store.getUsedCapacity() === 0) {
-                const loot = battlefieldLootJob(creep.room);
+                const loot = cpuMeter.span(
+                    "hauler.battlefieldLoot",
+                    () => battlefieldLootJob(creep.room)
+                );
                 if (loot && assignLootJob(creep, loot)) {
-                    runLootJob(creep);
+                    cpuMeter.span("hauler.runLootJob", () => runLootJob(creep));
                     return;
                 }
             }
@@ -1802,12 +1930,14 @@ var hauler = {
         reservations.claimDeliver(creep, id);
         // ROADMAP 0111: a transitory lab/factory takes only its target, the
         // rest stays on the creep for the next delivery (storage)
-        const amount = transientStock.isTransient(target)
-            ? Math.max(1, Math.min(creep.store.getUsedCapacity(RESOURCE_ENERGY), transientStock.energyNeed(target)))
-            : undefined;
-        if (creep.transfer(target, RESOURCE_ENERGY, amount) === ERR_NOT_IN_RANGE) {
-            creep.moveTo(target, { range: 1 });
-        }
+        cpuMeter.span("hauler.deliverAction", () => {
+            const amount = transientStock.isTransient(target)
+                ? Math.max(1, Math.min(creep.store.getUsedCapacity(RESOURCE_ENERGY), transientStock.energyNeed(target)))
+                : undefined;
+            if (creep.transfer(target, RESOURCE_ENERGY, amount) === ERR_NOT_IN_RANGE) {
+                creep.moveTo(target, { range: 1 });
+            }
+        });
     },
 
     wanted(room) {

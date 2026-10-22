@@ -10,6 +10,45 @@ const hauler = require("./hauler");
 const roomCache = require("../utils/roomCache");
 const cpuMeter = require("../utils/cpuMeter");
 
+let energyDropTileTick = -1;
+let energyDropTiles = {};
+
+function energyDropsByTile(room) {
+    if (energyDropTileTick !== Game.time) {
+        energyDropTileTick = Game.time;
+        energyDropTiles = {};
+    }
+    if (energyDropTiles[room.name]) return energyDropTiles[room.name];
+
+    const byTile = Object.create(null);
+    const drops = roomCache.droppedResources(room);
+    for (let i = 0; i < drops.length; i++) {
+        const drop = drops[i];
+        if (drop.resourceType !== RESOURCE_ENERGY) continue;
+        const pos = drop.pos;
+        const key = pos.y * 50 + pos.x;
+        if (byTile[key] === undefined) byTile[key] = { drop, index: i };
+    }
+    energyDropTiles[room.name] = byTile;
+    return byTile;
+}
+
+function adjacentEnergyDrop(room, pos) {
+    const byTile = energyDropsByTile(room);
+    let first = null;
+    let firstIndex = Infinity;
+    for (let y = pos.y - 1; y <= pos.y + 1; y++) {
+        for (let x = pos.x - 1; x <= pos.x + 1; x++) {
+            const candidate = byTile[y * 50 + x];
+            if (candidate && candidate.index < firstIndex) {
+                first = candidate.drop;
+                firstIndex = candidate.index;
+            }
+        }
+    }
+    return first;
+}
+
 // Containers adjacent to the source, and the first one no other miner sits on.
 function findContainerSeat(creep, source) {
     const containers = source
@@ -270,31 +309,46 @@ function liveWorkForSource(roomMiners, sourceId, leadTime) {
 // it to both this and distribute() - they used to each re-run their own
 // findInRange for container/link/tower, four native calls a tick instead of
 // one).
-function hasDepositTarget(creep, near) {
-    const container = _.find(
-        near,
-        (s) => s.structureType === STRUCTURE_CONTAINER
-    );
+function nearbyTargets(near) {
+    let container = null;
+    let tower = null;
+    let link = null;
+    let hasLinkCapacity = false;
+    let bestCooldown = Infinity;
+    let bestFree = Infinity;
+
+    for (let i = 0; i < near.length; i++) {
+        const structure = near[i];
+        if (!container && structure.structureType === STRUCTURE_CONTAINER) {
+            container = structure;
+        }
+        if (!tower && structure.structureType === STRUCTURE_TOWER && structure.my) {
+            tower = structure;
+        }
+        if (structure.structureType !== STRUCTURE_LINK || !structure.my || !structure.isCollector()) {
+            continue;
+        }
+        const free = structure.store.getFreeCapacity(RESOURCE_ENERGY);
+        if (free <= 0) continue;
+        hasLinkCapacity = true;
+        // Match the old stable sort: cooldown, then free capacity; exact ties keep `near` order.
+        const cooldown = typeof structure.cooldown === "number" ? structure.cooldown : Infinity;
+        if (!link || cooldown < bestCooldown || (cooldown === bestCooldown && free < bestFree)) {
+            link = structure;
+            bestCooldown = cooldown;
+            bestFree = free;
+        }
+    }
+    return { container, tower, link, hasLinkCapacity };
+}
+
+function hasDepositTarget(targets) {
+    const container = targets.container;
     if (!container) return true;
     if (container.store.getFreeCapacity(RESOURCE_ENERGY) > 0) return true;
+    if (targets.hasLinkCapacity) return true;
 
-    const collectorLinks = _.filter(
-        near,
-        (s) => s.structureType === STRUCTURE_LINK && s.my && s.isCollector()
-    );
-    if (
-        _.some(
-            collectorLinks,
-            (l) => l.store.getFreeCapacity(RESOURCE_ENERGY) > 0
-        )
-    ) {
-        return true;
-    }
-
-    const tower = _.find(
-        near,
-        (s) => s.structureType === STRUCTURE_TOWER && s.my
-    );
+    const tower = targets.tower;
     if (tower && tower.store.getFreeCapacity(RESOURCE_ENERGY) > 0) return true;
 
     return false;
@@ -321,42 +375,17 @@ function harvestPerTick(creep) {
 // `drain` (ROADMAP 0117): the source is empty and waiting to regenerate, so the
 // miner is idle - use that window to empty its own store AND the container into
 // the link / tower, without waiting for a full load or a container backlog.
-function distribute(creep, near, drain) {
-    return cpuMeter.span("miner.distribute", () => distributeNow(creep, near, drain));
+function distribute(creep, targets, drain) {
+    return cpuMeter.span("miner.distribute", () => distributeNow(creep, targets, drain));
 }
 
-function distributeNow(creep, near, drain) {
+function distributeNow(creep, targets, drain) {
     // no CARRY -> nothing to forward (overflow drops straight into the container)
     if (creep.store.getCapacity(RESOURCE_ENERGY) === 0) return;
 
-    const container = _.find(
-        near,
-        (s) => s.structureType === STRUCTURE_CONTAINER
-    );
-    const collectorLinks = _.filter(
-        near,
-        (s) => s.structureType === STRUCTURE_LINK && s.my && s.isCollector()
-    );
-    // Between two adjacent collector links, prefer the one closer to
-    // sending its own load onward (lowest cooldown first - see
-    // structures/link.js's cooldown===0 gate, the one that empties itself
-    // soonest). Once cooldown ties (the common case - both usually sit at
-    // 0), prefer the one closest to full instead of the emptiest: topping
-    // it off gets it to a full send sooner, leaving the emptier one as
-    // spare room for the next cycle. Free capacity must still be > 0 or it
-    // can't take anything at all.
-    const candidateLinks = _.filter(
-        collectorLinks,
-        (l) => l.store.getFreeCapacity(RESOURCE_ENERGY) > 0
-    );
-    const link = _.sortBy(candidateLinks, (l) => [
-        l.cooldown,
-        l.store.getFreeCapacity(RESOURCE_ENERGY),
-    ])[0] || null;
-    const tower = _.find(
-        near,
-        (s) => s.structureType === STRUCTURE_TOWER && s.my
-    );
+    const container = targets.container;
+    const link = targets.link;
+    const tower = targets.tower;
 
     // Every game action costs ~0.2 CPU whatever the code around it does (profile
     // 2026-10-02: the role's own logic was ~0.06 per miner, its harvest + withdraw +
@@ -377,13 +406,7 @@ function distributeNow(creep, near, drain) {
     if (free > 0 && taker) {
         // a pile on the ground decays, so it is always picked up; container energy
         // only when it is a backlog the haulers are not keeping up with
-        const dropped = _.find(
-            roomCache.droppedResources(creep.room),
-            (r) =>
-                r.resourceType === RESOURCE_ENERGY &&
-                Math.abs(r.pos.x - creep.pos.x) <= 1 &&
-                Math.abs(r.pos.y - creep.pos.y) <= 1
-        );
+        const dropped = adjacentEnergyDrop(creep.room, creep.pos);
         if (dropped) {
             creep.pickup(dropped);
         } else if (
@@ -509,7 +532,8 @@ var miner = {
         // cached room list + coordinate check: the native call scanned every structure
         // of the room, once per miner per tick (~1800 inRangeTo/tick in the profile)
         const near = roomCache.structuresInRange(creep.room, creep.pos, 1);
-        if (hasDepositTarget(creep, near)) {
+        const targets = cpuMeter.span("miner.nearbyTargets", () => nearbyTargets(near));
+        if (hasDepositTarget(targets)) {
             if (creep.harvest(source) === ERR_NOT_IN_RANGE && !seekingSeat) {
                 creep.memory.onContainer = false;
                 creep.moveTo(source, { reusePath: 5 });
@@ -518,7 +542,7 @@ var miner = {
 
         // --- distribute what we mined -----------------------------------
         // ROADMAP 0117: nothing left to harvest -> empty the container and the store
-        distribute(creep, near, !!source && source.energy === 0);
+        distribute(creep, targets, !!source && source.energy === 0);
         if (source && source.energy === 0 && !seekingSeat && config.get("miner.sleepWhenDry", true)) {
             const container = creep.memory.onContainer ? containerUnder(creep) : null;
             if (creep.store.getUsedCapacity() === 0 && !(container && container.store.getUsedCapacity(RESOURCE_ENERGY) > 0) &&

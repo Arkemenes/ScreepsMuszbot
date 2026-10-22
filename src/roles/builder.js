@@ -123,6 +123,27 @@ function inRangeOf(creep, list, range) {
     return out;
 }
 
+function mostCompleteInRange(creep, candidates, range, valueKey, totalKey) {
+    const pos = creep.pos;
+    let best = null;
+    let bestRatio = -Infinity;
+    for (let i = 0; i < candidates.length; i++) {
+        const candidate = candidates[i];
+        const p = candidate.pos;
+        if (
+            p.roomName !== pos.roomName ||
+            Math.abs(p.x - pos.x) > range ||
+            Math.abs(p.y - pos.y) > range
+        ) continue;
+        const ratio = candidate[valueKey] / candidate[totalKey];
+        if (!best || ratio > bestRatio) {
+            best = candidate;
+            bestRatio = ratio;
+        }
+    }
+    return best;
+}
+
 function opportunisticWork(creep) {
     return cpuMeter.span("builder.opportunistic", () => opportunisticWorkNow(creep));
 }
@@ -138,20 +159,26 @@ function opportunisticWorkNow(creep) {
     }
 
     // when several are in range, take the one closest to full / finished
-    const hurt = _.sortBy(
-        inRangeOf(creep, criticalRepairCandidates(creep.room), 3),
-        (s) => -(s.hits / s.hitsMax)
-    )[0];
+    const hurt = mostCompleteInRange(
+        creep,
+        criticalRepairCandidates(creep.room),
+        3,
+        "hits",
+        "hitsMax"
+    );
     if (hurt) {
         energyLedger.invoke(creep, "repair", hurt);
         return;
     }
 
     if (resourceTiers.getEconomySnapshot(creep.room).state !== "critical") {
-        const site = _.sortBy(
-            inRangeOf(creep, roomCache.constructionSites(creep.room), 3),
-            (s) => -(s.progress / s.progressTotal)
-        )[0];
+        const site = mostCompleteInRange(
+            creep,
+            roomCache.constructionSites(creep.room),
+            3,
+            "progress",
+            "progressTotal"
+        );
         if (site) {
             energyLedger.invoke(creep, "build", site);
         }

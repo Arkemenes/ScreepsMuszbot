@@ -1235,6 +1235,30 @@ assert(
     "excludeDangerZone is a no-op (same array) when the room isn't under attack"
 );
 global.Memory.rooms.W1N1.defenseActive = true;
+let firstSafeChecks = 0;
+const originalFarClosest = farPos.findClosestByRange;
+const originalNearClosest = nearPos.findClosestByRange;
+farPos.findClosestByRange = function (list) {
+    firstSafeChecks++;
+    return originalFarClosest.call(this, list);
+};
+nearPos.findClosestByRange = function (list) {
+    firstSafeChecks++;
+    return originalNearClosest.call(this, list);
+};
+const firstSafeOnly = combat.excludeDangerZone([safeCandidate, dangerousCandidate], room, true);
+assert(
+    firstSafeOnly.length === 1 && firstSafeOnly[0] === safeCandidate && firstSafeChecks === 1,
+    "0186: first-safe danger filter stops after selecting the first safe pile"
+);
+firstSafeChecks = 0;
+const safeAfterDanger = combat.excludeDangerZone([dangerousCandidate, safeCandidate], room, true);
+assert(
+    safeAfterDanger.length === 1 && safeAfterDanger[0] === safeCandidate && firstSafeChecks === 2,
+    "0186: first-safe danger filter skips dangerous piles in priority order"
+);
+farPos.findClosestByRange = originalFarClosest;
+nearPos.findClosestByRange = originalNearClosest;
 
 // --- planner stall guard: a stamp that never fits must not loop forever ---
 console.log = (...a) => { logs.push(a.join(" ")); };
@@ -1488,13 +1512,73 @@ assert(hlTowerBaseline._to === "tower1",
     hSpawnPriority.transfer = (t) => { hSpawnPriority._to = t && t.id; return OK; };
     hSpawnPriority.memory.job = "deliver";
     hSpawnPriority.pos = new RoomPosition(spawn.pos.x + 1, spawn.pos.y, spawn.pos.roomName);
+    const farProductionExtension = {
+        id: "spawnPriorityFarExtension", my: true, structureType: STRUCTURE_EXTENSION,
+        pos: new RoomPosition(40, 40, spawn.pos.roomName), store: store(0, 50),
+    };
+    REG[farProductionExtension.id] = farProductionExtension;
+    findMap[FIND_STRUCTURES].push(farProductionExtension);
+    findMap[FIND_MY_STRUCTURES].push(farProductionExtension);
+    const spawnPriorityReservations = require(path.join(PROJECT, "src/utils/reservations"));
+    const savedAvailableDeliver = spawnPriorityReservations.availableDeliver;
+    let spawnPriorityReservationChecks = 0;
+    spawnPriorityReservations.availableDeliver = (creep, target) => {
+        spawnPriorityReservationChecks++;
+        return savedAvailableDeliver(creep, target);
+    };
     let spawnPriorityPathCalls = 0;
     hSpawnPriority.pos.findClosestByPath = () => { spawnPriorityPathCalls++; return spawn; };
     hauler.run(hSpawnPriority);
+    spawnPriorityReservations.availableDeliver = savedAvailableDeliver;
+    findMap[FIND_STRUCTURES].pop();
+    findMap[FIND_MY_STRUCTURES].pop();
     assert(hSpawnPriority._to === "spawn1",
         "hauler prioritizes an empty spawn over a tower at 497/1000 (0091)");
     assert(spawnPriorityPathCalls === 0,
         "ARK-116: an adjacent eligible spawn receives delivery without a target-selection path search");
+    assert(spawnPriorityReservationChecks === 1,
+        "0186: adjacent production target avoids checks on farther reservations");
+
+    let reservationChecksByTarget = Object.create(null);
+    let extensionDeliveryBlocked = false;
+    spawnPriorityReservations.availableDeliver = (creep, target) => {
+        reservationChecksByTarget[target.id] =
+            (reservationChecksByTarget[target.id] || 0) + 1;
+        if (target.id === "spawn1") return 0;
+        if (target.id === farProductionExtension.id) {
+            return extensionDeliveryBlocked ? 0 : 100;
+        }
+        return savedAvailableDeliver(creep, target);
+    };
+    const hReservationReuse = makeCreep("HReservationReuse", "hauler", { store: store(200, 200) });
+    hReservationReuse.transfer = (t) => { hReservationReuse._to = t && t.id; return OK; };
+    hReservationReuse.memory.job = "deliver";
+    hReservationReuse.pos = new RoomPosition(spawn.pos.x + 1, spawn.pos.y, spawn.pos.roomName);
+    let reservationReusePathCalls = 0;
+    hReservationReuse.pos.findClosestByPath = () => {
+        reservationReusePathCalls++;
+        return farProductionExtension;
+    };
+    hauler.run(hReservationReuse);
+    assert(hReservationReuse._to === farProductionExtension.id && reservationReusePathCalls === 1,
+        "0186: unavailable adjacent production target falls through to a distant target");
+    assert(reservationChecksByTarget.spawn1 === 1 && reservationChecksByTarget[farProductionExtension.id] === 1,
+        "0186: delivery reservation checks are reused within one pick decision");
+
+    reservationChecksByTarget = Object.create(null);
+    extensionDeliveryBlocked = true;
+    const hChangedAvailability = makeCreep("HChangedAvailability", "hauler", { store: store(200, 200) });
+    hChangedAvailability.transfer = (t) => { hChangedAvailability._to = t && t.id; return OK; };
+    hChangedAvailability.memory.job = "deliver";
+    hChangedAvailability.pos = new RoomPosition(spawn.pos.x + 1, spawn.pos.y, spawn.pos.roomName);
+    hChangedAvailability.pos.findClosestByPath = () => farProductionExtension;
+    hauler.run(hChangedAvailability);
+    assert(hChangedAvailability._to !== farProductionExtension.id &&
+        reservationChecksByTarget.spawn1 === 1 && reservationChecksByTarget[farProductionExtension.id] === 1,
+        "0186: delivery reservation checks refresh on the next pick decision");
+    spawnPriorityReservations.availableDeliver = savedAvailableDeliver;
+    delete REG[farProductionExtension.id];
+
     Game.time++;
     const hFarSpawnPriority = makeCreep("HFarSpawnPriority", "hauler", { store: store(200, 200) });
     hFarSpawnPriority.pos = new RoomPosition(spawn.pos.x + 5, spawn.pos.y, spawn.pos.roomName);
@@ -1971,6 +2055,8 @@ function withFindLookup(pos, lists) {
 // periodically, draining slowly), so this was a routine, repeatable bug, not
 // a rare corner case -------------------------------------------
 {
+    const savedDropsForTowerStorageTests = findMap[FIND_DROPPED_RESOURCES];
+    findMap[FIND_DROPPED_RESOURCES] = [];
     const deadZoneTower = Object.assign(new OwnedStructure(), {
         id: "towerdeadzone", structureType: STRUCTURE_TOWER, my: true,
         pos: new RoomPosition(27, 27, "W1N1"), room,
@@ -2029,6 +2115,7 @@ function withFindLookup(pos, lists) {
     findMap[FIND_MY_STRUCTURES] = findMap[FIND_MY_STRUCTURES].filter(
         (s) => s.id !== "towertoppable"
     );
+    findMap[FIND_DROPPED_RESOURCES] = savedDropsForTowerStorageTests;
 }
 
 // --- a near-full tower (98%, under hauler.toppingOffThreshold free
@@ -3150,12 +3237,12 @@ global.Memory.rooms.W1N1.defenseActive = false;
 // The miner now asks roomCache (room.find(FIND_STRUCTURES) + a coordinate check) what is next to
 // it instead of pos.findInRange: each case sets that room list, in a fresh tick (per-tick cache).
 const minerRoomFind = room.find;
-function minerNear(list) {
+function minerNear(list, advanceTick) {
     room.find = (type, opts) => {
         if (type !== FIND_STRUCTURES) return minerRoomFind.call(room, type, opts);
         return opts && typeof opts.filter === "function" ? list.filter(opts.filter) : list;
     };
-    Game.time++;
+    if (advanceTick !== false) Game.time++;
 }
 const mSource = Object.assign(new Source(), {
     id: "msrc", energy: 3000, energyCapacity: 3000,
@@ -3249,6 +3336,8 @@ assert(seatedMiner(100, true, false) === "mlink",
 // 2c. ROADMAP 0113: the miner forwards its harvest in full loads (each action costs ~0.2 CPU)
 {
     const fiveWork = [{ type: MOVE }, { type: WORK }, { type: WORK }, { type: WORK }, { type: WORK }, { type: WORK }, { type: CARRY }];
+    const savedBatchDrops = findMap[FIND_DROPPED_RESOURCES];
+    findMap[FIND_DROPPED_RESOURCES] = [];
     function batchMiner(held, opts) {
         opts = opts || {};
         room.energyAvailable = 300;
@@ -3262,11 +3351,11 @@ assert(seatedMiner(100, true, false) === "mlink",
         c.actions = [];
         c.transfer = (t) => { c.actions.push("transfer:" + (t && t.id)); return OK; };
         c.withdraw = (t) => { c.actions.push("withdraw:" + (t && t.id)); return OK; };
-        c.pickup = () => { c.actions.push("pickup"); return OK; };
+        c.pickup = (target) => { c.actions.push("pickup:" + (target && target.id)); return OK; };
         mTower.store = Object.assign(store(900, 1000), { getCapacity: () => 1000, getFreeCapacity: () => 100 });
         mContainer.store = Object.assign(store(opts.containerEnergy || 0, 2000), { getFreeCapacity: () => 2000 - (opts.containerEnergy || 0) });
         c.pos.lookFor = () => [mContainer];
-        minerNear([mContainer, mLink]);
+        minerNear(opts.near || [mContainer, mLink], !opts.sameTick);
         const saved = Memory.settings;
         Memory.settings = Object.assign({}, saved, { miner: { batchTransfer: opts.batch !== false } });
         miner.run(c);
@@ -3287,6 +3376,50 @@ assert(seatedMiner(100, true, false) === "mlink",
         if (batchMiner(held).length) { sent++; held = 0; }
     }
     assert(sent === 2, "0113: ten ticks of harvest cost two transfers instead of ten (" + sent + ")");
+
+    const collectorLink = (id, cooldown, free) => Object.assign(new StructureLink(), {
+        id, structureType: STRUCTURE_LINK, my: true, cooldown,
+        pos: new RoomPosition(4, 5, "W1N1"),
+        store: Object.assign(store(100 - free, 100), { getFreeCapacity: () => free }),
+        isCollector: () => true,
+    });
+    const slowLink = collectorLink("m-slow", 1, 10);
+    const preferredLink = collectorLink("m-preferred", 0, 50);
+    const tiedLink = collectorLink("m-tied", 0, 50);
+    const higherFreeLink = collectorLink("m-higher-free", 0, 75);
+    const linkActions = batchMiner(41, {
+        near: [mContainer, mTower, slowLink, preferredLink, tiedLink, higherFreeLink],
+    });
+    assert(linkActions.join() === "transfer:m-preferred",
+        "0186: miner distribution keeps target and first-drop choices");
+
+    let dropPosReads = 0;
+    const indexedDrops = [];
+    const addIndexedDrop = (id, x, y, resourceType) => {
+        const dropPos = new RoomPosition(x, y, "W1N1");
+        const drop = { id, amount: 100, resourceType: resourceType || RESOURCE_ENERGY };
+        Object.defineProperty(drop, "pos", { get() { dropPosReads++; return dropPos; } });
+        indexedDrops.push(drop);
+        return drop;
+    };
+    addIndexedDrop("m-mineral-drop", 4, 6, "Z");
+    for (let i = 0; i < 8; i++) addIndexedDrop("m-far-drop-" + i, 20 + i, 20, RESOURCE_ENERGY);
+    const firstAdjacent = addIndexedDrop("m-first-adjacent", 3, 6, RESOURCE_ENERGY);
+    addIndexedDrop("m-second-adjacent", 5, 4, RESOURCE_ENERGY);
+    findMap[FIND_DROPPED_RESOURCES] = indexedDrops;
+    const firstPickupActions = batchMiner(0);
+    const readsAfterFirstMiner = dropPosReads;
+    const secondPickupActions = batchMiner(0, { sameTick: true });
+    assert(
+        firstPickupActions.join() === "pickup:" + firstAdjacent.id &&
+            secondPickupActions.join() === "pickup:" + firstAdjacent.id,
+        "0186: miner distribution keeps target and first-drop choices"
+    );
+    assert(
+        readsAfterFirstMiner === indexedDrops.length - 1 && dropPosReads === readsAfterFirstMiner,
+        "0186: miner reuses adjacent drop tile index within the tick"
+    );
+    findMap[FIND_DROPPED_RESOURCES] = savedBatchDrops;
 }
 
 // 2d. ROADMAP 0117: with the source empty (waiting to regenerate) the miner empties its
@@ -4992,10 +5125,12 @@ findMap[FIND_HOSTILE_CREEPS] = [];
         });
         REG[oppSite.id] = oppSite;
 
+        let oppStructures = [hurtExt];
+        let oppConstructionSites = [oppSite];
         function oppFind(type, opts) {
             let list = [];
-            if (type === FIND_STRUCTURES) list = [hurtExt];
-            if (type === FIND_MY_CONSTRUCTION_SITES) list = [oppSite];
+            if (type === FIND_STRUCTURES) list = oppStructures;
+            if (type === FIND_MY_CONSTRUCTION_SITES) list = oppConstructionSites;
             if (opts && typeof opts.filter === "function") list = list.filter(opts.filter);
             return list;
         }
@@ -5038,6 +5173,68 @@ findMap[FIND_HOSTILE_CREEPS] = [];
         builder.run(oppCreep);
         assert(oppBuilds.length === 1 && oppBuilds[0] === oppSite && oppRepairs.length === 0,
             "ARK-116: a builder already at its Build target issues one build intent, not two (builds " + oppBuilds.length + ")");
+
+        const lessCompleteExt = Object.assign(new OwnedStructure(), {
+            id: "bopp-less-complete", structureType: STRUCTURE_EXTENSION,
+            hits: 2, hitsMax: 100, my: true, pos: new RoomPosition(10, 10, "BOppRoom"),
+        });
+        const moreCompleteExt = Object.assign(new OwnedStructure(), {
+            id: "bopp-more-complete", structureType: STRUCTURE_EXTENSION,
+            hits: 8, hitsMax: 100, my: true, pos: new RoomPosition(12, 10, "BOppRoom"),
+        });
+        REG[lessCompleteExt.id] = lessCompleteExt;
+        REG[moreCompleteExt.id] = moreCompleteExt;
+        oppStructures = [lessCompleteExt, moreCompleteExt];
+        delete oppCreep.memory.stack;
+        oppRepairs.length = 0;
+        Game.time += 10; // pass repair.scanTicks so new targets enter the damaged-ID cache
+        const opportunisticCriticalIds = require(path.join(PROJECT, "src/utils/damagedStructures"))
+            .critical(oppCreep.room).map((target) => target.id);
+        assert(opportunisticCriticalIds.includes(lessCompleteExt.id) &&
+            opportunisticCriticalIds.includes(moreCompleteExt.id),
+            "0186: opportunistic repair fixture provides both critical targets (got " + opportunisticCriticalIds.join(",") + ")");
+        builder.run(oppCreep);
+        assert(oppRepairs[0] === moreCompleteExt,
+            "0186: opportunistic repair selects the most complete in-range candidate (got " +
+                oppRepairs.map((target) => target && target.id).join(",") + ")");
+
+        const tiedRepairFirst = Object.assign(new OwnedStructure(), {
+            id: "bopp-tie-first", structureType: STRUCTURE_EXTENSION,
+            hits: 5, hitsMax: 100, my: true, pos: new RoomPosition(10, 10, "BOppRoom"),
+        });
+        const tiedRepairSecond = Object.assign(new OwnedStructure(), {
+            id: "bopp-tie-second", structureType: STRUCTURE_EXTENSION,
+            hits: 5, hitsMax: 100, my: true, pos: new RoomPosition(12, 10, "BOppRoom"),
+        });
+        REG[tiedRepairFirst.id] = tiedRepairFirst;
+        REG[tiedRepairSecond.id] = tiedRepairSecond;
+        oppStructures = [tiedRepairFirst, tiedRepairSecond];
+        delete oppCreep.memory.stack;
+        oppRepairs.length = 0;
+        Game.time += 10;
+        builder.run(oppCreep);
+        assert(oppRepairs[0] === tiedRepairFirst,
+            "0186: opportunistic repair preserves input order for equal ratios (got " +
+                oppRepairs.map((target) => target && target.id).join(",") + ")");
+
+        const lessCompleteSite = Object.assign(new ConstructionSite(), {
+            id: "bopp-less-site", structureType: STRUCTURE_EXTENSION,
+            progress: 20, progressTotal: 100, pos: new RoomPosition(10, 10, "BOppRoom"),
+        });
+        const moreCompleteSite = Object.assign(new ConstructionSite(), {
+            id: "bopp-more-site", structureType: STRUCTURE_EXTENSION,
+            progress: 60, progressTotal: 100, pos: new RoomPosition(12, 10, "BOppRoom"),
+        });
+        REG[lessCompleteSite.id] = lessCompleteSite;
+        REG[moreCompleteSite.id] = moreCompleteSite;
+        oppStructures = [];
+        oppConstructionSites = [lessCompleteSite, moreCompleteSite];
+        delete oppCreep.memory.stack;
+        oppBuilds.length = 0;
+        Game.time += 10;
+        builder.run(oppCreep);
+        assert(oppBuilds[0] === moreCompleteSite,
+            "0186: opportunistic construction selects the most complete in-range site");
 
         // ARK-116: holding energy with nothing to build/repair/upgrade -> look again only later
         Memory.rooms.BIdleRoom = {};
@@ -11202,7 +11399,11 @@ Game.rooms.W1N2 = { name: "W1N2", controller: { my: false } };
         });
         let dropSearches = 0;
         const innerLookup = hTiny.pos.findClosestByPath;
-        hTiny.pos.findClosestByPath = function (a, opts) { if (a === FIND_DROPPED_RESOURCES) dropSearches++; return innerLookup.call(this, a, opts); };
+        hTiny.pos.findClosestByPath = function (a, opts) {
+            if (a === FIND_DROPPED_RESOURCES ||
+                (Array.isArray(a) && a.some((drop) => drop.resourceType === RESOURCE_ENERGY))) dropSearches++;
+            return innerLookup.call(this, a, opts);
+        };
         hTiny.pickup = noop;
         hTiny.memory.job = "load";
         hauler.run(hTiny);
@@ -11229,7 +11430,11 @@ Game.rooms.W1N2 = { name: "W1N2", controller: { my: false } };
         let searches = 0;
         const counted = (c) => {
             const inner = c.pos.findClosestByPath;
-            c.pos.findClosestByPath = function (a2, o2) { if (a2 === FIND_DROPPED_RESOURCES) searches++; return inner.call(this, a2, o2); };
+            c.pos.findClosestByPath = function (a2, o2) {
+                if (a2 === FIND_DROPPED_RESOURCES ||
+                    (Array.isArray(a2) && a2.some((drop) => drop.resourceType === RESOURCE_ENERGY))) searches++;
+                return inner.call(this, a2, o2);
+            };
             return c;
         };
         const picker = counted(mkPicker());
@@ -11250,7 +11455,10 @@ Game.rooms.W1N2 = { name: "W1N2", controller: { my: false } };
         hauler.pickLoad(picker); // fresh pick again, cached
         const big = mkDrop("keepbig1", 900);
         findMap[FIND_DROPPED_RESOURCES] = [keepDrop, big];
-        picker.pos.findClosestByPath = (a2, o2) => (a2 === FIND_DROPPED_RESOURCES ? big : null);
+        picker.pos.findClosestByPath = (a2, o2) =>
+            Array.isArray(a2) && a2.some((drop) => drop.id === big.id && (!o2 || !o2.filter || o2.filter(drop)))
+                ? big
+                : a2 === FIND_DROPPED_RESOURCES ? big : null;
         Game.time++;
         const forced = hauler.pickLoad(picker);
         assert(forced && forced.id === "keepbig1" && forced.tier === "bigDrop",
@@ -12579,6 +12787,98 @@ function mineralStore(resources, freeCap) {
     const protectedJob = hauler.battlefieldLootJob(salvageRoom);
     assert(protectedJob === null,
         "battlefieldLootJob() ignores an old-owner store behind a hostile rampart");
+
+    const cacheDrop = Object.assign(new RoomObject(), {
+        id: "cacheSalvageDrop", resourceType: "Z", amount: 90,
+        pos: new RoomPosition(12, 10, "CacheSalvageRoom"),
+    });
+    const cacheDropTie = Object.assign(new RoomObject(), {
+        id: "cacheSalvageDropTie", resourceType: "Y", amount: 90,
+        pos: new RoomPosition(13, 10, "CacheSalvageRoom"),
+    });
+    const cacheStore = Object.assign(new StructureContainer(), {
+        id: "cacheSalvageStore", structureType: STRUCTURE_CONTAINER, my: false,
+        pos: new RoomPosition(20, 20, "CacheSalvageRoom"),
+        store: mineralStore({ X: 120 }, 1880),
+    });
+    const cacheRampart = Object.assign(new Structure(), {
+        id: "cacheSalvageRampart", structureType: STRUCTURE_RAMPART, my: true,
+        pos: new RoomPosition(20, 20, "CacheSalvageRoom"),
+    });
+    const cacheRoom = {
+        name: "CacheSalvageRoom", storage: lootStorage, terminal: null,
+        find: (type) => {
+            if (type === FIND_STRUCTURES) return [cacheStore, cacheRampart];
+            if (type === FIND_DROPPED_RESOURCES) return [cacheDrop, cacheDropTie];
+            return [];
+        },
+    };
+    const resourcePolicy = require(path.join(PROJECT, "src/utils/resourcePolicy"));
+    const savedSettings = Memory.settings;
+    const cacheSettings = Object.assign({}, savedSettings || {});
+    cacheSettings.hauler = Object.assign({}, cacheSettings.hauler || {}, { minLootLoad: 50 });
+    cacheSettings.salvage = Object.assign({}, cacheSettings.salvage || {}, { enabled: true });
+    const originalByDecay = salvageUtil.byDecay;
+    const originalExcludeProtected = salvageUtil.excludeProtected;
+    const originalDestination = resourcePolicy.destination;
+    const destinationA = { id: "cacheDestinationA", store: { getFreeCapacity: () => 1000 } };
+    const destinationB = { id: "cacheDestinationB", store: { getFreeCapacity: () => 1000 } };
+    let decaySorts = 0;
+    let safetyChecks = 0;
+    let destinationChecks = 0;
+    try {
+        Memory.settings = cacheSettings;
+        salvageUtil.byDecay = (piles) => {
+            decaySorts++;
+            return originalByDecay(piles);
+        };
+        salvageUtil.excludeProtected = (piles, room) => {
+            safetyChecks++;
+            return originalExcludeProtected(piles, room);
+        };
+        resourcePolicy.destination = () => {
+            destinationChecks++;
+            return destinationChecks === 1 ? destinationA : destinationB;
+        };
+
+        Game.time++;
+        const cachedDropJob = hauler.battlefieldLootJob(cacheRoom);
+        cacheDrop.amount = 20;
+        cacheDropTie.amount = 20;
+        const cachedStoreJob = hauler.battlefieldLootJob(cacheRoom);
+        cacheRampart.my = false;
+        const protectedCacheJob = hauler.battlefieldLootJob(cacheRoom);
+        cacheRampart.my = true;
+        cacheDrop.amount = 90;
+        cacheDropTie.amount = 90;
+        const refreshedDropJob = hauler.battlefieldLootJob(cacheRoom);
+        assert(
+            cachedDropJob && cachedDropJob.from === cacheDrop &&
+                cachedStoreJob && cachedStoreJob.from === cacheStore &&
+                refreshedDropJob && refreshedDropJob.from === cacheDrop && decaySorts === 1,
+            "0186: salvage candidate cache preserves decay priority"
+        );
+        assert(
+            cachedDropJob.to === destinationA && cachedStoreJob.to === destinationB &&
+                protectedCacheJob === null && safetyChecks === 4 && destinationChecks === 3,
+            "0186: salvage candidate cache refreshes dynamic safety and stock checks"
+        );
+
+        cacheSettings.hauler.minLootLoad = 200;
+        assert(hauler.battlefieldLootJob(cacheRoom) === null, "0186: threshold change has no eligible salvage");
+        cacheSettings.salvage.enabled = false;
+        assert(hauler.battlefieldLootJob(cacheRoom) === null, "0186: disabled salvage has no candidates");
+        cacheSettings.salvage.enabled = true;
+        assert(hauler.battlefieldLootJob(cacheRoom) === null, "0186: reenabled salvage still honors threshold");
+        Game.time++;
+        assert(hauler.battlefieldLootJob(cacheRoom) === null && decaySorts === 5,
+            "0186: salvage candidate cache invalidates on config and tick changes");
+    } finally {
+        salvageUtil.byDecay = originalByDecay;
+        salvageUtil.excludeProtected = originalExcludeProtected;
+        resourcePolicy.destination = originalDestination;
+        Memory.settings = savedSettings;
+    }
 }
 
 // --- hauler.spawnsAndExtensionsFull() gates the mineral-job cascade ------
@@ -18139,17 +18439,18 @@ function priceSamples(bid, ask, n, vol) {
 // 0126: avoid walking to overflow already covered by a container.
 {
     const haul = require(path.join(PROJECT, "src/roles/hauler"));
+    const reservations = require(path.join(PROJECT, "src/utils/reservations"));
     const saved = { time: Game.time, creeps: Game.creeps, get: Game.getObjectById, settings: Memory.settings, mem: Memory.rooms.W8N8 };
     const name = "W8N8", objects = {}, calls = {};
-    let containers = [], drops = [], links = [], searches = 0;
+    let containers = [], drops = [], links = [], extraStructures = [], searches = 0, energyCandidates = null;
     const pos = (x, y) => new RoomPosition(x, y, name);
     const source = { id: "126-source", pos: pos(10, 10) };
     const sourceBox = { id: "126-box", structureType: STRUCTURE_CONTAINER, pos: pos(10, 11), store: store(2000, 2000) };
     const receiving = { id: "126-link", structureType: STRUCTURE_LINK, pos: pos(20, 20), store: store(800, 800), isCollector: () => false };
     const localRoom = { name, storage: null, terminal: null, find: type => {
         calls[type] = (calls[type] || 0) + 1;
-        if (type === FIND_STRUCTURES) return containers.concat(links);
-        if (type === FIND_MY_STRUCTURES) return links;
+        if (type === FIND_STRUCTURES) return containers.concat(links, extraStructures);
+        if (type === FIND_MY_STRUCTURES) return links.concat(extraStructures);
         if (type === FIND_DROPPED_RESOURCES) return drops;
         if (type === FIND_SOURCES) return [source];
         return [];
@@ -18158,10 +18459,12 @@ function priceSamples(bid, ask, n, vol) {
         const value = { id, resourceType: RESOURCE_ENERGY, amount, pos: pos(x, y) };
         objects[id] = value; return value;
     };
-    const picker = suffix => ({ name: "H126-" + suffix, room: localRoom, memory: {}, store: store(0, 1000), pos: {
-        getRangeTo: () => 0,
+    const picker = (suffix, getRangeTo) => ({ name: "H126-" + suffix, room: localRoom, memory: {}, store: store(0, 1000), pos: {
+        getRangeTo: resource => getRangeTo ? getRangeTo(resource) : 0,
         findClosestByPath: (list, opts) => {
             searches++;
+            if (Array.isArray(list) && list.some(value => value.resourceType === RESOURCE_ENERGY))
+                energyCandidates = list.map(value => value.id);
             const candidates = list === FIND_DROPPED_RESOURCES ? drops : list;
             return candidates.find(value => !opts || !opts.filter || opts.filter(value)) || null;
         },
@@ -18193,14 +18496,72 @@ function priceSamples(bid, ask, n, vol) {
         containers = [sourceBox, otherBox]; links = []; drops = [pile("126-small-covered", 300, 30, 30)];
         picked = haul.pickLoad(picker("small"));
         assert(picked && picked.id === sourceBox.id && picked.act === "withdraw", "0126: small drops under any container are excluded");
-        next(); containers = []; links = [receiving]; drops = [pile("126-cache-drop", 300, 30, 30)];
+        next();
+        const extraBox = { id: "126-extra-box", structureType: STRUCTURE_CONTAINER, pos: pos(31, 31), store: store(0, 2000) };
+        const coveredDrop = pile("126-covered-drop", 300, 31, 31);
+        const mineralDrop = { id: "126-mineral-drop", resourceType: "Z", amount: 300, pos: pos(32, 32) };
+        containers = [extraBox]; links = [receiving];
+        drops = [pile("126-cache-drop", 300, 30, 30), coveredDrop, mineralDrop];
         const changing = picker("changing");
         Game.creeps[changing.name] = changing;
         picked = haul.pickLoad(changing);
         assert(picked && picked.id === "126-cache-drop", "0126: uncovered small pickup can enter the target cache");
-        next(); containers = [sourceBox, otherBox];
+        assert(energyCandidates && energyCandidates.join(",") === "126-cache-drop",
+            "0186: pickLoad reuses room energy drop candidates");
+        next(); containers = [sourceBox, otherBox, extraBox];
         picked = haul.pickLoad(changing);
         assert(picked && picked.id === receiving.id && picked.dest === "storage", "0126: a cached pickup covered by a container is reselected");
+        next(); containers = []; links = []; drops = [pile("126-threshold-drop", 501, 26, 25)];
+        let thresholdRangeReads = 0;
+        const thresholdRange = () => { thresholdRangeReads++; return 1; };
+        picked = haul.pickLoad(picker("threshold", thresholdRange));
+        assert(picked && picked.id === "126-threshold-drop" && picked.tier !== "bigDrop",
+            "0186: near-threshold drop keeps the common pickup tier");
+        assert(thresholdRangeReads === 1,
+            "0186: drop range estimate is reused across priority checks within a decision");
+        picked = haul.pickLoad(picker("threshold-repeat", thresholdRange));
+        assert(picked && picked.id === "126-threshold-drop" && thresholdRangeReads === 2,
+            "0186: drop estimate cache is discarded after each decision");
+        next(); containers = [sourceBox]; links = [receiving]; drops = [];
+        const savedAvailable = reservations.available;
+        let receivingReservationChecks = 0;
+        let receivingAvailable = 0;
+        reservations.available = (creep, target) => {
+            if (target.id === receiving.id) {
+                receivingReservationChecks++;
+                return receivingAvailable;
+            }
+            return savedAvailable(creep, target);
+        };
+        try {
+            picked = haul.pickLoad(picker("reserved-link-blocked"));
+            assert(picked && picked.id === sourceBox.id && receivingReservationChecks === 1,
+                "0186: load decision reuses a link reservation across priority checks");
+            receivingAvailable = 100;
+            picked = haul.pickLoad(picker("reserved-link-open"));
+            assert(picked && picked.id === receiving.id && receivingReservationChecks === 2,
+                "0186: load decision rechecks link reservation on its next call");
+        } finally {
+            reservations.available = savedAvailable;
+        }
+        next(); containers = []; links = []; drops = [];
+        const essentialSpawn = {
+            id: "126-essential-spawn", structureType: STRUCTURE_SPAWN, my: true,
+            pos: pos(25, 25), store: store(0, 300),
+        };
+        extraStructures = [essentialSpawn];
+        objects[essentialSpawn.id] = essentialSpawn;
+        const essentialPicker = picker("essential-check");
+        let nearestEssentialLookups = 0;
+        essentialPicker.pos.findClosestByRange = list => {
+            if (list.some(target => target.id === essentialSpawn.id)) nearestEssentialLookups++;
+            return list[0] || null;
+        };
+        picked = haul.pickLoad(essentialPicker);
+        assert(!picked && nearestEssentialLookups === 0,
+            "0186: load checks essential target presence without nearest-target search");
+        delete objects[essentialSpawn.id];
+        extraStructures = [];
         next(); drops = [pile("126-shared-covered", 5000)];
         haul.pickLoad(picker("shared1")); haul.pickLoad(picker("shared2"));
         assert(calls[FIND_STRUCTURES] === 1 && calls[FIND_DROPPED_RESOURCES] === 1, "0126: container positions are shared by haulers within a tick");

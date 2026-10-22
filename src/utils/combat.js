@@ -212,9 +212,15 @@ function takeCover(creep) {
 // nothing filtered) while the room isn't under attack - the common case -
 // so this costs nothing beyond the one Memory read every other check here
 // already pays.
-function excludeDangerZone(candidates, room) {
+function excludeDangerZone(candidates, room, firstOnly) {
     const mem = Memory.rooms[room.name];
-    if (!mem || !mem.defenseActive) return candidates;
+    if (!mem || !mem.defenseActive) return firstOnly ? candidates.slice(0, 1) : candidates;
+    if (firstOnly) {
+        for (let i = 0; i < candidates.length; i++) {
+            if (!isDangerous(candidates[i].pos, room)) return [candidates[i]];
+        }
+        return [];
+    }
     return _.filter(candidates, (c) => !isDangerous(c.pos, room));
 }
 

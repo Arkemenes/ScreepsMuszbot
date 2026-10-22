@@ -42,6 +42,12 @@ module.exports = function (project, assert) {
         assert(Memory.routingAggressors.TransitAlly.tick > first, "0129: new damage renews the incident window");
         global.allowPlayer("TransitAlly");
         assert(!safety.isBlockedRoom(room.name), "0129: allowPlayer clears learned evidence immediately");
+        Memory.routingAggressors = {};
+        safety.isBlockedRoom(room.name); // warm the same-tick cache with an empty record map
+        Memory.routingAggressors = { TransitAlly: { room: room.name, tick: Game.time - 1 } };
+        assert(safety.isBlockedRoom(room.name), "0186: learned-player cache refreshes when incident memory is replaced in the same tick");
+        Memory.routingAggressors = {};
+        assert(!safety.isBlockedRoom(room.name), "0186: learned-player cache refreshes when incident memory is cleared in the same tick");
         events = [attack(victim.id, 0), attack("foreign-victim", 100), attack(victim.id, 100, "unknown"),
             { event: 999, objectId: tower.id, data: { targetId: victim.id, damage: 100 } }];
         next(); safety.observeRoom(room);
