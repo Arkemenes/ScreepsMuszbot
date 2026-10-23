@@ -127,6 +127,17 @@ function claim(creep, id) {
     if (!_.some(list, (o) => o.name === creep.name)) list.push(creep);
 }
 
+// room the other creeps that claimed `id` still have to fill - energy already on its
+// way out of that pile
+function claimedLoad(creep, id) {
+    rebuild();
+    let sum = 0;
+    for (const other of byTarget[id] || []) {
+        if (other.name !== creep.name) sum += other.store.getFreeCapacity(RESOURCE_ENERGY);
+    }
+    return sum;
+}
+
 function release(creep) {
     const id = creep.memory.loadTarget;
     if (!id) return;
@@ -205,6 +216,7 @@ module.exports = {
     available,
     usable,
     claim,
+    claimedLoad,
     release,
     economyStable,
     ECONOMY_PICKERS,

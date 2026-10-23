@@ -16,10 +16,16 @@ const census = require("../utils/census");
 const cpuTier = require("../utils/cpuTier");
 const { hasLinkNetwork } = require("../utils/energy");
 
+// The early bootstrap buffer (utils/bootstrapStorage) is aliased as room.storage but is
+// only a 2000-capacity container: the room still has no real storage for this rule.
+function hasRealStorage(room) {
+    return !!room.storage && room.storage.structureType !== STRUCTURE_CONTAINER;
+}
+
 function applies(room) {
     const ctrl = room.controller;
     return !!(config.get("noStorageEconomy.enabled", true) && ctrl && ctrl.my && ctrl.level < 8 &&
-        !room.storage && !hasLinkNetwork(room));
+        !hasRealStorage(room) && !hasLinkNetwork(room));
 }
 
 function ema(prev, sample) {
@@ -39,7 +45,7 @@ function observe(room, mem, pressure, surplus, baseUpgraders) {
     if (st.p >= config.get("noStorageEconomy.pressureHigh", 0.5)) st.h = 1;
     else if (st.p <= config.get("noStorageEconomy.pressureLow", 0.2)) st.h = 0;
 
-    const cooldown = config.get("noStorageEconomy.surplusCooldown", 1500);
+    const cooldown = config.get("noStorageEconomy.surplusCooldown", 500);
     if (Game.time - st.upTick >= cooldown || Game.time < st.upTick) {
         const cap = config.get("noStorageEconomy.maxUpgraders", 5);
         if (st.s >= config.get("noStorageEconomy.surplusHigh", 0.6) && baseUpgraders + st.up < cap &&
@@ -55,7 +61,8 @@ function observe(room, mem, pressure, surplus, baseUpgraders) {
 }
 
 // The excess hauler that should go back to the spawn: when the room has more haulers
-// than it wants, the one closest to dying goes (one at a time, only once it is idle).
+// than it wants, the one closest to dying goes (one at a time, only once it is idle -
+// empty with nothing to load, or full with nowhere to deliver).
 function isExcessHauler(creep, wanted) {
     if (!applies(creep.room)) return false;
     const haulers = census.creepsByRole(creep.room.name, "hauler");

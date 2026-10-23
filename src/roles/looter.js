@@ -9,8 +9,13 @@ const routing = require("../utils/routing");
 const names = require("../utils/names");
 const config = require("../utils/config");
 const salvage = require("../utils/salvage");
+const roomCache = require("../utils/roomCache");
 const remotes = require("../rooms/remotes");
 const looting = require("../rooms/looting");
+const lootRelay = require("../rooms/lootRelay");
+
+// Heap: tick a relay giver started waiting at its handoff point.
+const relayWaits = new Map();
 
 // Heap: each delivery pick runs a room-graph search per owned room
 // (remotes.roomDistance), so reuse it while the looter stays in one room.
@@ -96,6 +101,85 @@ function take(creep, pile) {
     if (resource) creep.withdraw(pile, resource);
 }
 
+// Collect in the mission room; false when it is empty (mission finished).
+function collect(creep, loot) {
+    // floor first (0169): dropped resources decay, stores don't
+    const pile = salvage.closestDecayFirst(creep, looting.lootablePiles(creep.room));
+    if (!pile) {
+        looting.finish(loot, "nothing left to take");
+        creep.memory.unloading = creep.store.getUsedCapacity() > 0;
+        return false;
+    }
+    take(creep, pile);
+    return true;
+}
+
+// A full giver waits at its handoff point at most loot.relayWaitTicks, then
+// delivers this load itself through the 0184 flow.
+function waitForLink(creep) {
+    const since = relayWaits.get(creep.name);
+    if (since === undefined || Game.time < since) {
+        relayWaits.set(creep.name, Game.time);
+        return;
+    }
+    if (Game.time - since >= config.get("loot.relayWaitTicks", 50)) {
+        relayWaits.delete(creep.name);
+        creep.memory.unloading = true;
+    }
+}
+
+// Last link: storage of the mother, else a mother container with room, else wait.
+function deliverRelay(creep, link, resource) {
+    const fits = (s) => s && s.store && s.store.getFreeCapacity(resource) > 0;
+    let dest = Game.getObjectById(link.dest);
+    if (!fits(dest)) {
+        const mother = Game.rooms[creep.memory.home];
+        dest = mother && (fits(mother.storage) ? mother.storage
+            : roomCache.structures(mother).find((s) => s.structureType === STRUCTURE_CONTAINER && fits(s)));
+    }
+    if (!dest) return; // mother full: hold the cargo where the chain ends
+    if (creep.pos.isNearTo(dest)) creep.transfer(dest, resource);
+    else if (creep.room.name === dest.pos.roomName && lootRelay.indexOf(link.plan, creep.pos) === link.end) {
+        creep.moveTo(dest, { range: 1, reusePath: 10 });
+    } else lootRelay.walk(creep, link.plan, link.end);
+}
+
+function runRelay(creep, loot, link) {
+    const resource = cargoResource(creep);
+    const free = creep.store.getFreeCapacity();
+    // First link: fills up in the mission room, partial loads included.
+    if (link.seg === 0 && (!resource || free > 0)) {
+        if (creep.room.name === loot.room) {
+            relayWaits.delete(creep.name);
+            collect(creep, loot);
+            return;
+        }
+        if (!resource) {
+            relayWaits.delete(creep.name);
+            lootRelay.walk(creep, link.plan, 0);
+            return;
+        }
+    }
+    if (!resource) {
+        relayWaits.delete(creep.name);
+        lootRelay.walk(creep, link.plan, link.start);
+        return;
+    }
+    if (link.seg === link.n - 1) {
+        deliverRelay(creep, link, resource);
+        return;
+    }
+    const receiver = link.next && Game.creeps[link.next];
+    if (receiver && creep.pos.isNearTo(receiver) && receiver.store.getFreeCapacity() > 0) {
+        relayWaits.delete(creep.name);
+        creep.transfer(receiver, resource);
+        return;
+    }
+    const handoff = link.end - 1;
+    if (lootRelay.indexOf(link.plan, creep.pos) === handoff) waitForLink(creep);
+    else lootRelay.walk(creep, link.plan, handoff);
+}
+
 const looter = {
     run(creep) {
         let loot = looting.forCreep(creep);
@@ -103,6 +187,15 @@ const looter = {
         const target = creep.memory.targetRoom;
         const active = !!loot;
         const carrying = creep.store.getUsedCapacity() > 0;
+
+        // ROADMAP 0187: a live chain takes over until a stalled handoff
+        // falls back to delivering this load directly (memory.unloading).
+        const link = active && !creep.memory.unloading && lootRelay.enabled(loot)
+            ? lootRelay.link(loot, creep, looting.looters(loot).filter((c) => !c.spawning)) : null;
+        if (link) {
+            runRelay(creep, loot, link);
+            return;
+        }
 
         if (
             creep.memory.unloading ||
@@ -121,15 +214,7 @@ const looter = {
             travel(creep, target);
             return;
         }
-
-        // floor first (0169): dropped resources decay, stores don't
-        const pile = salvage.closestDecayFirst(creep, looting.lootablePiles(creep.room));
-        if (!pile) {
-            looting.finish(loot, "nothing left to take");
-            creep.memory.unloading = carrying;
-            return;
-        }
-        take(creep, pile);
+        collect(creep, loot);
     },
 
     wanted(room) {

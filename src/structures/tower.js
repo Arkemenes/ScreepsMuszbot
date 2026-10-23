@@ -190,10 +190,14 @@ function findRepairTarget(tower) {
     // after the critical entries can pass towerMayRepair - stop there instead of
     // walking (and tier()-ing) every damaged structure of the room, per tower, per tick
     const nonCritical = rampartRepair.towerMayRepairNonCritical(tower);
+    const harden = rampartRepair.towerMayHarden();
     let target = null;
     for (let i = 0; i < candidates.length; i++) {
         const s = candidates[i];
         if (!nonCritical && rampartRepair.tier(s) !== "critical") break;
+        // optimal ramparts/walls sort last: without tower hardening nothing after
+        // the first one is the tower's to repair
+        if (!harden && rampartRepair.isDefensive(s) && rampartRepair.tier(s) === "optimal") break;
         if (!claimed.has(s.id) && rampartRepair.towerMayRepair(s, tower)) {
             target = s;
             break;

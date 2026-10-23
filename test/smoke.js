@@ -2809,7 +2809,7 @@ assert(needs.roomNeeds(room).hauler >= 2,
     st().upTick = Game.time;
     for (let i = 0; i < 8; i++) r = sample(false, true);
     assert(r.upgraderExtra === 0, "0185: no upgrader before surplusCooldown elapses");
-    Game.time += 1500;
+    Game.time += 500;
     r = sample(false, true);
     const first = r.upgraderExtra;
     r = sample(false, true);
@@ -2837,12 +2837,96 @@ assert(needs.roomNeeds(room).hauler >= 2,
     census.creepsByRole = realByRole;
     assert(JSON.stringify(pick) === "[false,true,false]" && second === false,
         "0185: with more haulers than wanted only the one closest to dying recycles, one at a time (" + JSON.stringify(pick) + "/" + second + ")");
+    {
+        // surplus: a full hauler with nowhere to deliver is still checked for excess
+        const hx = makeCreep("nseFull", "hauler", { store: store(200, 200) });
+        hx.memory.job = "deliver";
+        const realExcess = nse.isExcessHauler, realRecycle = nse.recycle;
+        const savedEA = room.energyAvailable;
+        room.energyAvailable = room.energyCapacityAvailable;
+        let recycled = null;
+        nse.isExcessHauler = (c) => c === hx;
+        nse.recycle = (c) => { recycled = c.name; return true; };
+        try { hauler.run(hx); } finally {
+            nse.isExcessHauler = realExcess;
+            nse.recycle = realRecycle;
+            room.energyAvailable = savedEA;
+        }
+        assert(hx.memory.recycle === true && recycled === "nseFull",
+            "0185: an excess hauler full with nowhere to deliver recycles too (" + hx.memory.recycle + "/" + recycled + ")");
+    }
+    {
+        // storage ping-pong: an optional consumer already covered by haulers loading
+        // from storage does not send another one there
+        const reservations = require(path.join(PROJECT, "src/utils/reservations"));
+        const roomCache = require(path.join(PROJECT, "src/utils/roomCache"));
+        const buf = { id: "bufPing", structureType: STRUCTURE_CONTAINER, store: store(2000, 2000), pos: room.storage ? room.storage.pos : undefined };
+        const cc = { id: "ccPing", structureType: STRUCTURE_CONTAINER, store: store(1800, 2000) };
+        const savedStorage = room.storage, savedEA = room.energyAvailable;
+        const realAD = reservations.availableDeliver, realCL = reservations.claimedLoad, realNear = roomCache.structuresNear;
+        room.storage = buf;
+        room.energyAvailable = room.energyCapacityAvailable;
+        roomCache.structuresNear = (rm, pos, type, range) => rm === room && type === STRUCTURE_CONTAINER ? [cc] : realNear(rm, pos, type, range);
+        reservations.availableDeliver = (c, t) => t === cc ? 200 : realAD(c, t);
+        const pick = (loading) => {
+            reservations.claimedLoad = () => loading;
+            Game.time++;
+            const hp = makeCreep("nsePing" + loading, "hauler", { store: store(0, 200) });
+            const src = hauler.pickLoad(hp);
+            return !!(src && src.id === buf.id);
+        };
+        let alone, covered, claimedOther;
+        try {
+            alone = pick(0);
+            covered = pick(200);
+            reservations.claimedLoad = realCL;
+            const ha = makeCreep("nsePingA", "hauler", { store: store(0, 200) });
+            const hb = makeCreep("nsePingB", "hauler", { store: store(0, 200) });
+            Game.creeps[ha.name] = ha; Game.creeps[hb.name] = hb;
+            Game.time++;
+            reservations.claim(ha, buf.id);
+            claimedOther = [reservations.claimedLoad(hb, buf.id), reservations.claimedLoad(ha, buf.id)];
+            delete Game.creeps[ha.name]; delete Game.creeps[hb.name];
+        } finally {
+            reservations.availableDeliver = realAD;
+            reservations.claimedLoad = realCL;
+            roomCache.structuresNear = realNear;
+            room.storage = savedStorage;
+            room.energyAvailable = savedEA;
+        }
+        assert(alone === true && covered === false,
+            "0185: haulers already loading from storage for an optional consumer keep the next one away (" + alone + "/" + covered + ")");
+        assert(JSON.stringify(claimedOther) === "[200,0]", "0185: claimedLoad sums the other claimers' free capacity (" + JSON.stringify(claimedOther) + ")");
+    }
     // a storage or a link network takes the room out of the rule
     const savedNseStorage = room.storage;
     const without = nse.applies(Object.assign(Object.create(Object.getPrototypeOf(room)), room, { storage: undefined }));
     const withStorage = nse.applies(Object.assign(Object.create(Object.getPrototypeOf(room)), room, { storage: { id: "stNse", store: store(0, 1e6) } }));
+    const withBuffer = nse.applies(Object.assign(Object.create(Object.getPrototypeOf(room)), room,
+        { storage: { id: "bufNse", structureType: STRUCTURE_CONTAINER, store: store(2000, 2000) } }));
     room.storage = savedNseStorage;
     assert(!withStorage && without, "0185: only rooms without storage (and without links) use the rule");
+    assert(withBuffer, "0185: the bootstrap buffer container aliased as room.storage keeps the rule active");
+    {
+        // live needs path: spawn/extensions full + a full buffer is sampled as surplus
+        const savedEA = room.energyAvailable, savedECA = room.energyCapacityAvailable;
+        room.energyAvailable = 300;
+        room.energyCapacityAvailable = 300;
+        const surplusWith = (storage) => {
+            room.storage = storage;
+            st().s = 0;
+            Game.time += 50;
+            needs.roomNeeds(room);
+            return st().s;
+        };
+        const plain = surplusWith(undefined);
+        const buffered = surplusWith({ id: "bufNse2", structureType: STRUCTURE_CONTAINER, store: store(2000, 2000) });
+        room.storage = savedNseStorage;
+        room.energyAvailable = savedEA;
+        room.energyCapacityAvailable = savedECA;
+        assert(plain === 0 && buffered > 0,
+            "0185: a full bootstrap buffer with spawn/extensions full counts as surplus (" + plain + "/" + buffered + ")");
+    }
     assert(Object.values(st()).every((v) => typeof v === "number"), "0185: Memory keeps only numbers");
     delete Memory.rooms[room.name].noStorageEco;
     Memory.rooms[room.name] = savedRoomMem;
@@ -4540,12 +4624,27 @@ findMap[FIND_HOSTILE_CREEPS] = [];
                 "(defensive hardening uses logistics.rampartHardeningStorageRatio)");
     }
     {
+        // hardening is builder work: off for towers by default, even with abundance
         const abundant = { store: store(700, 1000) }; // 70% fill - hardening gate
         const { tower, getRepaired } = mkTestTower([S], abundant, 1000);
         Game.time++;
         towerMod.run(tower);
+        assert(getRepaired() === null,
+            "an optimal-tier rampart is NOT hardened by the tower by default " +
+                "(tower.hardenDefenses off) even with 70% storage - builders harden");
+    }
+    {
+        const rrTower = require(path.join(PROJECT, "src/utils/rampartRepair"));
+        Memory.settings.tower = Object.assign({}, Memory.settings.tower, { hardenDefenses: true });
+        rrTower.resetLimits();
+        const abundant = { store: store(700, 1000) }; // 70% fill - hardening gate
+        const { tower, getRepaired } = mkTestTower([S], abundant, 1000);
+        Game.time++;
+        towerMod.run(tower);
+        delete Memory.settings.tower.hardenDefenses;
+        rrTower.resetLimits();
         assert(getRepaired() === S,
-            "an optimal-tier rampart IS repaired once storage is " +
+            "with tower.hardenDefenses on, an optimal-tier rampart IS repaired once storage is " +
                 "at least 70% storage and the tower itself has " +
                 "the satisfactory energy floor");
     }
@@ -14242,6 +14341,204 @@ function mineralStore(resources, freeCap) {
     delete Memory.rooms[RN];
     delete Memory.rooms.LootUnseen;
     delete Memory.rooms.LootSecond;
+}
+
+// --- ROADMAP 0187: loot relay chain over equal path segments ---------------
+{
+    const looting = require(path.join(PROJECT, "src/rooms/looting"));
+    const looterMod = require(path.join(PROJECT, "src/roles/looter"));
+    const lootRelay = require(path.join(PROJECT, "src/rooms/lootRelay"));
+    const saved = { creeps: Game.creeps, rooms: Game.rooms, search: PathFinder.search,
+        targets: Memory.lootTargets, loot: Memory.settings && Memory.settings.loot };
+    const quietStatus = (fn) => {
+        const log = console.log;
+        console.log = () => {};
+        try { return fn(); } finally { console.log = log; }
+    };
+    const T = "RelayTarget", MOM = "RelayMother";
+    // 150 tiles: target x26..49, two middle rooms x0..49, mother x0..25
+    const relayPath = [];
+    for (let x = 26; x <= 49; x++) relayPath.push(new RoomPosition(x, 25, T));
+    for (const r of ["RelayMidA", "RelayMidB"]) for (let x = 0; x <= 49; x++) relayPath.push(new RoomPosition(x, 25, r));
+    for (let x = 0; x <= 25; x++) relayPath.push(new RoomPosition(x, 25, MOM));
+    let relaySearches = 0, relayIncomplete = false, relayOrigin;
+    // the engine searches mother -> loot room; lootRelay reverses the result
+    PathFinder.search = (origin) => {
+        relaySearches++;
+        relayOrigin = origin;
+        return { path: relayPath.slice().reverse(), incomplete: relayIncomplete, ops: 1 };
+    };
+    const savedBucket = Game.cpu.bucket;
+    Game.cpu.bucket = 10000;
+    let storageFree = 1000, containerFree = 1000;
+    const storage = { id: "relayStorage", structureType: STRUCTURE_STORAGE, pos: new RoomPosition(26, 25, MOM),
+        store: { getFreeCapacity: () => storageFree } };
+    const container = { id: "relayContainer", structureType: STRUCTURE_CONTAINER, pos: new RoomPosition(24, 26, MOM),
+        store: { getFreeCapacity: () => containerFree } };
+    REG.relayStorage = storage;
+    REG.relayContainer = container;
+    Game.rooms = { [MOM]: { name: MOM, controller: { my: true }, storage,
+        find: (type) => type === FIND_STRUCTURES ? [container] : [] } };
+    Memory.lootTargets = { relayLoot: { id: "relayLoot", room: T, from: MOM } };
+    const loot = () => Memory.lootTargets.relayLoot;
+    const mkRelay = (name, index, used) => {
+        const actions = [];
+        const p = relayPath[index];
+        const store = Object.assign({
+            getUsedCapacity: () => Object.keys(store).reduce((n, k) => typeof store[k] === "number" ? n + store[k] : n, 0),
+            getFreeCapacity: () => 100 - store.getUsedCapacity(),
+        }, used);
+        const c = Object.assign(Object.create(Creep.prototype), {
+            name, pos: new RoomPosition(p.x, p.y, p.roomName), room: { name: p.roomName }, store,
+            hits: 100, hitsMax: 100, ticksToLive: 1400, spawning: false,
+            memory: { role: "looter", lootId: "relayLoot", targetRoom: T, home: MOM },
+            transfer: (t, r) => { actions.push("transfer:" + (t.id || t.name) + ":" + r); return OK; },
+            moveByPath: (steps) => { const e = steps[steps.length - 1]; actions.push("path:" + e.roomName + ":" + e.x); return OK; },
+            moveTo: (t) => { const q = t.pos || t; actions.push("moveTo:" + q.roomName + ":" + q.x); return OK; },
+        });
+        Game.creeps[name] = c;
+        return { c, actions };
+    };
+    const place = (r, index) => {
+        const p = relayPath[index];
+        r.c.pos = new RoomPosition(p.x, p.y, p.roomName);
+        r.c.room = { name: p.roomName };
+        r.actions.length = 0;
+    };
+    try {
+        Game.creeps = {};
+        // names deliberately out of path order: relayA is nearest the mother
+        const a = mkRelay("relayA", 120, { energy: 100 });
+        const b = mkRelay("relayB", 49, { energy: 100 });
+        const c = mkRelay("relayC", 50, {});
+        Game.time++;
+        looterMod.run(b.c);
+        const link = lootRelay.link(loot(), b.c, looting.looters(loot()));
+        assert(link && link.n === 3 && link.plan.bounds.join() === "0,50,100,149",
+            "0187: three looters split a 150-tile path into three equal segments");
+        assert(link.plan.assign.get("relayB") === 0 && link.plan.assign.get("relayC") === 1 &&
+            link.plan.assign.get("relayA") === 2,
+            "0187: segments are assigned by position along the path");
+        assert(b.actions.join() === "transfer:relayC:energy",
+            "0187: a full middle looter hands its cargo to the next link (got " + b.actions.join() + ")");
+
+        looterMod.run(a.c);
+        assert(a.actions.join() === "path:RelayMother:25",
+            "0187: the last link carries forward along the stored path to the chain end");
+        place(a, 149);
+        looterMod.run(a.c);
+        const toStorage = a.actions.join();
+        storageFree = 0;
+        a.actions.length = 0;
+        looterMod.run(a.c);
+        const toContainer = a.actions.join();
+        containerFree = 0;
+        a.actions.length = 0;
+        looterMod.run(a.c);
+        assert(toStorage === "transfer:relayStorage:energy" && toContainer === "transfer:relayContainer:energy" &&
+            !a.actions.length,
+            "0187: the last link delivers to the mother storage, then container, else waits");
+        storageFree = 1000;
+        containerFree = 1000;
+
+        place(c, 70);
+        looterMod.run(c.c);
+        assert(c.actions.join() === "path:RelayMidA:26",
+            "0187: an empty link returns only to its own segment start");
+
+        const original = Memory.settings.loot;
+        Memory.settings.loot = Object.assign({}, original, { relayWaitTicks: 3 });
+        place(b, 49);
+        for (let i = 0; i < 4; i++) { Game.time++; looterMod.run(b.c); }
+        assert(b.c.memory.unloading === true && !b.actions.length,
+            "0187: a giver left without a receiver falls back to delivering itself after loot.relayWaitTicks");
+        Memory.settings.loot = original;
+        delete b.c.memory.unloading;
+
+        assert(relaySearches === 1 && relayOrigin.roomName === MOM && relayOrigin.x === 26,
+            "0187: the mission path is searched once and reused from the heap (searches " + relaySearches + ")");
+
+        // A failed search (walled loot room) must not repeat every tick.
+        Memory.lootTargets.relayFail = { id: "relayFail", room: "RelayFailTarget", from: MOM };
+        const failMission = Memory.lootTargets.relayFail;
+        const failMembers = [{ name: "failA", room: { name: MOM }, pos: new RoomPosition(20, 20, MOM) },
+            { name: "failB", room: { name: MOM }, pos: new RoomPosition(21, 20, MOM) }];
+        relayIncomplete = true;
+        const beforeFail = relaySearches;
+        for (let i = 0; i < 20; i++) {
+            Game.time++;
+            for (const m of failMembers) lootRelay.link(failMission, m, failMembers);
+        }
+        assert(relaySearches === beforeFail + 1,
+            "0187: a failed path search backs off instead of repeating every tick (searches " +
+            (relaySearches - beforeFail) + ")");
+        relayIncomplete = false;
+        Game.time += 500;
+        lootRelay.link(failMission, failMembers[0], failMembers);
+        assert(relaySearches === beforeFail + 2,
+            "0187: a failed path search is retried after loot.relayRetryTicks");
+        delete Memory.lootTargets.relayFail;
+        Memory.lootTargets.relayLow = { id: "relayLow", room: "RelayLowTarget", from: MOM };
+        Game.cpu.bucket = 2000;
+        Game.time++;
+        const beforeLow = relaySearches;
+        const lowLink = lootRelay.link(Memory.lootTargets.relayLow, failMembers[0], failMembers);
+        Game.cpu.bucket = 10000;
+        assert(lowLink === null && relaySearches === beforeLow,
+            "0187: no path search runs below loot.relayMinBucket");
+        Memory.lootTargets.relayLow2 = { id: "relayLow2", room: "RelayLowTarget2", from: MOM };
+        lootRelay.link(Memory.lootTargets.relayLow, failMembers[0], failMembers);
+        lootRelay.link(Memory.lootTargets.relayLow2, failMembers[0], failMembers);
+        assert(relaySearches === beforeLow + 1,
+            "0187: at most one relay path search runs per tick across missions");
+        delete Memory.lootTargets.relayLow;
+        delete Memory.lootTargets.relayLow2;
+        place(b, 49);
+        b.c.memory.unloading = undefined;
+
+        delete Game.creeps.relayA;
+        Game.time++;
+        const two = lootRelay.link(loot(), b.c, looting.looters(loot()));
+        assert(two && two.n === 2 && two.plan.bounds.join() === "0,76,149" && two.plan.assign.get("relayC") === 1,
+            "0187: a dead link redivides the path among the survivors");
+        const edgeFree = [2, 3, 4, 5, 6].every((n) => {
+            const bounds = lootRelay.boundaries(relayPath, n);
+            return bounds && bounds.slice(1, -1).every((x) =>
+                !lootRelay.isEdge(relayPath[x]) && !lootRelay.isEdge(relayPath[x - 1]));
+        });
+        assert(edgeFree, "0187: handoff points are never on a room edge");
+        const status = quietStatus(() => global.lootStatus(T));
+        assert(status[0].relay && status[0].relay.segments === 2 && status[0].relay.handoffs[0] === "RelayMidB:2,25",
+            "0187: lootStatus reports segments and handoff points");
+
+        delete Game.creeps.relayC;
+        Game.time++;
+        const single = lootRelay.link(loot(), b.c, looting.looters(loot()));
+        mkRelay("relayC", 50, {});
+        Game.time++;
+        loot().relay = false;
+        const missionOff = lootRelay.link(loot(), b.c, looting.looters(loot()));
+        delete loot().relay;
+        Memory.settings.loot = Object.assign({}, original, { relay: false });
+        const globalOff = lootRelay.link(loot(), b.c, looting.looters(loot()));
+        Memory.settings.loot = original;
+        assert(single === null && missionOff === null && globalOff === null &&
+            !!lootRelay.link(loot(), b.c, looting.looters(loot())),
+            "0187: relay off or a single looter keeps the 0184 round trip");
+        assert(JSON.stringify(Object.keys(loot()).sort()) === '["from","id","room"]' &&
+            !/"x"|path/.test(JSON.stringify(Memory.lootTargets)),
+            "0187: no path or game object is stored in Memory");
+    } finally {
+        Game.creeps = saved.creeps;
+        Game.rooms = saved.rooms;
+        PathFinder.search = saved.search;
+        Game.cpu.bucket = savedBucket;
+        Memory.lootTargets = saved.targets;
+        if (Memory.settings) Memory.settings.loot = saved.loot;
+        delete REG.relayStorage;
+        delete REG.relayContainer;
+        Game.time++;
+    }
 }
 
 // --- ROADMAP 0052: notifyWhenAttacked(false) for routine-exposure roles --

@@ -673,10 +673,17 @@ function pickLoadNow(creep) {
     if (link) return { id: link.id, act: "withdraw" };
 
     if (creep.room.storage && creep.room.storage.store[RESOURCE_ENERGY] > 0) {
+        // an optional consumer only pulls from storage while the haulers already
+        // loading there don't cover it - otherwise every idle hauler withdrew a full
+        // load for the same small need and all but one put it straight back
+        const optionalUncovered = () => {
+            const optional = resourceTiers.aboveReserve(creep.room) && satisfactoryConsumer(creep);
+            return !!optional && reservations.availableDeliver(creep, optional) -
+                reservations.claimedLoad(creep, creep.room.storage.id) >= 50;
+        };
         if (
             cpuMeter.span("hauler.pickLoad.storageEssentialCheck", () => hasEssentialConsumer(creep.room)) ||
-            (resourceTiers.aboveReserve(creep.room) &&
-                satisfactoryConsumer(creep))
+            optionalUncovered()
         ) {
             return { id: creep.room.storage.id, act: "withdraw" };
         }
@@ -1922,6 +1929,14 @@ var hauler = {
             id = pickDeliver(creep);
         }
         if (!id) {
+            // ROADMAP 0185: in a lasting surplus the haulers end full with nowhere to
+            // deliver and never reach the empty-handed idle branch above - the excess
+            // one recycles from here too (its load drops on the tombstone by the spawn)
+            if (noStorageEconomy.isExcessHauler(creep, roomNeeds(creep.room).hauler)) {
+                creep.memory.recycle = true;
+                noStorageEconomy.recycle(creep);
+                return;
+            }
             idleNear(creep);
             return;
         }

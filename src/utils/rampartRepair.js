@@ -57,6 +57,7 @@ function limits() {
             towerSatisfactory: config.get("tower.satisfactoryRepairEnergyRatio", 0.7),
             healthyStorage: config.get("logistics.rampartHealthyStorageRatio", 0.1),
             hardeningStorage: config.get("logistics.rampartHardeningStorageRatio", 0.7),
+            towerHardening: config.get("tower.hardenDefenses", false) === true,
             gates: {},
         };
     }
@@ -136,6 +137,13 @@ function towerMayRepairNonCritical(tower) {
     return energyRatio >= limits().towerSatisfactory;
 }
 
+// Hardening (a rampart/wall past its satisfactory target) belongs to the builders: a
+// tower only does it when tower.hardenDefenses is on (off by default, user request
+// 2026-10-23). Critical and satisfactory defensive repair stay with the towers.
+function towerMayHarden() {
+    return limits().towerHardening;
+}
+
 // roles/builder.js's eligibility gate: critical is unconditional, while
 // defensive satisfactory repair needs >10% storage and defensive optimal
 // repair (hardening) needs >=70%. Normal structures keep their old behavior.
@@ -156,7 +164,8 @@ function builderMayRepair(structure, room) {
 //   optimal       - same 70% tower-energy floor, plus defensive storage
 //                   gates shared with builderMayRepair (10% for satisfactory,
 //                   70% for hardening). Normal structures only use the tower
-//                   energy floor.
+//                   energy floor. Defensive optimal (hardening) also needs
+//                   tower.hardenDefenses (off by default - builders harden).
 function towerMayRepair(structure, tower) {
     if (structure.hits >= structure.hitsMax) return false;
 
@@ -171,7 +180,7 @@ function towerMayRepair(structure, tower) {
 
     if (isDefensive(structure)) {
         if (t === "satisfactory") return storageGates(tower.room).healthy;
-        if (t === "optimal") return storageGates(tower.room).hardening;
+        if (t === "optimal") return towerMayHarden() && storageGates(tower.room).hardening;
     }
 
     return true;
@@ -186,5 +195,6 @@ module.exports = {
     builderMayRepair,
     towerMayRepair,
     towerMayRepairNonCritical,
+    towerMayHarden,
     resetLimits,
 };

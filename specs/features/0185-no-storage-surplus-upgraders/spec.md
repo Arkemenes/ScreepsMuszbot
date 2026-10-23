@@ -21,8 +21,9 @@ Sala sem storage e sem links mantém só os haulers que a demanda medida justifi
   - **pressure**: spawn/extensions com espaço **e** algum container de fonte com ≥ `hauler.minContainerLoad`.
   - **surplus**: spawn/extensions cheios **e** todos os containers de fonte cheios.
 - Hauler = `1 + extra`, extra = 1 quando pressure ≥ `pressureHigh` (0,5) e 0 quando ≤ `pressureLow` (0,2); nunca acima da fórmula antiga.
-- Upgrader: +1 a cada `surplusCooldown` (1500) enquanto surplus ≥ `surplusHigh` (0,6), até `maxUpgraders` (5, base incluída); −1 por cooldown quando surplus ≤ `surplusLow` (0,2). Não cresce na banda de CPU critical.
-- Hauler excedente ocioso recicla no spawn: o de menor `ticksToLive`, um por vez (`creep.memory.recycle`).
+- Upgrader: +1 a cada `surplusCooldown` (500; era 1500 até 2026-10-23) enquanto surplus ≥ `surplusHigh` (0,6), até `maxUpgraders` (5, base incluída); −1 por cooldown quando surplus ≤ `surplusLow` (0,2). Não cresce na banda de CPU critical.
+- Hauler excedente ocioso recicla no spawn: o de menor `ticksToLive`, um por vez (`creep.memory.recycle`). Ocioso = vazio sem nada a carregar **ou** cheio sem destino de entrega (fix 2026-10-23: na sobra os haulers ficavam cheios e nunca chegavam à checagem).
+- Hauler só saca do storage/buffer para um consumidor opcional (container do controller, torre, lab) enquanto os haulers que já estão carregando ali não cobrem a necessidade (`reservations.claimedLoad`) — antes todos sacavam carga cheia para a mesma necessidade pequena e devolviam ao buffer (ping-pong).
 - `Memory.rooms[name].noStorageEco` guarda só números (`p`, `s`, `h`, `up`, `upTick`).
 - Desliga com `noStorageEconomy.enabled = false`.
 

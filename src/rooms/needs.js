@@ -380,7 +380,10 @@ function compute(room) {
         const minLoad = config.get("hauler.minContainerLoad", 1000);
         const spawnsFull = room.energyAvailable >= room.energyCapacityAvailable;
         const pressure = !spawnsFull && srcContainers.some((c) => (c.store[RESOURCE_ENERGY] || 0) >= minLoad);
-        const surplus = spawnsFull && sourceContainersFull(room);
+        // a full bootstrap buffer (container aliased as room.storage) is surplus as well
+        const bufferFull = !!room.storage && room.storage.structureType === STRUCTURE_CONTAINER &&
+            room.storage.store.getFreeCapacity(RESOURCE_ENERGY) === 0;
+        const surplus = spawnsFull && (sourceContainersFull(room) || bufferFull);
         // base upgrader tier without storage is 1 (see below)
         noStorage = noStorageEconomy.observe(room, Memory.rooms[name] || (Memory.rooms[name] = {}), pressure, surplus, 1);
     }

@@ -201,20 +201,25 @@ function refusalReason(targetRoomName, motherRoomName) {
     return null;
 }
 
-global.lootRoom = function (targetRoomName, motherRoomName) {
+// opts.relay === false keeps this mission on the 0184 round trip (ROADMAP 0187).
+global.lootRoom = function (targetRoomName, motherRoomName, opts) {
     const mother = motherRoomName || nearestMother(targetRoomName);
     const reason = refusalReason(targetRoomName, mother);
     if (reason) {
         console.log(`[loot] refusing: ${reason}`);
         return;
     }
+    const relayOff = !!opts && opts.relay === false;
     const existing = findMission(targetRoomName, mother);
     if (existing) {
+        if (relayOff) existing.relay = false;
+        else if (opts && opts.relay === true) delete existing.relay;
         console.log(`[loot] ${existing.id}: ${mother} is already looting ${targetRoomName}`);
         return existing.id;
     }
     const id = nextId();
-    missions()[id] = { id, room: targetRoomName, from: mother };
+    missions()[id] = relayOff ? { id, room: targetRoomName, from: mother, relay: false }
+        : { id, room: targetRoomName, from: mother };
     console.log(`[loot] ${id}: ${mother} will send up to ${config.get("loot.maxHaulers", 3)} looters to empty ${targetRoomName}`);
     return id;
 };
@@ -235,10 +240,14 @@ global.lootStatus = function (targetRoomName) {
         console.log("[loot] no loot pending");
         return [];
     }
+    const lootRelay = require("./lootRelay"); // lazy: lootRelay -> routing -> remotes
     return entries.map((loot) => {
         const count = looters(loot).length;
-        console.log(`[loot] ${loot.id}: ${loot.from} -> ${loot.room}: ${count} looter(s) out`);
-        return { id: loot.id, room: loot.room, from: loot.from, looters: count };
+        const relay = lootRelay.describe(loot);
+        console.log(`[loot] ${loot.id}: ${loot.from} -> ${loot.room}: ${count} looter(s) out` +
+            (relay ? `, relay ${relay.segments} segments over ${relay.length} tiles, handoffs ` +
+                (relay.handoffs.join(" ") || "-") : loot.relay === false ? ", relay off" : ""));
+        return { id: loot.id, room: loot.room, from: loot.from, looters: count, relay };
     });
 };
 
@@ -251,6 +260,7 @@ module.exports = {
     nextLoot,
     checkHealth,
     finish,
+    looters,
     lootersWanted,
     refusalReason,
 };

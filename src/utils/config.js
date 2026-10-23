@@ -259,6 +259,9 @@ const defaults = {
         // gate).
         repairEnergyRatio: 0.5,
         satisfactoryRepairEnergyRatio: 0.7,
+        // hardening a rampart/wall past rampartSatisfactoryRatio is builder work:
+        // a tower only does it when this is true (user request 2026-10-23)
+        hardenDefenses: false,
         // rampart/wall repair tiers, as a FRACTION of the structure's own
         // hitsMax (ROADMAP 0032 D4 + follow-up, utils/rampartRepair.js).
         // RAMPART_HITS_MAX (300k) and WALL_HITS_MAX (300M) are fixed engine
@@ -873,6 +876,18 @@ const defaults = {
         returnMargin: 50,
         // Heap reuse of a looter's delivery pick while it stays in one room.
         deliveryCacheTicks: 20,
+        // ROADMAP 0187: 2+ looters form a relay chain over equal path
+        // segments; lootRoom(target, mother, {relay:false}) opts one mission out.
+        relay: true,
+        relayRepathTicks: 1500,
+        // a full giver waits this long at its handoff point before delivering itself
+        relayWaitTicks: 50,
+        relayMaxOps: 10000,
+        relayMaxRooms: 16,
+        // a failed path search waits this long before another attempt
+        relayRetryTicks: 500,
+        // no new path search below this bucket (the 0184 round trip continues)
+        relayMinBucket: 3000,
         // Presence of towers/armed creeps never pauses a loot mission.
         cancelHpRatio: 0.5,
     },
@@ -1033,10 +1048,11 @@ const defaults = {
         // the extra hauler (1 + 1) comes at pressure >= high and leaves at <= low
         pressureHigh: 0.5,
         pressureLow: 0.2,
-        // one upgrader more (surplus >= high) or less (<= low) at most once per cooldown
+        // one upgrader more (surplus >= high) or less (<= low) at most once per cooldown;
+        // 500 lets the new upgrader spawn, walk and move the EMA before the next step
         surplusHigh: 0.6,
         surplusLow: 0.2,
-        surplusCooldown: 1500,
+        surplusCooldown: 500,
         // ceiling on the room's upgraders from this rule (base tier included)
         maxUpgraders: 5,
     },
