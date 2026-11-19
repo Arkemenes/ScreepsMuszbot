@@ -50,11 +50,13 @@ graph from `src/main.js` into `dist/main.js`. `dist/` is git-ignored.
 `main.loop()` across several phases plus unit checks. It is the only test
 harness — keep it green and extend it.
 
-## Fluxo de trabalho (Linear + graphify)
+## Fluxo de trabalho (GitHub Issues/Projects + Git Flow + graphify)
 
-- **Tarefas:** o projeto `ScreepsMuszbot` no Linear (workspace e time `Arkemenes`, chave `ARK`) é a fonte de verdade. Antes de começar um trabalho, garanta que exista uma issue; mova-a para *In Progress* ao iniciar e para *Done* ao concluir. Issues criadas por agentes entram no *Backlog* para revisão do usuário. Convenção completa: `90-AI/convencao-projetos-linear.md` no vault Obsidian.
+- **Tarefas:** GitHub Issues + GitHub Projects (repositório `ScreepsMuszbot`) são a fonte de verdade de backlog e prioridades; GitHub Actions cuida do CI/CD. Antes de começar um trabalho, garanta que exista uma issue; atualize-a ao iniciar e feche-a ao concluir. Issues criadas por agentes entram no backlog do Project para revisão do usuário.
+- **Git Flow:** duas branches permanentes, `main` (produção/deploy) e `staging` (integração). Toda feature ou correção usa branch própria `feature/<issue>-<slug>` ou `fix/<issue>-<slug>` a partir de `staging`, com commits em português citando a issue. Nunca commitar direto em `main` nem em `staging`. Trabalho pronto, testado e revisado entra em `staging` (sem force-push; PR só se o responsável pedir); `main` só recebe `staging` quando autorizada para deploy.
 - **Estrutura do código:** quando existir `graphify-out/graph.json`, use `graphify query "<pergunta>"` (relações: `graphify path "A" "B"`; conceitos: `graphify explain "X"`) antes de varrer arquivos. Leia `graphify-out/GRAPH_REPORT.md` só para revisão ampla de arquitetura. Após alterar código, rode `graphify update .` (só AST, sem custo de API).
-- **Contexto e decisões:** ficam no vault Obsidian (`90-AI/<agente>/projetos/`); a continuidade entre sessões fica no ai-memory. Nunca grave segredos em issues, notas, grafo ou commits.
+- **Contexto e decisões:** a continuidade entre sessões fica no `ai-memory` v3.5.0 (`http://ai-memory:49374/mcp`, isolado por workspace/projeto); contexto e decisões duráveis ficam no vault Obsidian (`/data/syncthing-memory`: `30-Projetos/ScreepsMuszbot/` para o projeto, `90-AI/` para personas). Nunca grave segredos em issues, notas, grafo, memória ou commits.
+- **Orquestração:** o Cezar (workflows em `.ai/cezar/workflows/`) é o control plane; não invoque `orchestrate.py`. Revisão adversarial: o revisor deve ser de família de modelo diferente da do autor (ver `/opt/ai-policy/AGENTS.md`).
 
 ## Live game data (Screeps API)
 
